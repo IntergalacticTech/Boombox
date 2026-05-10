@@ -1,0 +1,14 @@
+[Unit]
+Description=Boombox MPRIS aggregator + /api/ endpoints
+After=graphical-session.target pipewire.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-state.py
+Restart=on-failure
+RestartSec=3
+# Listens on 127.0.0.1:6681 — only reachable through nginx.
+
+[Install]
+WantedBy=default.target

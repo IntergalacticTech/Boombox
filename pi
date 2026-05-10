@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# pi — control helper for the Boombox Pi
+# Wraps ssh, rsync, screenshots, kiosk reload, and DevTools tunneling.
+
+set -euo pipefail
+
+HOST="${BOOMBOX_HOST:-boombox}"          # ssh alias defined in ~/.ssh/config
+KIOSK_URL_DEFAULT="${KIOSK_URL:-http://localhost:6680/iris}"
+DEBUG_PORT="${BOOMBOX_DEBUG_PORT:-9222}"
+SHOTS_DIR="${BOOMBOX_SHOTS_DIR:-$(cd "$(dirname "$0")" && pwd)/screenshots}"
+WAYLAND_ENV='XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0'
+
+cmd="${1:-help}"; shift || true
+
+# --- helpers ---------------------------------------------------------------
+
+ensure_tunnel() {
+  if ! lsof -nP -iTCP:"$DEBUG_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    ssh -fN -L "$DEBUG_PORT:localhost:$DEBUG_PORT" "$HOST"
+    sleep 0.5
+  fi
+}
+
+devtools_target_id() {
+  curl -s "http://localhost:$DEBUG_PORT/json" | \
+    /usr/bin/python3 -c 'import sys,json; tabs=[t for t in json.load(sys.stdin) if t.get("type")=="page"]; print(tabs[0]["id"] if tabs else "")'
+}
+
+# --- subcommands -----------------------------------------------------------
+
+case "$cmd" in
+  ssh)        exec ssh "$HOST" "$@" ;;
+  run)        exec ssh "$HOST" "$@" ;;
+
+  deploy)
+    # Sync a local path to the Pi. Usage: ./pi deploy <local> <remote>
+    local_path="${1:?usage: pi deploy <local> <remote>}"
+    remote_path="${2:?usage: pi deploy <local> <remote>}"
+    exec rsync -avz --delete --exclude '.git' --exclude 'node_modules' \
+      "$local_path" "$HOST:$remote_path"
+    ;;
+
+  shot)
+    # Take a full-screen Wayland screenshot, pull it locally.
+    name="${1:-shot-$(date +%Y%m%d-%H%M%S)}"
+    [[ "$name" != *.png ]] && name="$name.png"
+    mkdir -p "$SHOTS_DIR"
+    ssh "$HOST" "$WAYLAND_ENV grim /tmp/grim.png"
+    scp -q "$HOST:/tmp/grim.png" "$SHOTS_DIR/$name"
+    echo "$SHOTS_DIR/$name"
+    ;;
+
+  reload)
+    # Reload the kiosk tab via DevTools.
+    ensure_tunnel
+    tid="$(devtools_target_id)"
+    [[ -z "$tid" ]] && { echo "no devtools page found" >&2; exit 1; }
+    curl -s "http://localhost:$DEBUG_PORT/json/reload/$tid" >/dev/null
+    echo "reloaded $tid"
+    ;;
+
+  goto)
+    # Navigate the kiosk to a URL. Usage: ./pi goto <url>
+    url="${1:?usage: pi goto <url>}"
+    ensure_tunnel
+    tid="$(devtools_target_id)"
+    [[ -z "$tid" ]] && { echo "no devtools page found" >&2; exit 1; }
+    curl -s "http://localhost:$DEBUG_PORT/json/page/$tid/navigate" \
+      -d "{\"url\":\"$url\"}" >/dev/null || true
+    # Fallback: use agent-browser if curl/json route is wrong on this chromium build
+    /opt/homebrew/bin/agent-browser connect "$DEBUG_PORT" >/dev/null 2>&1 || true
+    /opt/homebrew/bin/agent-browser open "$url"
+    ;;
+
+  browse)
+    # Connect agent-browser to the kiosk. Usage: ./pi browse [agent-browser args...]
+    ensure_tunnel
+    /opt/homebrew/bin/agent-browser connect "$DEBUG_PORT" >/dev/null
+    if [[ $# -eq 0 ]]; then
+      echo "tunnel up on localhost:$DEBUG_PORT — agent-browser is connected."
+      echo "try: agent-browser snapshot   |   agent-browser screenshot"
+    else
+      exec /opt/homebrew/bin/agent-browser "$@"
+    fi
+    ;;
+
+  tunnel)
+    ensure_tunnel
+    echo "tunnel up: localhost:$DEBUG_PORT -> $HOST:$DEBUG_PORT"
+    ;;
+
+  kill-tunnel)
+    pkill -f "ssh -fN -L $DEBUG_PORT:" || true
+    echo "tunnel killed"
+    ;;
+
+  guard)
+    # Pause / resume the kiosk guard (which forces Chromium back to the
+    # local UI). Use during dev work that drives the kiosk via `pi goto`.
+    sub="${1:-status}"
+    case "$sub" in
+      pause)
+        ssh "$HOST" 'touch "${XDG_RUNTIME_DIR:-/run/user/1000}/boombox-kiosk-guard.pause"'
+        echo "guard paused (until ./pi guard resume or service restart)"
+        ;;
+      resume)
+        ssh "$HOST" 'rm -f "${XDG_RUNTIME_DIR:-/run/user/1000}/boombox-kiosk-guard.pause"'
+        echo "guard resumed"
+        ;;
+      status)
+        ssh "$HOST" '
+          if [ -e "${XDG_RUNTIME_DIR:-/run/user/1000}/boombox-kiosk-guard.pause" ]; then
+            echo "guard: PAUSED"
+          else
+            echo "guard: ACTIVE"
+          fi
+          systemctl --user is-active boombox-kiosk-guard
+        '
+        ;;
+      *) echo "usage: pi guard [pause|resume|status]" >&2; exit 1 ;;
+    esac
+    ;;
+
+  restart-kiosk)
+    # Kill chromium kiosk and relaunch with debug flags. Optional URL arg.
+    url="${1:-$KIOSK_URL_DEFAULT}"
+    # Write the launcher remotely, then dispatch via systemd-run --user --scope so
+    # chromium fully detaches from the SSH session.
+    ssh "$HOST" bash -s -- "$url" "$DEBUG_PORT" <<'REMOTE'
+url="$1"; port="$2"
+pkill -f 'chromium --kiosk' >/dev/null 2>&1 || true
+sleep 1
+cat >/tmp/launch-kiosk.sh <<EOF
+#!/usr/bin/env bash
+export XDG_RUNTIME_DIR=/run/user/1000
+export WAYLAND_DISPLAY=wayland-0
+unset DISPLAY
+exec chromium --kiosk "$url" \\
+  --ozone-platform=wayland \\
+  --enable-features=UseOzonePlatform \\
+  --remote-debugging-port=$port \\
+  --remote-allow-origins=* \\
+  --noerrdialogs --disable-session-crashed-bubble \\
+  --overscroll-history-navigation=0 \\
+  --user-data-dir=/home/jwc/.config/chromium
+EOF
+chmod +x /tmp/launch-kiosk.sh
+nohup setsid /tmp/launch-kiosk.sh </dev/null >/tmp/chromium.log 2>&1 &
+disown
+echo "launched chromium pid $!"
+REMOTE
+    ;;
+
+  restart-mopidy)
+    exec ssh "$HOST" "sudo systemctl restart mopidy && systemctl is-active mopidy"
+    ;;
+
+  logs)
+    # Tail mopidy or chromium logs. Usage: ./pi logs [mopidy|chrome|nginx]
+    target="${1:-mopidy}"
+    case "$target" in
+      mopidy)  exec ssh "$HOST" "sudo journalctl -u mopidy -f -n 50" ;;
+      chrome)  exec ssh "$HOST" "tail -F /tmp/chromium.log" ;;
+      nginx)   exec ssh "$HOST" "sudo tail -F /var/log/nginx/error.log" ;;
+      *) echo "unknown log target: $target" >&2; exit 1 ;;
+    esac
+    ;;
+
+  status)
+    ssh "$HOST" '
+      echo "=== services ==="
+      systemctl is-active mopidy nginx php8.4-fpm 2>&1 | paste <(echo -e "mopidy\nnginx\nphp-fpm") -
+      echo
+      echo "=== chromium ==="
+      pgrep -af "chromium --kiosk" | head -1 || echo "  not running"
+      echo
+      echo "=== now playing (mopidy/mpd) ==="
+      mpc current 2>/dev/null || echo "  (mpd unreachable)"
+      echo
+      echo "=== ip / uptime ==="
+      hostname -I
+      uptime
+    '
+    ;;
+
+  help|*)
+    cat <<EOF
+pi — Boombox control helper
+
+  ./pi ssh [cmd]               open shell or run command on Pi
+  ./pi run <cmd>               same as ssh
+  ./pi deploy <local> <remote> rsync local path to Pi (deletes orphaned files)
+  ./pi shot [name]             grab Wayland screenshot, save to ./screenshots
+  ./pi reload                  reload current kiosk tab via DevTools
+  ./pi goto <url>              navigate kiosk to URL
+  ./pi browse [args...]        connect agent-browser; pass args to drive it
+  ./pi tunnel                  open SSH tunnel for DevTools (localhost:$DEBUG_PORT)
+  ./pi kill-tunnel             tear down DevTools tunnel
+  ./pi guard [pause|resume|status]  toggle the kiosk auto-recover watchdog
+  ./pi restart-kiosk [url]     relaunch chromium kiosk with debug port
+  ./pi restart-mopidy          restart mopidy service
+  ./pi logs [mopidy|chrome|nginx]  follow logs
+  ./pi status                  service / now-playing summary
+
+env: BOOMBOX_HOST=$HOST  DEBUG_PORT=$DEBUG_PORT  KIOSK_URL=$KIOSK_URL_DEFAULT
+EOF
+    ;;
+esac

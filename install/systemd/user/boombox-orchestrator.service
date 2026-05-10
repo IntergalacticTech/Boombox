@@ -1,0 +1,13 @@
+[Unit]
+Description=Boombox source orchestrator (most-recent-wins auto-pause)
+After=graphical-session.target pipewire.service wireplumber.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-orchestrator.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

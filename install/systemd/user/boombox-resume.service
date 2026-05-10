@@ -1,0 +1,15 @@
+[Unit]
+Description=Boombox auto-resume (Mopidy snapshot + restore)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=BOOMBOX_RESUME_FILE=%h/.local/state/boombox/last.json
+ExecStartPre=/bin/mkdir -p %h/.local/state/boombox
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-resume.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

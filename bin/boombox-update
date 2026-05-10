@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# boombox-update — thin wrapper installed to /usr/local/bin.
+# Delegates to /opt/boombox/install/update.sh so the install path is
+# the single source of truth.
+set -euo pipefail
+exec /opt/boombox/install/update.sh "$@"

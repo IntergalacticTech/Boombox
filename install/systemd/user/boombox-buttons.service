@@ -1,0 +1,14 @@
+[Unit]
+Description=Boombox GPIO transport buttons
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-buttons.py
+Restart=on-failure
+RestartSec=3
+# Needs /dev/gpiochip0 read/write. Default Pi OS user is in the `gpio` group,
+# which the install script verifies.
+
+[Install]
+WantedBy=default.target

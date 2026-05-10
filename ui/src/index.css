@@ -1,0 +1,29 @@
+*, *::before, *::after { box-sizing: border-box; }
+/* 1×1 transparent cursor — hides the pointer in kiosk on both X11 and Wayland.
+   `cursor: none` doesn't work on Wayland because the compositor draws the cursor
+   above the page; a transparent cursor image does. */
+html, body, #root, * {
+  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEUAAACnej3aAAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=") 0 0, none;
+}
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  color: #eee;
+}
+body {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  text-rendering: optimizeLegibility;
+}
+button {
+  font: inherit;
+  cursor: pointer;
+}
+img, svg { -webkit-user-drag: none; user-drag: none; }

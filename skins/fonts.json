@@ -1,0 +1,18 @@
+{
+  "Inter": {
+    "license": "OFL-1.1",
+    "url": "https://github.com/rsms/inter"
+  },
+  "JetBrains Mono": {
+    "license": "OFL-1.1",
+    "url": "https://github.com/JetBrains/JetBrainsMono"
+  },
+  "Space Grotesk": {
+    "license": "OFL-1.1",
+    "url": "https://github.com/floriankarsten/space-grotesk"
+  },
+  "Archivo Black": {
+    "license": "OFL-1.1",
+    "url": "https://github.com/Omnibus-Type/Archivo"
+  }
+}

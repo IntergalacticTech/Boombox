@@ -1,0 +1,16 @@
+[Unit]
+Description=Boombox kiosk watchdog (keep Chromium on the local UI)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=BOOMBOX_KIOSK_CDP=http://127.0.0.1:9222
+Environment=BOOMBOX_KIOSK_HOME=http://localhost/
+Environment=BOOMBOX_KIOSK_POLL=15
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-kiosk-guard.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

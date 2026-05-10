@@ -1,0 +1,8 @@
+{
+  "_comment": "Override with /etc/boombox/buttons.json. BCM pin numbers. Set a value to null to disable that action.",
+  "play_pause":  17,
+  "next":        27,
+  "previous":    22,
+  "volume_up":   23,
+  "volume_down": 24
+}

@@ -1,0 +1,26 @@
+# Mopidy 3.4.2 has a known incompatibility with newer python3-gi
+# (Debian 13 trixie ships the broken combo). The audio scanner crashes when
+# probing internet streams because Caps objects are now wrapped in
+# StructureWrapper, which doesn't have .get_name(). Result: stream URLs add
+# successfully but never play (state stays "stopped"). This patch makes the
+# scan code accept either shape.
+#
+# Apply with:
+#     sudo patch -p0 < services/scan-py-fix.diff
+#     sudo systemctl restart mopidy
+#
+# After this, the Radio stations in the library work directly. Without it,
+# the UI is fine but tapping a station is silently a no-op.
+
+--- /usr/lib/python3/dist-packages/mopidy/audio/scan.py	(original)
++++ /usr/lib/python3/dist-packages/mopidy/audio/scan.py	(patched)
+@@ -222,7 +222,8 @@
+                 missing_message = msg
+         elif msg.type == Gst.MessageType.APPLICATION:
+             if msg.get_structure().get_name() == "have-type":
+-                mime = msg.get_structure().get_value("caps").get_name()
++                _caps = msg.get_structure().get_value("caps")
++                mime = _caps.get_name() if hasattr(_caps, "get_name") else _caps.get_structure(0).get_name()
+                 if mime and (
+                     mime.startswith("text/") or mime == "application/xml"
+                 ):

@@ -1,0 +1,15 @@
+# /boot/firmware/usercfg.txt — Pi firmware overlays.
+#
+# Edit /boot/firmware/config.txt and ensure the [all] section includes
+# `include usercfg.txt` (it does on stock RPi OS Bookworm/Trixie).
+#
+# The DAC: hifiberry-dacplus matches the 52Pi EP-0218 / PCM5122 family
+# but also works for several other common HiFiBerry-class hats. If you
+# hear nothing, try one of these instead:
+#   dtoverlay=hifiberry-dac
+#   dtoverlay=rpi-dac
+#   dtoverlay=iqaudio-dac
+
+dtparam=i2s=on
+dtparam=audio=off
+dtoverlay=hifiberry-dacplus

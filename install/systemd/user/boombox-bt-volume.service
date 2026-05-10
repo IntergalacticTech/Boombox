@@ -1,0 +1,13 @@
+[Unit]
+Description=Boombox BT volume bridge (AVRCP → bluez_input node)
+After=graphical-session.target bluetooth.service pipewire.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-bt-volume.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
