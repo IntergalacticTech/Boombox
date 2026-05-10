@@ -90,13 +90,56 @@ def unique_path(target: Path) -> Path:
         n += 1
 
 
+def safe_compose(root: Path, rel_path: str) -> Path | None:
+    """Compose root / rel_path, rejecting any '..' segments or absolute paths.
+
+    We deliberately do NOT call .resolve() — that would follow symlinks, and
+    we have intentional symlinks under MUSIC_ROOT/.usb/ pointing at mounted
+    USB drives outside the music root. Symlink targets are root-trusted
+    (only the udev-driven mount script creates them).
+
+    Returns None if the path is unsafe.
+    """
+    parts: list[str] = []
+    for seg in rel_path.replace("\\", "/").split("/"):
+        if not seg or seg == ".":
+            continue
+        if seg == "..":
+            return None
+        if "/" in seg or seg.startswith("/"):
+            return None
+        parts.append(seg)
+    return root.joinpath(*parts) if parts else root
+
+
 def under_root(p: Path, root: Path) -> bool:
-    """True iff p resolves to somewhere inside root. Defends against ../ tricks."""
+    """True iff p resolves to somewhere inside root. Used only for upload
+    targets, where we *do* want resolve() to catch tricks — uploads must
+    land in MUSIC_ROOT/uploads, not anywhere a symlink could redirect."""
     try:
         p.resolve().relative_to(root.resolve())
         return True
     except ValueError:
         return False
+
+
+def _count_audio_recursive(d: Path, limit: int = 5000) -> int:
+    """Count audio files under d, capped so a multi-thousand-file drive
+    doesn't make the directory listing slow. Returns the count, possibly
+    truncated at limit."""
+    n = 0
+    try:
+        for p in d.rglob("*"):
+            try:
+                if p.is_file() and p.suffix.lower() in ALLOWED_EXTS:
+                    n += 1
+                    if n >= limit:
+                        return n
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return n
 
 
 def browse_dir(rel_path: str) -> dict:
@@ -105,15 +148,14 @@ def browse_dir(rel_path: str) -> dict:
     Hidden entries are skipped EXCEPT the special ".usb" mount-link folder so
     USB drives are visible in the browser.
     """
-    target = (MUSIC_ROOT / rel_path).resolve()
-    if not under_root(target, MUSIC_ROOT) or not target.is_dir():
+    target = safe_compose(MUSIC_ROOT, rel_path)
+    if target is None or not target.is_dir():
         return {"error": "not a directory"}
 
-    rel = target.relative_to(MUSIC_ROOT.resolve())
-    rel_str = "" if str(rel) == "." else str(rel)
-    parent_str = "" if not rel_str else str(Path(rel_str).parent)
-    if parent_str == ".":
-        parent_str = ""
+    # Display path stays in posix form, relative to MUSIC_ROOT.
+    rel_parts = [s for s in rel_path.replace("\\", "/").split("/") if s and s != "."]
+    rel_str = "/".join(rel_parts)
+    parent_str = "/".join(rel_parts[:-1])
 
     dirs: list[dict] = []
     files: list[dict] = []
@@ -124,12 +166,9 @@ def browse_dir(rel_path: str) -> dict:
                 continue
             try:
                 if entry.is_dir():
-                    # Track count is best-effort: we look one level deep so
-                    # the UI can show "(12 tracks)" without recursion cost.
-                    n_audio = sum(
-                        1 for c in entry.iterdir()
-                        if c.is_file() and c.suffix.lower() in ALLOWED_EXTS
-                    ) if entry.is_dir() else 0
+                    # Track count walks the whole subtree (capped at 5000)
+                    # so album-folder drives don't show "0 tracks".
+                    n_audio = _count_audio_recursive(entry)
                     dirs.append({"name": name, "kind": "dir", "tracks": n_audio})
                 elif entry.is_file() and entry.suffix.lower() in ALLOWED_EXTS:
                     st = entry.stat()
@@ -649,8 +688,8 @@ async def download_handler(request: web.Request) -> web.StreamResponse:
         return web.json_response({"error": "pin required"}, status=401)
     rel = request.match_info.get("path", "")
     rel = urllib.parse.unquote(rel)
-    target = (MUSIC_ROOT / rel).resolve()
-    if not under_root(target, MUSIC_ROOT) or not target.is_file():
+    target = safe_compose(MUSIC_ROOT, rel)
+    if target is None or not target.is_file():
         return web.json_response({"error": "not found"}, status=404)
     return web.FileResponse(target)
 
