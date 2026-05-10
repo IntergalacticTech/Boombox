@@ -109,8 +109,8 @@ sudo install -m 0644 "$SCRIPT_DIR/config/asound.conf" /etc/asound.conf
 # ---------------------------------------------------------------------------
 # 6. Music dir + Mopidy config
 # ---------------------------------------------------------------------------
-log "ensuring music dir exists: $MUSIC_DIR"
-mkdir -p "$MUSIC_DIR"
+log "ensuring music dirs exist: $MUSIC_DIR (+ uploads/, .usb/)"
+mkdir -p "$MUSIC_DIR" "$MUSIC_DIR/uploads" "$MUSIC_DIR/.usb"
 
 log "installing /etc/mopidy/mopidy.conf"
 sudo mkdir -p /etc/mopidy
@@ -169,6 +169,32 @@ USER_UNITS=(
 for u in "${USER_UNITS[@]}"; do
   systemctl --user enable "$u.service"
 done
+
+# boombox-uploader is intentionally NOT enabled — it's toggled by the
+# touchscreen Settings drawer.
+
+# System-side template + udev rule for USB auto-mount.
+log "installing USB auto-mount (system unit + udev rule)"
+sudo install -m 0644 "$SCRIPT_DIR/systemd/system/boombox-usb-mount@.service" \
+  /etc/systemd/system/boombox-usb-mount@.service
+sudo install -m 0644 "$SCRIPT_DIR/udev/99-boombox-usb.rules" \
+  /etc/udev/rules.d/99-boombox-usb.rules
+sudo systemctl daemon-reload
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=block --action=change || true
+
+# usb-mount needs to know which user owns the music directory.
+sudo mkdir -p /etc/boombox
+echo "$BOOMBOX_USER" | sudo tee /etc/boombox/desktop-user >/dev/null
+sudo chmod 0644 /etc/boombox/desktop-user
+
+# Sudoers fragment for library-scan / mopidy-restart from the touch UI.
+log "installing sudoers fragment for boombox"
+TMP_SUDOERS="$(mktemp)"
+sed "s/%BOOMBOX_USER%/$BOOMBOX_USER/g" "$SCRIPT_DIR/sudoers/boombox" > "$TMP_SUDOERS"
+sudo install -m 0440 -o root -g root "$TMP_SUDOERS" /etc/sudoers.d/boombox
+sudo visudo -cf /etc/sudoers.d/boombox
+rm -f "$TMP_SUDOERS"
 
 # Lingering so user services come up on boot before the user logs in.
 sudo loginctl enable-linger "$BOOMBOX_USER"

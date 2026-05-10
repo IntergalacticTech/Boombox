@@ -90,7 +90,30 @@ fi
 if systemd_changed; then
   log "systemd units changed — reinstalling"
   install -m 0644 "$SCRIPT_DIR/systemd/user/"*.service "$HOME/.config/systemd/user/"
+  if [[ -f "$SCRIPT_DIR/systemd/system/boombox-usb-mount@.service" ]]; then
+    sudo install -m 0644 "$SCRIPT_DIR/systemd/system/boombox-usb-mount@.service" \
+      /etc/systemd/system/boombox-usb-mount@.service
+    sudo systemctl daemon-reload
+  fi
   systemctl --user daemon-reload
+fi
+
+# udev rules drift their own way.
+if echo "$CHANGED" | grep -qE '^install/udev/'; then
+  log "udev rules changed — reinstalling + reloading"
+  sudo install -m 0644 "$SCRIPT_DIR/udev/99-boombox-usb.rules" \
+    /etc/udev/rules.d/99-boombox-usb.rules
+  sudo udevadm control --reload-rules
+fi
+
+# Sudoers fragment.
+if echo "$CHANGED" | grep -qE '^install/sudoers/boombox$'; then
+  log "sudoers fragment changed — reinstalling"
+  TMP_SUDOERS="$(mktemp)"
+  sed "s/%BOOMBOX_USER%/$USER/g" "$SCRIPT_DIR/sudoers/boombox" > "$TMP_SUDOERS"
+  sudo install -m 0440 -o root -g root "$TMP_SUDOERS" /etc/sudoers.d/boombox
+  sudo visudo -cf /etc/sudoers.d/boombox
+  rm -f "$TMP_SUDOERS"
 fi
 
 if services_changed || systemd_changed || reqs_changed; then

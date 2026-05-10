@@ -1,0 +1,15 @@
+[Unit]
+Description=Boombox USB auto-mount for /dev/%I
+BindsTo=dev-%i.device
+After=dev-%i.device
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# %I is the systemd-unescaped instance name (e.g. "sda1"); we feed back
+# /dev/sda1 to the script.
+ExecStart=/opt/boombox/services/boombox-usb-mount.sh mount /dev/%I
+ExecStop=/opt/boombox/services/boombox-usb-mount.sh unmount /dev/%I
+TimeoutStartSec=30
+TimeoutStopSec=15

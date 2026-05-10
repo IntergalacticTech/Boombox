@@ -30,6 +30,17 @@ type SystemInfo = {
 type Sink = { name: string; label: string; default: boolean; state: string };
 type SinksState = { ok: boolean; default: string | null; sinks: Sink[] };
 
+type UploadStatus = { enabled: boolean; pin: string; url: string; ip: string };
+type UsbDevice = {
+  id: string;
+  label: string;
+  mountpoint: string;
+  total_bytes: number;
+  used_bytes: number;
+  free_bytes: number;
+};
+type UsbList = { devices: UsbDevice[] };
+
 type Props = { onClose: () => void };
 
 export function SettingsDrawer({ onClose }: Props) {
@@ -40,6 +51,11 @@ export function SettingsDrawer({ onClose }: Props) {
   const [karaokePending, setKaraokePending] = useState(false);
   const [sinkPending, setSinkPending] = useState<string | null>(null);
   const [restartState, setRestartState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [upload, setUpload] = useState<UploadStatus | null>(null);
+  const [uploadPending, setUploadPending] = useState(false);
+  const [usb, setUsb] = useState<UsbList | null>(null);
+  const [usbBusy, setUsbBusy] = useState<string | null>(null);   // `${id}:${direction}` while a copy runs
+  const [usbResult, setUsbResult] = useState<string | null>(null);
   const sleepRemaining = useSleepTimer();
 
   const refreshKaraoke = async () => {
@@ -54,12 +70,28 @@ export function SettingsDrawer({ onClose }: Props) {
       if (r.ok) setSinks(await r.json());
     } catch { /* ignore */ }
   };
+  const refreshUpload = async () => {
+    try {
+      const r = await fetch("/api/upload/status");
+      if (r.ok) setUpload(await r.json());
+    } catch { /* ignore */ }
+  };
+  const refreshUsb = async () => {
+    try {
+      const r = await fetch("/api/usb/devices");
+      if (r.ok) setUsb(await r.json());
+    } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     refreshKaraoke();
     refreshSinks();
+    refreshUpload();
+    refreshUsb();
     fetch("/api/info").then(r => r.ok ? r.json() : null).then(setInfo).catch(() => {});
-    const id = setInterval(() => { refreshKaraoke(); refreshSinks(); }, 4000);
+    const id = setInterval(() => {
+      refreshKaraoke(); refreshSinks(); refreshUpload(); refreshUsb();
+    }, 4000);
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => { clearInterval(id); window.removeEventListener("keydown", onKey); };
@@ -111,6 +143,46 @@ export function SettingsDrawer({ onClose }: Props) {
       setScanState("error");
     }
     setTimeout(() => setScanState("idle"), 4000);
+  };
+
+  const toggleUpload = async () => {
+    if (!upload) return;
+    setUploadPending(true);
+    try {
+      const url = upload.enabled ? "/api/upload/disable" : "/api/upload/enable";
+      const r = await fetch(url, { method: "POST" });
+      if (r.ok) setUpload(await r.json());
+    } finally {
+      setUploadPending(false);
+    }
+  };
+
+  const usbCopy = async (deviceId: string, direction: "to-library" | "to-drive") => {
+    const key = `${deviceId}:${direction}`;
+    if (!window.confirm(direction === "to-library"
+      ? `Copy all audio from "${deviceId}" into the library?`
+      : `Copy entire library to "${deviceId}"?`)) return;
+    setUsbBusy(key);
+    setUsbResult(null);
+    try {
+      const r = await fetch("/api/usb/copy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ direction, device_id: deviceId }),
+      });
+      if (r.ok) {
+        const j = await r.json();
+        setUsbResult(`copied ${j.copied?.length ?? 0} files${j.errors?.length ? ` (${j.errors.length} errors)` : ""}`);
+      } else {
+        setUsbResult("copy failed");
+      }
+    } catch {
+      setUsbResult("copy failed");
+    } finally {
+      setUsbBusy(null);
+      refreshUsb();
+      setTimeout(() => setUsbResult(null), 8000);
+    }
   };
 
   const restartMopidy = async () => {
@@ -189,6 +261,119 @@ export function SettingsDrawer({ onClose }: Props) {
           WebkitOverflowScrolling: "touch",
           padding: "8px 0",
         }}>
+          {/* Upload mode */}
+          <div style={{
+            padding: "14px 16px",
+            borderBottom: "1px solid rgba(255,255,255,0.06)",
+          }}>
+            <div style={{display: "flex", alignItems: "center", gap: 14, minHeight: 48}}>
+              <div style={{flex: 1, minWidth: 0}}>
+                <div style={{fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em"}}>Upload mode</div>
+                <div style={{fontSize: 13, color: "rgba(255,255,255,0.65)", marginTop: 2}}>
+                  {upload == null
+                    ? "loading…"
+                    : upload.enabled
+                      ? "broadcasting on the LAN — guests can drop audio files"
+                      : "off — turn on to expose a phone-friendly upload page"}
+                </div>
+              </div>
+              <button
+                onClick={toggleUpload}
+                disabled={upload == null || uploadPending}
+                style={{
+                  ...primaryButton(upload?.enabled ? "#ff7a35" : "#7afcb0"),
+                  opacity: (upload == null || uploadPending) ? 0.5 : 1,
+                }}
+              >{upload?.enabled ? "TURN OFF" : "TURN ON"}</button>
+            </div>
+            {upload?.enabled && (
+              <div style={{
+                marginTop: 12, padding: "14px 16px",
+                background: "linear-gradient(135deg, rgba(122,252,176,0.12), rgba(91,231,255,0.10))",
+                border: "1px solid rgba(122,252,176,0.30)",
+                borderRadius: 10,
+                display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap",
+              }}>
+                <div style={{flex: 1, minWidth: 240}}>
+                  <div style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 11, letterSpacing: "0.18em", color: "#7afcb0",
+                  }}>OPEN ON YOUR PHONE</div>
+                  <div style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 22, fontWeight: 700, marginTop: 4, wordBreak: "break-all",
+                  }}>{upload.url || "(no LAN IP yet)"}</div>
+                </div>
+                <div>
+                  <div style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 11, letterSpacing: "0.18em", color: "#7afcb0", textAlign: "center",
+                  }}>PIN</div>
+                  <div style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 36, fontWeight: 700, letterSpacing: "0.20em", textAlign: "center",
+                  }}>{upload.pin || "—"}</div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* USB drives */}
+          <div style={{
+            padding: "14px 16px",
+            borderBottom: "1px solid rgba(255,255,255,0.06)",
+          }}>
+            <div style={{display: "flex", alignItems: "center", gap: 12, marginBottom: 10}}>
+              <div style={{flex: 1}}>
+                <div style={{fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em"}}>USB drives</div>
+                <div style={{fontSize: 13, color: "rgba(255,255,255,0.65)", marginTop: 2}}>
+                  {usb == null
+                    ? "loading…"
+                    : usb.devices.length === 0
+                      ? "plug a drive in — its tracks will join the library automatically"
+                      : `${usb.devices.length} drive${usb.devices.length === 1 ? "" : "s"} mounted`}
+                </div>
+              </div>
+              {usbResult && (
+                <div style={{fontSize: 12, color: "#7afcb0", fontFamily: "'JetBrains Mono', monospace"}}>{usbResult}</div>
+              )}
+            </div>
+            {usb?.devices.map(d => {
+              const pullKey = `${d.id}:to-library`;
+              const pushKey = `${d.id}:to-drive`;
+              const usedGB = (d.used_bytes / 1024 / 1024 / 1024).toFixed(1);
+              const totalGB = (d.total_bytes / 1024 / 1024 / 1024).toFixed(1);
+              return (
+                <div key={d.id} style={{
+                  padding: "10px 12px",
+                  background: "rgba(255,255,255,0.04)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 10,
+                  marginTop: 8,
+                  display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                }}>
+                  <div style={{flex: 1, minWidth: 160}}>
+                    <div style={{fontWeight: 700}}>{d.label}</div>
+                    <div style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 11, color: "rgba(255,255,255,0.55)", marginTop: 2,
+                    }}>{usedGB} / {totalGB} GB · {d.mountpoint}</div>
+                  </div>
+                  <button
+                    onClick={() => usbCopy(d.id, "to-library")}
+                    disabled={usbBusy != null}
+                    style={{...secondaryButton(), opacity: usbBusy === pullKey ? 0.5 : (usbBusy != null ? 0.4 : 1)}}
+                  >{usbBusy === pullKey ? "PULLING…" : "PULL → LIBRARY"}</button>
+                  <button
+                    onClick={() => usbCopy(d.id, "to-drive")}
+                    disabled={usbBusy != null}
+                    style={{...secondaryButton(), opacity: usbBusy === pushKey ? 0.5 : (usbBusy != null ? 0.4 : 1)}}
+                  >{usbBusy === pushKey ? "PUSHING…" : "PUSH → DRIVE"}</button>
+                </div>
+              );
+            })}
+          </div>
+
           {/* Karaoke */}
           <SettingRow
             title="Karaoke"
@@ -422,6 +607,21 @@ function primaryButton(accent: string): React.CSSProperties {
     borderRadius: 999,
     fontWeight: 700,
     fontSize: 12,
+    letterSpacing: "0.10em",
+    cursor: "pointer",
+    flexShrink: 0,
+  };
+}
+
+function secondaryButton(): React.CSSProperties {
+  return {
+    padding: "8px 12px",
+    background: "rgba(255,255,255,0.06)",
+    color: "#fff",
+    border: "1px solid rgba(255,255,255,0.18)",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 600,
     letterSpacing: "0.10em",
     cursor: "pointer",
     flexShrink: 0,

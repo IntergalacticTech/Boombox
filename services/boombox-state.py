@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import shutil
 import time
+from pathlib import Path
 from typing import Optional
 
 from aiohttp import web
@@ -605,6 +608,225 @@ async def mopidy_restart(_request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+# ---------------------------------------------------------------------------
+# Access (/upload, /usb, /library) — toggle the upload service, list mounted
+# USB drives, copy files to/from them, and trigger a Mopidy library rescan.
+# ---------------------------------------------------------------------------
+
+UPLOADER_UNIT = "boombox-uploader.service"
+HOME = Path(os.path.expanduser("~"))
+MUSIC_ROOT = Path(os.environ.get("BOOMBOX_MUSIC_DIR", HOME / "Music"))
+USB_LINKS_DIR = MUSIC_ROOT / ".usb"
+RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+UPLOADER_PIN_FILE = RUNTIME_DIR / "boombox-uploader.pin"
+
+
+async def _systemctl_user(*args: str, timeout: float = 5.0) -> tuple[int, str]:
+    return await run("systemctl", "--user", *args, timeout=timeout)
+
+
+async def _read_pin() -> str:
+    """Return the live uploader PIN, or '' if the service isn't running."""
+    try:
+        return UPLOADER_PIN_FILE.read_text().strip()
+    except FileNotFoundError:
+        return ""
+    except OSError:
+        return ""
+
+
+async def _primary_lan_ip() -> str:
+    rc, out = await run("hostname", "-I")
+    if rc != 0:
+        return ""
+    parts = (out or "").split()
+    # Prefer the first non-loopback IPv4.
+    for p in parts:
+        if "." in p and not p.startswith("127."):
+            return p
+    return parts[0] if parts else ""
+
+
+async def upload_status(_request: web.Request) -> web.Response:
+    rc, _ = await _systemctl_user("is-active", "--quiet", UPLOADER_UNIT)
+    enabled = rc == 0
+    pin = await _read_pin() if enabled else ""
+    ip = await _primary_lan_ip()
+    return web.json_response({
+        "enabled": enabled,
+        "pin": pin,
+        "url": f"http://{ip}/upload/" if ip else "",
+        "ip": ip,
+    })
+
+
+async def upload_enable(_request: web.Request) -> web.Response:
+    rc, out = await _systemctl_user("start", UPLOADER_UNIT, timeout=10)
+    if rc != 0:
+        return web.json_response({"ok": False, "error": out or "systemctl failed"}, status=502)
+    # Wait briefly for the service to lay down its PIN file.
+    for _ in range(20):
+        if UPLOADER_PIN_FILE.exists():
+            break
+        await asyncio.sleep(0.1)
+    return await upload_status(_request)
+
+
+async def upload_disable(_request: web.Request) -> web.Response:
+    rc, out = await _systemctl_user("stop", UPLOADER_UNIT, timeout=10)
+    if rc != 0:
+        return web.json_response({"ok": False, "error": out or "systemctl failed"}, status=502)
+    # Belt-and-braces: the unit's ExecStopPost should remove the PIN file too.
+    UPLOADER_PIN_FILE.unlink(missing_ok=True)
+    return web.json_response({"enabled": False, "pin": "", "url": "", "ip": ""})
+
+
+async def usb_devices(_request: web.Request) -> web.Response:
+    """List mounted USB drives via the symlinks in MUSIC_ROOT/.usb/.
+
+    Each entry: {id, label, mountpoint, total_bytes, used_bytes, free_bytes}.
+    """
+    devs: list[dict] = []
+    if USB_LINKS_DIR.is_dir():
+        for link in sorted(USB_LINKS_DIR.iterdir()):
+            try:
+                if not link.is_symlink():
+                    continue
+                target = link.resolve()
+                if not target.is_dir():
+                    continue
+                usage = shutil.disk_usage(target)
+                devs.append({
+                    "id": link.name,
+                    "label": link.name,
+                    "mountpoint": str(target),
+                    "total_bytes": usage.total,
+                    "used_bytes": usage.used,
+                    "free_bytes": usage.free,
+                })
+            except (OSError, ValueError) as e:
+                log.debug("skipping usb entry %s: %s", link, e)
+    return web.json_response({"devices": devs})
+
+
+AUDIO_EXTS = {
+    ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
+    ".wav", ".aiff", ".alac", ".wma",
+}
+
+
+def _enumerate_audio(root: Path, skip_dirs: tuple[str, ...] = (".usb",)) -> list[Path]:
+    """Return every audio file under root, skipping nested USB symlinks."""
+    out: list[Path] = []
+    for p in root.rglob("*"):
+        try:
+            # Don't recurse back into linked drives if root is the music dir.
+            if any(part in skip_dirs for part in p.relative_to(root).parts):
+                continue
+            if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
+                out.append(p)
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+async def usb_copy(request: web.Request) -> web.Response:
+    """Copy files between a USB drive and the local library.
+
+    JSON body: {
+        direction: "to-library" | "to-drive",
+        device_id: "<id from /usb/devices>",
+        items?: ["relative/path", ...]   # paths relative to the source root.
+                                         # If omitted/empty, copies every audio
+                                         # file under the source root.
+    }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+
+    direction = body.get("direction")
+    device_id = body.get("device_id")
+    items = body.get("items")
+    if direction not in ("to-library", "to-drive") or not device_id:
+        return web.json_response({"error": "missing direction/device_id"}, status=400)
+
+    link = USB_LINKS_DIR / device_id
+    if not link.is_symlink():
+        return web.json_response({"error": "unknown device"}, status=404)
+    drive_root = link.resolve()
+    if not drive_root.is_dir():
+        return web.json_response({"error": "device not mounted"}, status=410)
+
+    if direction == "to-library":
+        src_root, dst_root = drive_root, MUSIC_ROOT / "from-usb" / device_id
+        dst_anchor = MUSIC_ROOT
+    else:
+        src_root, dst_root = MUSIC_ROOT, drive_root / "from-boombox"
+        dst_anchor = drive_root
+
+    dst_root.mkdir(parents=True, exist_ok=True)
+
+    # Build the work list.
+    if items and isinstance(items, list):
+        sources: list[Path] = []
+        for rel in items:
+            if not isinstance(rel, str) or not rel:
+                continue
+            sources.append(src_root / rel)
+    else:
+        sources = await asyncio.to_thread(_enumerate_audio, src_root)
+
+    copied: list[str] = []
+    errors: list[dict] = []
+    for src in sources:
+        try:
+            real_src = src.resolve()
+            real_src.relative_to(src_root.resolve())
+        except ValueError:
+            errors.append({"item": str(src), "error": "outside source root"})
+            continue
+        except OSError as e:
+            errors.append({"item": str(src), "error": str(e)})
+            continue
+        if not real_src.is_file():
+            errors.append({"item": str(src), "error": "not a file"})
+            continue
+        dst = dst_root / real_src.name
+        n = 1
+        while dst.exists():
+            dst = dst_root / f"{real_src.stem}-{n}{real_src.suffix}"
+            n += 1
+        try:
+            await asyncio.to_thread(shutil.copy2, real_src, dst)
+            copied.append(str(dst.relative_to(dst_anchor)))
+        except OSError as e:
+            errors.append({"item": str(src), "error": str(e)})
+
+    if direction == "to-library" and copied:
+        asyncio.create_task(_scan_library())
+
+    return web.json_response({"copied": copied, "errors": errors})
+
+
+async def _scan_library() -> bool:
+    """Run mopidyctl local scan if available. Sudoers must allow NOPASSWD.
+
+    Returns True iff a scan was successfully started/completed.
+    """
+    rc, _ = await run("sudo", "-n", "/usr/sbin/mopidyctl", "local", "scan", timeout=300)
+    if rc == 0:
+        return True
+    rc2, _ = await run("sudo", "-n", "/usr/bin/mopidyctl", "local", "scan", timeout=300)
+    return rc2 == 0
+
+
+async def library_scan(_request: web.Request) -> web.Response:
+    ok = await _scan_library()
+    return web.json_response({"ok": ok})
+
+
 def make_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/state", state_handler)
@@ -622,6 +844,13 @@ def make_app() -> web.Application:
     app.router.add_get("/art", album_art)
     app.router.add_get("/lyrics", lyrics)
     app.router.add_post("/mopidy/restart", mopidy_restart)
+    # Access (upload + USB)
+    app.router.add_get("/upload/status", upload_status)
+    app.router.add_post("/upload/enable", upload_enable)
+    app.router.add_post("/upload/disable", upload_disable)
+    app.router.add_get("/usb/devices", usb_devices)
+    app.router.add_post("/usb/copy", usb_copy)
+    app.router.add_post("/library/scan", library_scan)
     return app
 
 

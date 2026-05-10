@@ -1,0 +1,27 @@
+# /etc/udev/rules.d/99-boombox-usb.rules — auto-mount USB filesystems for boombox.
+#
+# Triggers boombox-usb-mount@<dev>.service on partition add/remove for any
+# block device that's:
+#   - removable (USB sticks, card readers, USB-attached HDDs)
+#   - has a recognized filesystem (vfat / exfat / ntfs / ext4 / etc)
+#   - is a partition or single-FS top-level device
+#
+# Filtering rationale:
+#   - ID_FS_USAGE=filesystem skips swap, raid members, encrypted-but-locked
+#     partitions, and unformatted devices.
+#   - ENV{DEVTYPE}=="partition|disk" so we don't fire on the whole-disk
+#     device when its first partition is what holds the FS.
+
+ACTION=="add",    SUBSYSTEM=="block", KERNEL=="sd[a-z][0-9]", \
+  ATTRS{removable}=="1", ENV{ID_FS_USAGE}=="filesystem", \
+  TAG+="systemd", ENV{SYSTEMD_WANTS}+="boombox-usb-mount@%k.service"
+
+ACTION=="add",    SUBSYSTEM=="block", KERNEL=="sd[a-z]", \
+  ATTRS{removable}=="1", ENV{ID_FS_USAGE}=="filesystem", \
+  TAG+="systemd", ENV{SYSTEMD_WANTS}+="boombox-usb-mount@%k.service"
+
+ACTION=="remove", SUBSYSTEM=="block", KERNEL=="sd[a-z][0-9]", \
+  RUN+="/bin/systemctl --no-block stop boombox-usb-mount@%k.service"
+
+ACTION=="remove", SUBSYSTEM=="block", KERNEL=="sd[a-z]", \
+  RUN+="/bin/systemctl --no-block stop boombox-usb-mount@%k.service"

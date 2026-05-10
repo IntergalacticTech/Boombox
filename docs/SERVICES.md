@@ -153,6 +153,31 @@ Chromium and returns 404 now.) Closes duplicate tabs.
 - **Env knobs:** `BOOMBOX_KIOSK_CDP` (DevTools URL), `BOOMBOX_KIOSK_HOME`
   (target URL), `BOOMBOX_KIOSK_POLL` (seconds).
 
+### `boombox-uploader` — LAN file drop (off by default)
+
+Toggled from the touchscreen Settings drawer. When on, hosts a PIN-gated
+upload/download page at `/upload/` (proxied to `127.0.0.1:6683`). PIN is
+regenerated on every start and cleared on stop.
+
+- **Code:** [`services/boombox-uploader.py`](../services/boombox-uploader.py)
+- **Unit:** `install/systemd/user/boombox-uploader.service` —
+  intentionally not `--enable`d; toggled via `systemctl --user
+  start|stop` from `boombox-state`.
+- **Wire-format details:** see [ACCESS.md](./ACCESS.md).
+
+### `boombox-usb-mount@.service` — USB auto-mount (system template)
+
+Instantiated by udev when a removable filesystem appears. Mounts under
+`/media/boombox/<id>`, symlinks into `~/Music/.usb/<id>`, kicks a Mopidy
+scan. `ExecStop` reverses everything on `udev remove`.
+
+- **Code:** [`services/boombox-usb-mount.sh`](../services/boombox-usb-mount.sh)
+- **Unit:** `install/systemd/system/boombox-usb-mount@.service`
+- **udev rule:** `install/udev/99-boombox-usb.rules`
+- **Owner mapping:** for FAT/exFAT/NTFS, the mount uses `uid=`/`gid=`
+  matching `/etc/boombox/desktop-user`. ext4 / btrfs / etc. respect
+  on-disk ownership; the mount is read-only by default so this is OK.
+
 ### `boombox-kiosk` — the Chromium kiosk itself
 
 Launches Chromium with Wayland Ozone, kiosk flag, and

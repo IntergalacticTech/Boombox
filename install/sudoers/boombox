@@ -1,0 +1,12 @@
+# /etc/sudoers.d/boombox — installed by install.sh (chmod 0440, validated with visudo).
+#
+# Lets the desktop user kick library scans and bounce mopidy from the touch
+# UI without typing a password. We deliberately do NOT grant generic shell
+# escalation; only the specific commands the access flow needs.
+#
+# %BOOMBOX_USER% is replaced by install.sh with the actual username.
+
+%BOOMBOX_USER% ALL=(root) NOPASSWD: /usr/sbin/mopidyctl local scan
+%BOOMBOX_USER% ALL=(root) NOPASSWD: /usr/bin/mopidyctl  local scan
+%BOOMBOX_USER% ALL=(root) NOPASSWD: /bin/systemctl restart mopidy
+%BOOMBOX_USER% ALL=(root) NOPASSWD: /usr/bin/systemctl restart mopidy
