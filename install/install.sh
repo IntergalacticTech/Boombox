@@ -50,7 +50,7 @@ sudo apt install -y \
   mopidy mopidy-mpd mopidy-local mpc \
   nginx \
   chromium unclutter grim \
-  playerctl mpris-proxy \
+  playerctl \
   pipewire pipewire-pulse wireplumber pulseaudio-utils \
   shairport-sync \
   bluez bluez-tools \
