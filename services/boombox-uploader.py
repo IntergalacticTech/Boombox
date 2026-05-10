@@ -99,29 +99,82 @@ def under_root(p: Path, root: Path) -> bool:
         return False
 
 
-def list_library() -> list[dict]:
-    """Return a flat list of audio files in MUSIC_ROOT, with relative paths.
+def browse_dir(rel_path: str) -> dict:
+    """Return the directory listing at MUSIC_ROOT / rel_path.
 
-    Follows symlinks so USB-mounted drives (linked under .usb/) appear.
+    Hidden entries are skipped EXCEPT the special ".usb" mount-link folder so
+    USB drives are visible in the browser.
     """
-    out: list[dict] = []
-    for p in MUSIC_ROOT.rglob("*"):
-        try:
-            if not p.is_file():
+    target = (MUSIC_ROOT / rel_path).resolve()
+    if not under_root(target, MUSIC_ROOT) or not target.is_dir():
+        return {"error": "not a directory"}
+
+    rel = target.relative_to(MUSIC_ROOT.resolve())
+    rel_str = "" if str(rel) == "." else str(rel)
+    parent_str = "" if not rel_str else str(Path(rel_str).parent)
+    if parent_str == ".":
+        parent_str = ""
+
+    dirs: list[dict] = []
+    files: list[dict] = []
+    try:
+        for entry in target.iterdir():
+            name = entry.name
+            if name.startswith(".") and name != ".usb":
                 continue
-            if p.suffix.lower() not in ALLOWED_EXTS:
+            try:
+                if entry.is_dir():
+                    # Track count is best-effort: we look one level deep so
+                    # the UI can show "(12 tracks)" without recursion cost.
+                    n_audio = sum(
+                        1 for c in entry.iterdir()
+                        if c.is_file() and c.suffix.lower() in ALLOWED_EXTS
+                    ) if entry.is_dir() else 0
+                    dirs.append({"name": name, "kind": "dir", "tracks": n_audio})
+                elif entry.is_file() and entry.suffix.lower() in ALLOWED_EXTS:
+                    st = entry.stat()
+                    files.append({
+                        "name": name,
+                        "kind": "file",
+                        "size": st.st_size,
+                        "mtime": int(st.st_mtime),
+                    })
+            except (OSError, ValueError):
                 continue
-            rel = p.relative_to(MUSIC_ROOT)
-            st = p.stat()
-            out.append({
-                "path": str(rel),
-                "size": st.st_size,
-                "mtime": int(st.st_mtime),
-            })
-        except (OSError, ValueError):
-            continue
-    out.sort(key=lambda r: r["path"].lower())
-    return out
+    except PermissionError:
+        return {"error": "permission denied"}
+
+    dirs.sort(key=lambda r: r["name"].lower())
+    files.sort(key=lambda r: r["name"].lower())
+
+    return {
+        "path": rel_str,
+        "parent": parent_str if rel_str else None,
+        "entries": dirs + files,
+    }
+
+
+async def fetch_theme() -> dict:
+    """Pull the active theme from boombox-state. Falls back to a sane dark
+    default if the service is down."""
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as s:
+            async with s.get("http://127.0.0.1:6681/theme",
+                             timeout=aiohttp.ClientTimeout(total=1.5)) as r:
+                if r.status == 200:
+                    return await r.json()
+    except Exception:
+        pass
+    return {
+        "skinId": "default", "name": "Boombox",
+        "theme": {
+            "bg": "#0c0c0c", "panel": "#1a1830", "ink": "#f3f1ff", "ink2": "#9892b8",
+            "accent": "#8b5cf6", "accent2": "#5be7ff", "rule": "rgba(255,255,255,0.08)",
+            "font": "'Inter', system-ui, sans-serif",
+            "mono": "'JetBrains Mono', ui-monospace, monospace",
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -149,58 +202,133 @@ def set_pin_cookie(resp: web.Response) -> None:
 # HTML
 # ---------------------------------------------------------------------------
 
-INDEX_HTML = """\
+INDEX_HTML_TEMPLATE = """\
 <!doctype html>
 <html lang=en>
 <meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>Boombox · Drop</title>
 <style>
-  :root { color-scheme: dark; }
-  body { font: 16px/1.4 -apple-system, system-ui, sans-serif; background: #0c0c0c;
-         color: #f3f1ff; margin: 0; padding: 24px; min-height: 100vh; box-sizing: border-box; }
-  h1 { font-size: 28px; letter-spacing: -0.01em; margin: 0 0 4px; }
-  .sub { color: #9892b8; margin-bottom: 24px; }
-  .card { background: #1a1830; border: 1px solid rgba(255,255,255,0.08);
-          border-radius: 14px; padding: 20px; margin-bottom: 20px; }
-  label { display: block; font-size: 12px; letter-spacing: 0.2em;
-          text-transform: uppercase; color: #9892b8; margin-bottom: 8px; }
-  input[type=text], input[type=password] {
-    width: 100%; box-sizing: border-box; background: #100d1c; border: 1px solid rgba(255,255,255,0.16);
-    color: #f3f1ff; font-size: 18px; padding: 12px 14px; border-radius: 10px;
+  :root {{
+    --bg:      {bg};
+    --panel:   {panel};
+    --ink:     {ink};
+    --ink2:    {ink2};
+    --accent:  {accent};
+    --accent2: {accent2};
+    --rule:    {rule};
+    --font:    {font};
+    --mono:    {mono};
+    color-scheme: {color_scheme};
+  }}
+  * {{ box-sizing: border-box; }}
+  html, body {{
+    font: 16px/1.4 var(--font); background: var(--bg); color: var(--ink);
+    margin: 0; padding: 0; min-height: 100vh;
+  }}
+  body {{ padding: 22px 18px 60px; max-width: 880px; margin: 0 auto; }}
+  h1 {{ font-size: 28px; letter-spacing: -0.01em; margin: 0 0 4px; font-weight: 800; }}
+  .sub {{ color: var(--ink2); margin-bottom: 20px; }}
+  .pill {{
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent); font-family: var(--mono);
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    vertical-align: middle;
+  }}
+
+  .card {{
+    background: var(--panel); border: 1px solid var(--rule);
+    border-radius: 14px; padding: 18px; margin-bottom: 16px;
+  }}
+
+  label {{
+    display: block; font-family: var(--mono);
+    font-size: 11px; letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--ink2); margin-bottom: 10px;
+  }}
+
+  input[type=text], input[type=password], .filter {{
+    width: 100%; background: var(--bg); border: 1px solid var(--rule);
+    color: var(--ink); font: 18px var(--font);
+    padding: 12px 14px; border-radius: 10px;
     -webkit-appearance: none; appearance: none;
-  }
-  input[type=text]:focus, input[type=password]:focus { outline: 2px solid #5be7ff; }
-  button {
-    background: #8b5cf6; color: #fff; font-size: 16px; font-weight: 600;
-    border: 0; padding: 12px 22px; border-radius: 10px; cursor: pointer;
-  }
-  button:hover { background: #a78bfa; }
-  button[disabled] { opacity: 0.5; cursor: progress; }
-  .drop {
-    border: 2px dashed rgba(255,255,255,0.2); border-radius: 12px; padding: 40px;
-    text-align: center; transition: background 0.15s, border-color 0.15s;
-  }
-  .drop.over { background: rgba(139,92,246,0.12); border-color: #8b5cf6; }
-  .file-row { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
-  .file-row:last-child { border-bottom: 0; }
-  .file-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .file-row .size { color: #9892b8; font-variant-numeric: tabular-nums; }
-  .file-row a { color: #5be7ff; text-decoration: none; }
-  .file-row a:hover { text-decoration: underline; }
-  .filter { width: 100%; box-sizing: border-box; background: transparent; border: 0;
-            border-bottom: 1px solid rgba(255,255,255,0.16); padding: 8px 0; color: #f3f1ff; font-size: 16px; }
-  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px;
-          background: rgba(91,231,255,0.12); color: #5be7ff; font-size: 12px; letter-spacing: 0.18em;
-          text-transform: uppercase; }
-  .err { color: #ff7878; margin-top: 8px; min-height: 1em; }
-  .ok  { color: #7afcb0; margin-top: 8px; min-height: 1em; }
-  .progress { height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; margin-top: 8px; overflow: hidden; }
-  .progress > div { height: 100%; width: 0%; background: #8b5cf6; transition: width 0.1s; }
+  }}
+  input:focus, .filter:focus {{ outline: 2px solid var(--accent); }}
+
+  button {{
+    background: var(--accent); color: var(--bg);
+    font: 600 14px/1 var(--font); letter-spacing: 0.04em;
+    border: 0; padding: 12px 18px; border-radius: 10px; cursor: pointer;
+    min-height: 44px;
+  }}
+  button:hover {{ filter: brightness(1.10); }}
+  button[disabled] {{ opacity: 0.5; cursor: progress; }}
+  .ghost {{
+    background: transparent; color: var(--ink);
+    border: 1px solid var(--rule);
+  }}
+
+  .drop {{
+    border: 2px dashed color-mix(in srgb, var(--ink) 22%, transparent);
+    border-radius: 12px; padding: 36px 18px; text-align: center;
+    transition: background 0.15s, border-color 0.15s;
+  }}
+  .drop.over {{
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border-color: var(--accent);
+  }}
+  .drop button {{ background: var(--accent2); }}
+
+  .crumbs {{
+    display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+    font-family: var(--mono); font-size: 13px;
+    margin-bottom: 6px;
+  }}
+  .crumbs a {{
+    color: var(--accent); cursor: pointer; text-decoration: none;
+    padding: 4px 6px; border-radius: 6px;
+  }}
+  .crumbs a:hover {{ background: color-mix(in srgb, var(--accent) 12%, transparent); }}
+  .crumbs .sep {{ color: var(--ink2); }}
+  .crumbs .here {{ color: var(--ink); padding: 4px 6px; }}
+
+  .row {{
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 8px; border-bottom: 1px solid var(--rule);
+    cursor: default; min-height: 44px;
+  }}
+  .row.click {{ cursor: pointer; border-radius: 8px; }}
+  .row.click:hover {{ background: color-mix(in srgb, var(--accent) 8%, transparent); }}
+  .row .icon {{ flex: 0 0 24px; color: var(--ink2); font-family: var(--mono); }}
+  .row.dir .icon {{ color: var(--accent); }}
+  .row .name {{
+    flex: 1; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }}
+  .row .meta {{ color: var(--ink2); font-family: var(--mono); font-size: 12px;
+                font-variant-numeric: tabular-nums; }}
+  .row .dl {{
+    color: var(--accent2); text-decoration: none; font-family: var(--mono); font-size: 12px;
+    padding: 6px 10px; border-radius: 6px;
+  }}
+  .row .dl:hover {{ background: color-mix(in srgb, var(--accent2) 14%, transparent); }}
+
+  .err {{ color: #ff7878; margin-top: 8px; min-height: 1em; font-family: var(--mono); font-size: 13px; }}
+  .ok  {{ color: var(--accent); margin-top: 8px; min-height: 1em; font-family: var(--mono); font-size: 13px; }}
+
+  .progress {{ height: 4px; background: var(--rule); border-radius: 2px; margin-top: 8px; overflow: hidden; flex: 1 1 80px; }}
+  .progress > div {{ height: 100%; width: 0%; background: var(--accent); transition: width 0.1s; }}
+
+  .skin-tag {{
+    display: inline-block; font-family: var(--mono); font-size: 10px;
+    letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink2);
+    margin-left: 8px;
+  }}
 </style>
 
-<h1>Boombox · Drop</h1>
-<div class="sub">Upload tracks to the boombox, or grab files off it.</div>
+<h1>Boombox <span class=skin-tag>{skin_name}</span></h1>
+<div class="sub">Drop tracks onto the boombox, or grab anything from its library.</div>
 
 <div id="auth-card" class=card hidden>
   <label for=pin>4-digit PIN (shown on the touchscreen)</label>
@@ -221,129 +349,216 @@ INDEX_HTML = """\
 
 <div id=lib-card class=card hidden>
   <label>Library <span id=lib-count class=pill>—</span></label>
-  <input class=filter id=lib-filter placeholder="filter…">
-  <div id=lib-list style="max-height: 50vh; overflow: auto; margin-top: 8px;"></div>
+  <div id=crumbs class=crumbs></div>
+  <input class=filter id=lib-filter placeholder="filter this folder…">
+  <div id=lib-list style="max-height: 56vh; overflow: auto; margin-top: 8px;"></div>
 </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 let authed = false;
-let library = [];
+let cwd = "";        // current relative path inside MUSIC_ROOT
+let entries = [];    // last browse() result
+let filterText = "";
 
-function show(authedNow) {
+function show(authedNow) {{
   authed = authedNow;
   $('auth-card').hidden = authedNow;
   $('upload-card').hidden = !authedNow;
   $('lib-card').hidden = !authedNow;
-}
+}}
 
-async function tryPin(p) {
-  const r = await fetch('upload', { method: 'POST', headers: { 'X-Boombox-Pin': p }, body: new FormData() });
-  // Empty body returns 400 ("no files"), but also confirms PIN. Anything other
-  // than 401 means the PIN was accepted.
+async function tryPin(p) {{
+  const r = await fetch('upload', {{ method: 'POST', headers: {{ 'X-Boombox-Pin': p }}, body: new FormData() }});
   if (r.status === 401) return false;
   document.cookie = 'bbx_pin=' + p + '; max-age=43200; path=/; SameSite=Lax';
   return true;
-}
+}}
 
-$('pin').addEventListener('input', async (e) => {
+$('pin').addEventListener('input', async (e) => {{
   const v = e.target.value.replace(/\\D/g, '').slice(0, 4);
   e.target.value = v;
-  if (v.length === 4) {
-    if (await tryPin(v)) {
-      show(true);
-      loadLibrary();
-    } else {
-      $('auth-err').textContent = 'Wrong PIN.';
-      e.target.value = '';
-    }
-  }
-});
+  if (v.length === 4) {{
+    if (await tryPin(v)) {{ show(true); loadDir(""); }}
+    else {{ $('auth-err').textContent = 'Wrong PIN.'; e.target.value = ''; }}
+  }}
+}});
 
 const drop = $('drop');
 ['dragenter', 'dragover'].forEach(ev =>
-  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); })
+  drop.addEventListener(ev, e => {{ e.preventDefault(); drop.classList.add('over'); }})
 );
 ['dragleave', 'drop'].forEach(ev =>
-  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); })
+  drop.addEventListener(ev, e => {{ e.preventDefault(); drop.classList.remove('over'); }})
 );
 drop.addEventListener('drop', e => upload([...e.dataTransfer.files]));
 $('pick').addEventListener('click', () => $('picker').click());
 $('picker').addEventListener('change', () => upload([...$('picker').files]));
 
-async function upload(files) {
+async function upload(files) {{
   if (!files.length) return;
   $('upload-err').textContent = '';
   $('upload-ok').textContent = '';
   const list = $('upload-list');
-  for (const f of files) {
+  for (const f of files) {{
     const row = document.createElement('div');
-    row.className = 'file-row';
-    row.innerHTML = `<div class=name></div><div class=size>—</div><div class=progress><div></div></div>`;
+    row.className = 'row';
+    row.innerHTML = `<div class=name></div><div class=progress><div></div></div><div class=meta>—</div>`;
     row.querySelector('.name').textContent = f.name;
     list.appendChild(row);
     const bar = row.querySelector('.progress > div');
-    try {
-      await new Promise((resolve, reject) => {
+    const meta = row.querySelector('.meta');
+    try {{
+      await new Promise((resolve, reject) => {{
         const xhr = new XMLHttpRequest();
         xhr.open('POST', 'upload');
-        xhr.upload.addEventListener('progress', e => {
+        xhr.upload.addEventListener('progress', e => {{
           if (e.lengthComputable) bar.style.width = (e.loaded / e.total * 100).toFixed(1) + '%';
-        });
+        }});
         xhr.onload = () => xhr.status === 200 ? resolve() : reject(new Error(xhr.statusText || ('HTTP ' + xhr.status)));
         xhr.onerror = () => reject(new Error('network error'));
         const fd = new FormData(); fd.append('file', f);
         xhr.send(fd);
-      });
+      }});
       bar.style.width = '100%';
-      row.querySelector('.size').textContent = '✓';
-    } catch (err) {
-      row.querySelector('.size').textContent = '✗';
-      $('upload-err').textContent = `${f.name}: ${err.message}`;
-    }
-  }
+      meta.textContent = '✓';
+    }} catch (err) {{
+      meta.textContent = '✗';
+      $('upload-err').textContent = `${{f.name}}: ${{err.message}}`;
+    }}
+  }}
   $('upload-ok').textContent = 'Done — boombox is rescanning the library.';
-  loadLibrary();
-}
+  loadDir(cwd);
+}}
 
-async function loadLibrary() {
-  const r = await fetch('list');
+async function loadDir(rel) {{
+  const r = await fetch('browse?path=' + encodeURIComponent(rel || ''));
   if (!r.ok) return;
-  library = await r.json();
-  $('lib-count').textContent = library.length + ' files';
-  renderLibrary('');
-}
-$('lib-filter').addEventListener('input', e => renderLibrary(e.target.value.toLowerCase()));
+  const j = await r.json();
+  if (j.error) {{ alert(j.error); return; }}
+  cwd = j.path;
+  entries = j.entries;
+  filterText = "";
+  $('lib-filter').value = "";
+  renderCrumbs();
+  renderEntries();
+}}
 
-function renderLibrary(filter) {
+function renderCrumbs() {{
+  const c = $('crumbs');
+  c.innerHTML = '';
+  const root = document.createElement('a');
+  root.textContent = '~';
+  root.onclick = () => loadDir('');
+  c.appendChild(root);
+  if (cwd) {{
+    const parts = cwd.split('/').filter(Boolean);
+    let acc = '';
+    for (let i = 0; i < parts.length; i++) {{
+      acc = acc ? acc + '/' + parts[i] : parts[i];
+      const sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '/';
+      c.appendChild(sep);
+      if (i === parts.length - 1) {{
+        const here = document.createElement('span');
+        here.className = 'here'; here.textContent = parts[i];
+        c.appendChild(here);
+      }} else {{
+        const a = document.createElement('a'); a.textContent = parts[i];
+        const target = acc; a.onclick = () => loadDir(target);
+        c.appendChild(a);
+      }}
+    }}
+  }}
+}}
+
+$('lib-filter').addEventListener('input', e => {{
+  filterText = e.target.value.toLowerCase();
+  renderEntries();
+}});
+
+function renderEntries() {{
   const list = $('lib-list');
   list.innerHTML = '';
-  let shown = 0;
-  for (const f of library) {
-    if (filter && !f.path.toLowerCase().includes(filter)) continue;
-    if (++shown > 500) break;
-    const row = document.createElement('div');
-    row.className = 'file-row';
-    const sizeMB = (f.size / 1048576).toFixed(1) + ' MB';
-    row.innerHTML = `<div class=name></div><div class=size>${sizeMB}</div><a></a>`;
-    row.querySelector('.name').textContent = f.path;
-    const a = row.querySelector('a');
-    a.href = 'download/' + encodeURI(f.path);
-    a.textContent = 'download';
-    a.setAttribute('download', '');
-    list.appendChild(row);
-  }
-}
+  // Synthetic ".." row when not at root.
+  if (cwd) {{
+    const up = document.createElement('div');
+    up.className = 'row click dir';
+    up.innerHTML = '<div class=icon>↑</div><div class=name>..</div>';
+    const parent = cwd.includes('/') ? cwd.slice(0, cwd.lastIndexOf('/')) : '';
+    up.onclick = () => loadDir(parent);
+    list.appendChild(up);
+  }}
 
-// Boot.
-(async () => {
-  // If the cookie is already set, the first /list call succeeds — skip the PIN.
-  const r = await fetch('list', { credentials: 'include' });
-  if (r.ok) { show(true); library = await r.json(); $('lib-count').textContent = library.length + ' files'; renderLibrary(''); }
-  else { show(false); }
-})();
+  const matched = entries.filter(e => !filterText || e.name.toLowerCase().includes(filterText));
+  $('lib-count').textContent = `${{matched.filter(e=>e.kind==='file').length}} tracks`
+    + (matched.filter(e=>e.kind==='dir').length ? ` · ${{matched.filter(e=>e.kind==='dir').length}} folders` : '');
+
+  let shown = 0;
+  for (const e of matched) {{
+    if (++shown > 1000) break;
+    const row = document.createElement('div');
+    if (e.kind === 'dir') {{
+      row.className = 'row click dir';
+      row.innerHTML = `<div class=icon>▸</div><div class=name></div><div class=meta>${{e.tracks}} tracks</div>`;
+      row.querySelector('.name').textContent = e.name;
+      const target = cwd ? cwd + '/' + e.name : e.name;
+      row.onclick = () => loadDir(target);
+    }} else {{
+      row.className = 'row';
+      const sizeMB = (e.size / 1048576).toFixed(1) + ' MB';
+      row.innerHTML = `<div class=icon>♪</div><div class=name></div><div class=meta>${{sizeMB}}</div><a class=dl></a>`;
+      row.querySelector('.name').textContent = e.name;
+      const a = row.querySelector('.dl');
+      const dlPath = cwd ? cwd + '/' + e.name : e.name;
+      a.href = 'download/' + encodeURI(dlPath);
+      a.textContent = '⤓';
+      a.title = 'download';
+      a.setAttribute('download', '');
+    }}
+    list.appendChild(row);
+  }}
+}}
+
+// Boot. If cookie is already set, browse will succeed.
+(async () => {{
+  const r = await fetch('browse?path=', {{ credentials: 'include' }});
+  if (r.ok) {{ show(true); const j = await r.json(); cwd = j.path; entries = j.entries; renderCrumbs(); renderEntries(); }}
+  else {{ show(false); }}
+}})();
 </script>
 """
+
+
+def _is_light(hex_color: str) -> bool:
+    """Naive luminance check on a #rrggbb so we set color-scheme correctly."""
+    c = hex_color.lstrip("#")
+    if len(c) != 6:
+        return False
+    try:
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    except ValueError:
+        return False
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 160
+
+
+async def render_index() -> str:
+    payload = await fetch_theme()
+    t = payload.get("theme") or {}
+    skin_name = payload.get("name") or "Boombox"
+    bg = t.get("bg", "#0c0c0c")
+    return INDEX_HTML_TEMPLATE.format(
+        bg=bg,
+        panel=t.get("panel", "#1a1830"),
+        ink=t.get("ink", "#f3f1ff"),
+        ink2=t.get("ink2", "#9892b8"),
+        accent=t.get("accent", "#8b5cf6"),
+        accent2=t.get("accent2", "#5be7ff"),
+        rule=t.get("rule", "rgba(255,255,255,0.08)"),
+        font=t.get("font", "'Inter', system-ui, sans-serif"),
+        mono=t.get("mono", "'JetBrains Mono', ui-monospace, monospace"),
+        color_scheme="light" if _is_light(bg) else "dark",
+        skin_name=skin_name,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +566,9 @@ function renderLibrary(filter) {
 # ---------------------------------------------------------------------------
 
 async def index(_request: web.Request) -> web.Response:
-    return web.Response(text=INDEX_HTML, content_type="text/html")
+    html = await render_index()
+    return web.Response(text=html, content_type="text/html",
+                        headers={"Cache-Control": "no-store"})
 
 
 async def upload_handler(request: web.Request) -> web.Response:
@@ -414,11 +631,15 @@ async def _trigger_scan() -> None:
         log.debug("scan trigger failed (boombox-state down?): %s", e)
 
 
-async def list_handler(request: web.Request) -> web.Response:
+async def browse_handler(request: web.Request) -> web.Response:
     if not request_authed(request):
         return web.json_response({"error": "pin required"}, status=401)
-    files = list_library()
-    resp = web.json_response(files)
+    rel = request.query.get("path", "") or ""
+    rel = rel.strip("/").replace("\\", "/")
+    result = browse_dir(rel)
+    if "error" in result:
+        return web.json_response(result, status=404)
+    resp = web.json_response(result)
     set_pin_cookie(resp)
     return resp
 
@@ -446,7 +667,11 @@ def make_app() -> web.Application:
     app = web.Application(client_max_size=MAX_FILE_BYTES + 1024)
     app.router.add_get("/", index)
     app.router.add_post("/upload", upload_handler)
-    app.router.add_get("/list", list_handler)
+    app.router.add_get("/browse", browse_handler)
+    # Keep /list around as a deprecated alias so any old browser session
+    # that hasn't reloaded the page yet still authenticates correctly. It
+    # routes to browse() at the root.
+    app.router.add_get("/list", browse_handler)
     app.router.add_get("/download/{path:.+}", download_handler)
     app.router.add_get("/health", health)
     return app

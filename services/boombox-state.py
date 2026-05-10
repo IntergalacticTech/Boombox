@@ -827,6 +827,49 @@ async def library_scan(_request: web.Request) -> web.Response:
     return web.json_response({"ok": ok})
 
 
+# ---------------------------------------------------------------------------
+# Theme — the kiosk SPA POSTs the active skin's palette here so external
+# surfaces (the LAN upload page) can render in matching colors.
+# ---------------------------------------------------------------------------
+
+THEME_FILE = Path(os.environ.get(
+    "BOOMBOX_THEME_FILE",
+    str(HOME / ".local/state/boombox/active-theme.json"),
+))
+
+DEFAULT_THEME = {
+    "skinId": "simple",
+    "name": "Simple",
+    "theme": {
+        "bg": "#07060c", "panel": "#100d1c", "ink": "#f3f1ff", "ink2": "#9892b8",
+        "accent": "#8b5cf6", "accent2": "#5be7ff", "rule": "rgba(255,255,255,0.08)",
+        "font": "'Inter', system-ui, -apple-system, sans-serif",
+        "mono": "'JetBrains Mono', ui-monospace, monospace",
+    },
+}
+
+
+async def theme_get(_request: web.Request) -> web.Response:
+    try:
+        import json
+        return web.json_response(json.loads(THEME_FILE.read_text()))
+    except (FileNotFoundError, OSError, ValueError):
+        return web.json_response(DEFAULT_THEME)
+
+
+async def theme_post(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    if not isinstance(body, dict) or "theme" not in body:
+        return web.json_response({"error": "missing theme"}, status=400)
+    THEME_FILE.parent.mkdir(parents=True, exist_ok=True)
+    import json
+    THEME_FILE.write_text(json.dumps(body))
+    return web.json_response({"ok": True})
+
+
 def make_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/state", state_handler)
@@ -851,6 +894,8 @@ def make_app() -> web.Application:
     app.router.add_get("/usb/devices", usb_devices)
     app.router.add_post("/usb/copy", usb_copy)
     app.router.add_post("/library/scan", library_scan)
+    app.router.add_get("/theme", theme_get)
+    app.router.add_post("/theme", theme_post)
     return app
 
 

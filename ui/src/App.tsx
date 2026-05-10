@@ -63,6 +63,16 @@ function App() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // Publish the active skin's theme so external surfaces (the LAN upload
+  // page, etc.) can match the kiosk's look. Best-effort; offline is fine.
+  useEffect(() => {
+    fetch("/api/theme", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ skinId: skin.id, name: skin.name, theme: skin.theme }),
+    }).catch(() => { /* boombox-state offline; no harm */ });
+  }, [skin.id]);
+
   // External source overrides Mopidy's state when it's the live player.
   const externalActive = isExternalActive(ext);
   const trackForSkin: Track | null = externalActive && ext.track
