@@ -99,6 +99,13 @@ All seven `boombox-*` services run as **user** systemd units (they need the
 desktop session's PipeWire / Wayland / BlueZ). `nginx` and `mopidy` are
 system services.
 
+## Docs
+
+- **[ARCHITECTURE.md](./docs/ARCHITECTURE.md)** — one-screen picture of how everything fits together
+- **[SERVICES.md](./docs/SERVICES.md)** — per-service reference: what each daemon does and how to debug it
+- **[SKINS.md](./docs/SKINS.md)** — end-to-end guide to creating a new touchscreen skin
+- **[DEVELOPMENT.md](./docs/DEVELOPMENT.md)** — dev workflow on a laptop, the `pi` helper, common tasks
+
 ## Roadmap
 
 - [x] Working code on the Pi

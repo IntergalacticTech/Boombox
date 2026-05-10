@@ -1,0 +1,221 @@
+# Architecture
+
+How the boombox is wired up, end-to-end. Read this once and the rest of the
+repo organises itself in your head.
+
+---
+
+## One-screen summary
+
+```
+                      ┌──────────────────────────────┐
+                      │   Raspberry Pi 5 + HiFiBerry  │
+                      └──────────────┬───────────────┘
+                                     │
+   ┌─────────────┐     ┌─────────────┴────────────┐     ┌──────────────┐
+   │   Touch UI  │◀────│           nginx :80      │────▶│  /var/www/   │
+   │  (Chromium) │     │  ┌────────────────────┐  │     │  boombox/    │
+   │  kiosk mode │     │  │ / → SPA            │  │     │  (Vite dist) │
+   └──────┬──────┘     │  │ /mopidy/  → :6680  │  │     └──────────────┘
+          │            │  │ /api/     → :6681  │  │
+   GPIO   │            │  │ /audio/ws → :6682  │  │
+   buttons│            │  └────────────────────┘  │
+          │            └──────────────────────────┘
+          ▼                       │       │       │
+   ┌──────────────┐               ▼       ▼       ▼
+   │   Mopidy     │       ┌───────────┐ ┌──────────┐ ┌─────────────┐
+   │   :6680      │◀──────│  boombox- │ │ boombox- │ │  boombox-   │
+   │   (music)    │       │  state    │ │  audio   │ │  buttons    │
+   └──────┬───────┘       │  :6681    │ │  :6682   │ │  (GPIO)     │
+          │               └─────┬─────┘ └─────┬────┘ └──────┬──────┘
+          │  alsasink           │             │             │
+          ▼                     │  playerctl  │  parec      │ HTTP/RPC
+   ┌──────────────┐             ▼             ▼             ▼
+   │  PipeWire    │       ┌─────────────────────────────────────────┐
+   │  + Wireplumber│      │  shairport-sync  raspotify  bluez A2DP  │
+   └──────┬───────┘       └─────────────────────────────────────────┘
+          │                        │              │             │
+          ▼                  AirPlay receiver  Spotify Connect  Phone (BT)
+   ┌──────────────┐
+   │ HiFiBerry DAC│
+   │ (I²S)        │
+   └──────┬───────┘
+          ▼
+       speakers
+```
+
+---
+
+## Processes
+
+| Process | Type | Port | Purpose |
+|---------|------|------|---------|
+| `nginx` | system | 80 | Reverse proxy; serves the SPA |
+| `mopidy` | system | 6680 | Music server (local files, Spotify-via-Mopidy, Iris UI, JSON-RPC + WebSocket) |
+| `pipewire`, `wireplumber` | user | — | Audio graph |
+| `shairport-sync` | system | — | AirPlay receiver (sink → PipeWire) |
+| `raspotify` (optional) | system | — | Spotify Connect via librespot |
+| `bluetoothd` | system | — | BlueZ; A2DP sink for phones |
+| `chromium` (kiosk) | user | 9222 | Touch UI; remote-debug port for the `pi` helper |
+| `boombox-state` | user | 6681 | MPRIS aggregator + `/api/*` helpers |
+| `boombox-audio` | user | 6682 | PipeWire monitor → FFT/VU → `/audio/ws` WebSocket |
+| `boombox-orchestrator` | user | — | Watches PipeWire; pauses other sources when a new one starts |
+| `boombox-buttons` | user | — | GPIO falling-edge → Mopidy RPC |
+| `boombox-resume` | user | — | Snapshots Mopidy state, restores after reboot |
+| `boombox-bt-volume` | user | — | AVRCP absolute-volume → `bluez_input` node volume |
+| `boombox-kiosk-guard` | user | — | DevTools watchdog that keeps Chromium pinned to `http://localhost/` |
+
+**System vs user.** `nginx`, `mopidy`, `shairport-sync`, `bluetoothd`,
+`raspotify` are system-wide and start before login. The `boombox-*` services
+run as **user** units because they need the desktop session's
+`XDG_RUNTIME_DIR` (PipeWire, BlueZ user session, Wayland for the kiosk).
+`loginctl enable-linger` lets them come up at boot before any human logs in.
+
+---
+
+## Data flow: "what's playing right now?"
+
+There are two source-of-truth channels, and the UI merges them:
+
+1. **Mopidy** — when music is playing from the local library, internet radio,
+   or Spotify-via-Mopidy. The SPA opens a WebSocket to `/mopidy/ws` for
+   push events and POSTs JSON-RPC to `/mopidy/rpc` for one-off calls
+   (`ui/src/lib/mopidy.ts`).
+
+2. **Non-Mopidy MPRIS** — when AirPlay, Bluetooth A2DP, or
+   librespot/raspotify is actively producing audio. `boombox-state` polls
+   `playerctl` every 500 ms and exposes the active player at
+   `/api/state`. The SPA polls this every 2 s
+   (`ui/src/lib/activeSource.ts`).
+
+`App.tsx` decides which one "wins" using `isExternalActive()`: if a
+non-Mopidy MPRIS player is in `playing` state, its metadata overrides
+Mopidy's. Transport actions (`onToggle`, `onNext`, `onPrev`) route to
+whichever source is live: Mopidy's RPC for Mopidy, `/api/control/<action>`
+for everything else.
+
+---
+
+## Data flow: "make a new source pause the old one"
+
+`boombox-orchestrator` runs in the background. Every 500 ms it asks
+PipeWire (`pw-dump`) which output streams are in the `running` state and
+classifies each by the node name:
+
+```
+bluez_input.*  → bluetooth
+librespot|raspotify → spotify
+shairport      → airplay
+mopidy         → mopidy
+```
+
+When a new source appears alongside an existing one, the orchestrator picks
+the newest as the "winner" and pauses the others:
+
+- Mopidy is paused via JSON-RPC.
+- AirPlay / Spotify / Bluetooth are paused via `playerctl` against the
+  matching MPRIS player.
+
+This is fire-and-forget. There is **no** auto-resume — once paused, a source
+stays paused until the user explicitly starts it again. That's a deliberate
+choice: trying to coordinate resume across four asynchronous players led to
+"AirPlay un-pauses three seconds later because the phone never knew it was
+paused" loops.
+
+---
+
+## Data flow: visualizer
+
+`boombox-audio` runs `parec` against the default PipeWire sink's `.monitor`
+source — that's whatever's audible regardless of which source produced it.
+Every ~46 ms it:
+
+1. Reads a 1024-sample stereo s16le chunk.
+2. Builds a 64-bin log-spaced spectrum with a perceptual sqrt curve and
+   peak-hold envelope.
+3. Computes L/R RMS for VU meters.
+4. Broadcasts to all connected WebSocket clients on `/audio/ws`.
+
+The SPA hook `useSpectrum()` (`ui/src/lib/spectrum.ts`) wires the messages
+into a singleton state object so any number of skin components can subscribe
+without opening more sockets.
+
+PipeWire restarts (rare, but possible during Wireplumber updates) are
+detected via a 5-second read timeout that triggers a re-detection of the
+default sink and a fresh `parec` invocation.
+
+---
+
+## File-system layout on the Pi
+
+```
+/opt/boombox/                  ← the cloned repo, owned by the desktop user
+├── services/                  ← Python service code (run by user systemd)
+├── ui/                        ← source for the SPA
+├── install/                   ← install.sh, update.sh, configs, units
+├── bin/                       ← boombox-update wrapper
+└── .venv/                     ← Python venv (--system-site-packages)
+
+/var/www/boombox/              ← built SPA (owned by www-data)
+/etc/nginx/sites-available/boombox
+/etc/mopidy/mopidy.conf
+/etc/asound.conf
+/etc/boombox/buttons.json
+/boot/firmware/usercfg.txt     ← DAC overlay
+
+~/.config/systemd/user/boombox-*.service
+~/.local/state/boombox/last.json   ← boombox-resume snapshot
+/usr/local/bin/boombox-update
+```
+
+---
+
+## Updates
+
+`boombox-update` runs `install/update.sh`, which:
+
+1. Refuses to update if the working tree is dirty (override with `--force`).
+2. `git fetch && git merge --ff-only origin/<branch>`.
+3. Computes the file diff between the old HEAD and the new HEAD.
+4. Reinstalls **only** what changed:
+   - `install/install.sh` changed → rerun the full installer.
+   - `install/config/requirements.txt` changed → `pip install -r`.
+   - Anything in `ui/` → `npm install && npm run build && rsync to /var/www/boombox/`.
+   - Anything in `install/config/` → reinstall nginx site / mopidy.conf / asound.conf, reload services.
+   - Anything in `install/systemd/` → reinstall units, `daemon-reload`.
+   - Anything in `services/` or systemd or requirements → restart the affected user units.
+
+Self-update is offline-safe in the sense that a failed step never leaves the
+SPA half-deployed: rsync is atomic-ish (uses `--delete` only after success),
+and units restart one at a time so a broken one doesn't take the kiosk with
+it. Failed `pip install` is the most likely break — fix the requirements,
+rerun.
+
+---
+
+## Design intentions worth knowing
+
+- **Mopidy is the "library" source.** Anything that needs a queue,
+  metadata, or seekable playback should flow through Mopidy. AirPlay /
+  Spotify Connect / Bluetooth are intentionally treated as opaque
+  inbound audio that we don't try to control beyond start/stop.
+
+- **The SPA never talks directly to the boombox-* services on their TCP
+  ports.** Every UI request goes through nginx — that means the same code
+  works on the Pi, in the dev server (`npm run dev` proxies `/mopidy`), and
+  inside the kiosk Chromium.
+
+- **All persistent state lives in one of two places:** `/etc/boombox/`
+  (config you might want to edit by hand) and `~/.local/state/boombox/`
+  (machine-managed snapshots). Don't add a third place.
+
+- **Skins must not assume which source is playing.** A skin gets a
+  `Track` and a `PlayState` and doesn't care whether the audio is coming
+  from a CD-rip on the SD card or an AirPlay session from a guest's phone.
+
+- **Audio mixer is software-side in Mopidy.** `mixer = software` in
+  `mopidy.conf` means volume changes happen before the DAC, so they're
+  uniform across sources and the touch UI's volume slider can drive
+  everything consistently.
+
+Open a PR if any of the above stops being true.
