@@ -17,8 +17,11 @@
 
 set -euo pipefail
 
-ACTION="${1:?usage: $0 {mount|unmount} <device>}"
-DEVICE="${2:?usage: $0 {mount|unmount} <device>}"
+# NB: the parameter-expansion error message is plain text — including the
+# canonical "{mount|unmount}" usage hint here would unbalance bash's brace
+# parser and chop the message into $1/$2 as literals. Don't put { } in :?.
+ACTION="${1:?usage: see top of script (mount or unmount, then a /dev/sdXY)}"
+DEVICE="${2:?usage: see top of script (mount or unmount, then a /dev/sdXY)}"
 
 # Where to look up the boombox desktop user. install.sh writes this.
 USER_FILE=/etc/boombox/desktop-user
