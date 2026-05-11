@@ -271,6 +271,32 @@ def add_library(token: str) -> None:
     if code not in (200, 204):
         raise RuntimeError(f"VirtualFolders/Paths failed: {code} {raw!r}")
 
+    # /Library/Refresh just runs a shallow library validator that never
+    # walks into the actual content tree on a fresh path. Force a full
+    # recursive refresh on the library item itself so the first scan
+    # actually picks up files instead of bottoming out after touching
+    # /var/lib/jellyfin/data/playlists.
+    code, raw = request("GET", "/Library/VirtualFolders", token=token)
+    library_id = None
+    if code == 200:
+        try:
+            for f in json.loads(raw) or []:
+                if f.get("Name") == LIBRARY_NAME:
+                    library_id = f.get("ItemId")
+                    break
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    if library_id:
+        request(
+            "POST", f"/Items/{library_id}/Refresh",
+            query={
+                "Recursive": "true",
+                "MetadataRefreshMode": "FullRefresh",
+                "ImageRefreshMode": "FullRefresh",
+            },
+            token=token,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Entry
