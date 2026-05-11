@@ -22,7 +22,7 @@ Type=simple
 # kiosk service does.
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=WAYLAND_DISPLAY=wayland-0
-ExecStart=/usr/local/bin/wvkbd-mobintl --hidden --non-exclusive -H 280 -L 280
+ExecStart=/usr/bin/wvkbd-mobintl --hidden -H 280 -L 280
 Restart=on-failure
 RestartSec=3
 
