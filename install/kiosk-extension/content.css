@@ -1,0 +1,35 @@
+/* Floating return pill. Only visible when we're NOT on the boombox SPA. */
+#__boombox_return_pill {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 2147483647;             /* on top of literally everything */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 10px 12px;
+  background: rgba(8, 10, 18, 0.82);
+  color: #f3f1ff;
+  border: 1px solid rgba(155, 242, 192, 0.45);
+  border-radius: 999px;
+  font: 600 14px/1 -apple-system, "Inter", system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+#__boombox_return_pill:hover,
+#__boombox_return_pill:active {
+  background: rgba(20, 26, 36, 0.92);
+  border-color: rgba(155, 242, 192, 0.85);
+}
+#__boombox_return_pill .arrow {
+  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-size: 16px;
+  color: #9bf2c0;
+}

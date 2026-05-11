@@ -34,7 +34,9 @@ BBX_UID="$(id -u "$BBX_USER")"
 BBX_GID="$(id -g "$BBX_USER")"
 BBX_HOME="$(getent passwd "$BBX_USER" | cut -d: -f6)"
 MUSIC_ROOT="$BBX_HOME/Music"
+VIDEO_ROOT="$BBX_HOME/Videos"
 USB_LINKS_DIR="$MUSIC_ROOT/.usb"
+VIDEO_USB_LINKS_DIR="$VIDEO_ROOT/.usb"
 
 log() { logger -t boombox-usb "$*"; echo "[boombox-usb] $*" >&2; }
 
@@ -58,15 +60,28 @@ get_id() {
 ID="$(get_id)"
 MOUNTPOINT="/media/boombox/$ID"
 LINK="$USB_LINKS_DIR/$ID"
+VIDEO_LINK="$VIDEO_USB_LINKS_DIR/$ID"
 
 trigger_scan() {
   # boombox-state has /library/scan on 127.0.0.1:6681; if it's down, fall
   # back to mopidyctl directly.
   if curl -fsS -X POST -m 2 http://127.0.0.1:6681/library/scan >/dev/null 2>&1; then
-    return
-  fi
-  if command -v mopidyctl >/dev/null 2>&1; then
+    :
+  elif command -v mopidyctl >/dev/null 2>&1; then
     mopidyctl local scan >/dev/null 2>&1 &
+  fi
+
+  # Nudge Jellyfin too. The default token-less endpoint is gated, so we
+  # use the configured api-key from /etc/boombox/jellyfin-api-key if
+  # present; otherwise we skip. Jellyfin's "real-time monitoring" picks
+  # up the new symlinks on its own within ~10s anyway.
+  local key_file=/etc/boombox/jellyfin-api-key
+  if [[ -r "$key_file" ]]; then
+    local key
+    key=$(cat "$key_file")
+    curl -fsS -m 3 -X POST \
+      -H "X-MediaBrowser-Token: $key" \
+      "http://127.0.0.1:8096/Library/Refresh" >/dev/null 2>&1 || true
   fi
 }
 
@@ -82,8 +97,8 @@ case "$ACTION" in
     fstype="$(blkid -o value -s TYPE "$DEVICE" 2>/dev/null || echo unknown)"
     log "mounting $DEVICE ($fstype) → $MOUNTPOINT"
 
-    mkdir -p "$MOUNTPOINT" "$USB_LINKS_DIR"
-    chown "$BBX_USER:$BBX_USER" "$USB_LINKS_DIR" 2>/dev/null || true
+    mkdir -p "$MOUNTPOINT" "$USB_LINKS_DIR" "$VIDEO_USB_LINKS_DIR"
+    chown "$BBX_USER:$BBX_USER" "$USB_LINKS_DIR" "$VIDEO_USB_LINKS_DIR" 2>/dev/null || true
 
     # Already mounted? (udev fires multiple events on some devices.)
     if mountpoint -q "$MOUNTPOINT"; then
@@ -110,10 +125,13 @@ case "$ACTION" in
       fi
     fi
 
-    # Symlink into the library so Mopidy's recursive scan picks it up. The
-    # library scanner follows symlinks by default.
+    # Symlink into each library root so Mopidy + Jellyfin recursive scans
+    # pick the drive up. Mopidy's local scanner follows symlinks by default;
+    # Jellyfin needs to be configured to allow symlinked content (done in
+    # install.sh).
     ln -snf "$MOUNTPOINT" "$LINK"
-    chown -h "$BBX_USER:$BBX_USER" "$LINK" 2>/dev/null || true
+    ln -snf "$MOUNTPOINT" "$VIDEO_LINK"
+    chown -h "$BBX_USER:$BBX_USER" "$LINK" "$VIDEO_LINK" 2>/dev/null || true
 
     trigger_scan
     log "mounted $ID"
@@ -121,7 +139,7 @@ case "$ACTION" in
 
   unmount)
     log "unmounting $DEVICE (id=$ID)"
-    rm -f "$LINK"
+    rm -f "$LINK" "$VIDEO_LINK"
     if mountpoint -q "$MOUNTPOINT"; then
       umount "$MOUNTPOINT" || umount -l "$MOUNTPOINT" || true
     fi

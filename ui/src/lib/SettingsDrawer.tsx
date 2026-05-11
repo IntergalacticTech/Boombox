@@ -271,6 +271,37 @@ export function SettingsDrawer({ onClose }: Props) {
           WebkitOverflowScrolling: "touch",
           padding: "8px 0",
         }}>
+          {/* Movies — swap the kiosk to Jellyfin */}
+          <div style={{
+            padding: "14px 16px",
+            borderBottom: "1px solid rgba(255,255,255,0.06)",
+          }}>
+            <div style={{display: "flex", alignItems: "center", gap: 14, minHeight: 48}}>
+              <div style={{flex: 1, minWidth: 0}}>
+                <div style={{fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em"}}>Movies</div>
+                <div style={{fontSize: 13, color: "rgba(255,255,255,0.65)", marginTop: 2}}>
+                  open Jellyfin on the touchscreen — a return pill appears top-left
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  // Best-effort pause Mopidy before launching the video UI so
+                  // a movie's audio doesn't fight the music. We don't wait on
+                  // the network — pause is idempotent and the navigation can
+                  // proceed.
+                  fetch("/mopidy/rpc", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "core.playback.pause" }),
+                  }).catch(() => { /* fine */ });
+                  // Navigate the same window so the kiosk swaps over.
+                  window.location.href = "http://localhost:8096/";
+                }}
+                style={primaryButton("#9bf2c0")}
+              >WATCH</button>
+            </div>
+          </div>
+
           {/* Remote mode */}
           <div style={{
             padding: "14px 16px",

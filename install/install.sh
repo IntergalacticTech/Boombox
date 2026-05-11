@@ -112,6 +112,35 @@ sudo install -m 0644 "$SCRIPT_DIR/config/asound.conf" /etc/asound.conf
 log "ensuring music dirs exist: $MUSIC_DIR (+ uploads/, .usb/)"
 mkdir -p "$MUSIC_DIR" "$MUSIC_DIR/uploads" "$MUSIC_DIR/.usb"
 
+VIDEO_DIR="${BOOMBOX_VIDEO_DIR:-/home/${BOOMBOX_USER}/Videos}"
+log "ensuring video dirs exist: $VIDEO_DIR (+ uploads/, .usb/)"
+mkdir -p "$VIDEO_DIR" "$VIDEO_DIR/uploads" "$VIDEO_DIR/.usb"
+
+# ---------------------------------------------------------------------------
+# 6.5. Jellyfin (video server)
+# ---------------------------------------------------------------------------
+# Apt repo + install via Jellyfin's official setup script. Idempotent: if
+# the package is already there we skip the network round-trip.
+if ! dpkg -l jellyfin >/dev/null 2>&1; then
+  log "installing Jellyfin from repo.jellyfin.org"
+  curl -fsSL https://repo.jellyfin.org/install-debuntu.sh | sudo bash
+else
+  log "Jellyfin already installed (skipping repo install)"
+fi
+
+# Jellyfin runs as the `jellyfin` system user. Add it to the desktop user's
+# primary group so it can read the Videos library + symlinked USB drives.
+if getent passwd jellyfin >/dev/null; then
+  if ! id -nG jellyfin | tr ' ' '\n' | grep -qx "$BOOMBOX_GROUP"; then
+    sudo usermod -aG "$BOOMBOX_GROUP" jellyfin
+  fi
+fi
+
+# Make ~/Videos group-readable + traverseable for jellyfin.
+chmod 0755 "$VIDEO_DIR" "$VIDEO_DIR/.usb" "$VIDEO_DIR/uploads"
+
+sudo systemctl enable --now jellyfin 2>/dev/null || warn "jellyfin failed to enable (will retry after reboot)"
+
 # Remote LAN credentials. The kiosk keeps using http://localhost/ with no
 # auth, but anything off-device goes through nginx on BOOMBOX_WEB_PORT and
 # requires HTTP Basic. Samba uses the same generated password for the music
@@ -316,4 +345,9 @@ Remote access:
   Web UI: http://<pi-ip>:$REMOTE_WEB_PORT/  user: $WEB_AUTH_USER
   SMB:    smb://<pi-ip>/boombox-music     user: $BOOMBOX_USER
   Password/PIN is stored on the Pi at: $WEB_AUTH_ENV
+
+Video (Jellyfin):
+  http://<pi-ip>:8096/        first-run wizard sets admin user + library
+  On first visit, point Jellyfin at:  $VIDEO_DIR
+  Native apps: install Jellyfin from your app store, point at <pi-ip>:8096
 EOF

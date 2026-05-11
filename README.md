@@ -105,6 +105,7 @@ system services.
 - **[SERVICES.md](./docs/SERVICES.md)** — per-service reference: what each daemon does and how to debug it
 - **[SKINS.md](./docs/SKINS.md)** — end-to-end guide to creating a new touchscreen skin
 - **[ACCESS.md](./docs/ACCESS.md)** — authenticated LAN web access, remote/upload page, SMB share, and USB auto-mount
+- **[VIDEO.md](./docs/VIDEO.md)** — Jellyfin server: touchscreen Watch button, native apps, USB videos
 - **[ONBOARDING.md](./docs/ONBOARDING.md)** — first-time setup for a new developer (SSH access, `.env`, first dev loop)
 - **[DEVELOPMENT.md](./docs/DEVELOPMENT.md)** — dev workflow on a laptop, the `pi` helper, common tasks
 
