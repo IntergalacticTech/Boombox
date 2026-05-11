@@ -162,10 +162,26 @@ def run_wizard(username: str, password: str) -> None:
     if code not in (200, 204):
         raise RuntimeError(f"Startup/Configuration failed: {code} {raw!r}")
 
-    code, raw = request("POST", "/Startup/User", body={
-        "Name": username,
-        "Password": password,
-    })
+    # /Startup/User modifies _userManager.Users.First(). On a freshly-wiped
+    # database Jellyfin seeds the default admin in InitializeAsync, which
+    # runs asynchronously after the HTTP listener comes up. If we POST too
+    # early Jellyfin throws "Sequence contains no elements". Retry with
+    # backoff until the seed lands.
+    code = 0
+    raw = b""
+    for attempt in range(12):
+        code, raw = request("POST", "/Startup/User", body={
+            "Name": username,
+            "Password": password,
+        })
+        if code in (200, 204):
+            break
+        if code == 500 and b"Sequence contains no elements" in raw:
+            log(f"default user not seeded yet (attempt {attempt + 1}); waiting")
+            time.sleep(2.0)
+            continue
+        # Any other failure: stop retrying so we don't loop on a real error.
+        break
     if code not in (200, 204):
         raise RuntimeError(f"Startup/User failed: {code} {raw!r}")
 
