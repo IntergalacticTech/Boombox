@@ -330,6 +330,11 @@ sudo loginctl enable-linger "$BOOMBOX_USER"
 # Labwc kiosk config: hide window title bars + don't autostart the
 # desktop panel / file-manager-as-desktop. These run as the user, not
 # system-wide, so install lands them in ~/.config/labwc/.
+log "installing Chromium managed policy (suppresses save-password, autofill, etc.)"
+sudo mkdir -p /etc/chromium/policies/managed
+sudo install -m 0644 "$SCRIPT_DIR/config/chromium-policy.json" \
+  /etc/chromium/policies/managed/boombox.json
+
 log "installing labwc kiosk config"
 mkdir -p "$HOME/.config/labwc"
 install -m 0644 "$SCRIPT_DIR/config/labwc-rc.xml" "$HOME/.config/labwc/rc.xml"
