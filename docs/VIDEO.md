@@ -55,49 +55,54 @@ the music — that's a deliberate "you decide what plays" stance.
 
 ---
 
-## First-run setup (one-time, per box)
+## First-run setup — done by `install.sh`
 
-> **Note about text entry:** the wizard expects you to type a server name,
-> admin username, and admin password. The boombox's on-screen keyboard
-> (wvkbd) is wired up but is currently visually occluded by Chromium's
-> kiosk window — see [SERVICES.md](./SERVICES.md#boombox-osk--on-screen-keyboard-partial-see-limitation).
-> Until that lands, the cleanest path is to open
-> `http://<pi-ip>:8096/` on a **phone or laptop** and complete the
-> wizard there. The Pi-side boombox sees the result either way.
+There is no manual Jellyfin wizard. `install.sh` runs
+[`services/boombox-jellyfin-setup.py`](../services/boombox-jellyfin-setup.py)
+which drives Jellyfin's `/Startup/*` API:
 
-After `install.sh` finishes and you reboot:
+1. Sets locale (en-US, US, en).
+2. Creates the admin user using the same credentials as the LAN web
+   gate (`BOOMBOX_WEB_USER` / `BOOMBOX_WEB_PASSWORD` from
+   `/etc/boombox/web-auth.env` — one credential for everything LAN
+   facing).
+3. Disables remote access + UPnP (LAN only).
+4. Marks the wizard complete.
+5. Authenticates, stores the API token at `/etc/boombox/jellyfin.env`
+   and `/etc/boombox/jellyfin-api-key` so the USB-mount script and
+   future code can drive Jellyfin without re-logging-in.
+6. Creates a mixed-collection library at `~/Videos` with real-time
+   monitoring on, so the `.usb/<drive>` symlinks added by
+   `boombox-usb-mount.sh` show up automatically.
 
-1. On the touchscreen, open Settings → tap **WATCH**. (Or visit
-   `http://<pi-ip>:8096/` in any browser — phone strongly recommended for
-   the wizard.)
-2. Jellyfin's first-run wizard runs:
-   - Language: English.
-   - **Admin user:** pick a username/password. Write it down.
-   - **Add a media library:**
-     - Content type: **Movies** (or **Shows** — you can add both later)
-     - Display name: e.g. "Films"
-     - Folders: add `/home/<your-user>/Videos`
-     - Leave the rest default (subtitles, real-time monitoring on)
-   - Metadata language: as you like.
-   - Skip remote access (we're LAN-only).
-3. After the wizard you're at the login screen — log in.
+After install + reboot, tap **WATCH** in the Settings drawer and you're
+at the login screen. Username is `boombox`; password is the 6-digit
+number in `/etc/boombox/web-auth.env`. (Touchscreen text entry works
+because wvkbd is built from source with `--layer overlay` — see
+[SERVICES.md](./SERVICES.md#boombox-osk--on-screen-keyboard).)
 
-Re-running `install.sh` later doesn't re-trigger the wizard; your config
-stays put.
+Re-running `install.sh` is idempotent: if Jellyfin is already
+boombox-managed it skips the setup; if Jellyfin exists but isn't ours
+(someone ran the manual wizard), `install.sh` wipes the database and
+re-claims it.
 
-### Tip: enable symlinked content
+### Resetting Jellyfin manually
 
-By default Jellyfin scans the directory tree but may need a nudge to
-follow symlinks. Under **Dashboard → Libraries → (your library) → Manage
-library**, ensure:
+```bash
+sudo systemctl stop jellyfin
+sudo rm -f /etc/boombox/jellyfin.env /etc/boombox/jellyfin-api-key
+sudo rm -f /var/lib/jellyfin/data/jellyfin.db*
+sudo rm -f /etc/jellyfin/system.xml
+sudo systemctl start jellyfin
+/opt/boombox/install/install.sh    # re-runs the setup
+```
 
-- "Enable real-time monitoring" is **on** so new files (and new USB
-  drives) appear without manual refresh.
-- The folder path is the plain `~/Videos` root; the `.usb` subfolder is
-  scanned automatically.
+### Adding more content paths
 
-If a freshly-plugged USB drive doesn't show up within ~30 seconds, hit
-**Dashboard → Scheduled Tasks → Scan Media Library → Play**.
+The auto-created library is a single mixed-content folder at `~/Videos`.
+To split into Movies / TV / etc. or add an extra root, use Dashboard →
+Libraries from the Jellyfin admin UI. The boombox doesn't dictate beyond
+the first library.
 
 ---
 

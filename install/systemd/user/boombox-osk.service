@@ -9,20 +9,18 @@ Type=simple
 # height. SIGUSR1 hides it, SIGUSR2 shows it. boombox-state's /api/osk
 # endpoints + the kiosk extension's focus listeners drive the toggle.
 #
-# Pi OS labwc doesn't integrate systemd-user with the desktop session env,
-# so we have to point wvkbd at the Wayland socket explicitly — matches
-# what the kiosk service does.
+# `--layer overlay` is the critical bit: Trixie's apt wvkbd is 0.15 and
+# defaults to the layer-shell "top" layer, which sits below Chromium's
+# --kiosk fullscreen surface. install.sh builds a current wvkbd from
+# source into /usr/local/bin specifically so we can pass `--layer overlay`
+# and have the keyboard render above the kiosk.
 #
-# KNOWN LIMITATION (Trixie wvkbd 0.15): the keyboard renders on the
-# layer-shell "top" layer, but Chromium's --kiosk surface sits above it.
-# Result: wvkbd does come up and accepts taps, but it's covered by the
-# kiosk window. Workaround for text entry today is the LAN web remote
-# from a phone. Proper fix tracked in docs/VIDEO.md and docs/SERVICES.md:
-# build wvkbd ≥0.17 from source for `--layer overlay`, or drop --kiosk
-# in favor of --start-maximized so wvkbd's top layer wins.
+# Pi OS labwc doesn't integrate systemd-user with the desktop session env,
+# so we point wvkbd at the Wayland socket explicitly — matches what the
+# kiosk service does.
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=WAYLAND_DISPLAY=wayland-0
-ExecStart=/usr/bin/wvkbd-mobintl --hidden -H 280 -L 280
+ExecStart=/usr/local/bin/wvkbd-mobintl --hidden --layer overlay -H 280 -L 280
 Restart=on-failure
 RestartSec=3
 

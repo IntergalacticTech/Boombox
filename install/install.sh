@@ -50,6 +50,7 @@ sudo apt install -y \
   mopidy mopidy-mpd mopidy-local mpc \
   nginx apache2-utils samba \
   chromium unclutter grim wvkbd \
+  libwayland-dev libxkbcommon-dev wayland-protocols pkg-config build-essential \
   playerctl \
   pipewire pipewire-pulse wireplumber pulseaudio-utils \
   shairport-sync \
@@ -180,6 +181,51 @@ rm -f "$TMP_AUTH"
 printf '%s\n' "$WEB_AUTH_PASSWORD" | sudo htpasswd -iB -c /etc/nginx/boombox.htpasswd "$WEB_AUTH_USER" >/dev/null
 sudo chown root:www-data /etc/nginx/boombox.htpasswd
 sudo chmod 0640 /etc/nginx/boombox.htpasswd
+
+# ---------------------------------------------------------------------------
+# 6.6. wvkbd ≥ 0.17 from source (Trixie ships 0.15, no --layer flag)
+# ---------------------------------------------------------------------------
+# Trixie's wvkbd 0.15 renders on the layer-shell `top` layer, which sits
+# below Chromium's --kiosk surface, so the keyboard is invisible. The
+# `--layer overlay` flag landed in upstream after 0.15 — build a fresh
+# binary so the OSK actually appears over the kiosk.
+WVKBD_REPO=https://github.com/jjsullivan5196/wvkbd.git
+WVKBD_REF="${BOOMBOX_WVKBD_REF:-master}"
+WVKBD_BIN=/usr/local/bin/wvkbd-mobintl
+if [[ -x "$WVKBD_BIN" ]] && "$WVKBD_BIN" --help 2>&1 | grep -q -- '--layer'; then
+  log "wvkbd at $WVKBD_BIN already supports --layer (skipping rebuild)"
+else
+  log "building wvkbd from source (Trixie's 0.15 lacks --layer)"
+  WVKBD_BUILD="$(mktemp -d)"
+  git clone --depth 1 --branch "$WVKBD_REF" "$WVKBD_REPO" "$WVKBD_BUILD"
+  make -C "$WVKBD_BUILD" -j"$(nproc)"
+  sudo make -C "$WVKBD_BUILD" PREFIX=/usr/local install
+  rm -rf "$WVKBD_BUILD"
+fi
+
+# ---------------------------------------------------------------------------
+# 6.7. Jellyfin auto-setup (run the wizard via the Startup API)
+# ---------------------------------------------------------------------------
+# If Jellyfin was manually set up before we took over (no boombox-managed
+# state file present), wipe its DB and the StartupWizardCompleted flag so
+# our automation can take ownership of admin credentials + library config.
+JELLYFIN_ENV=/etc/boombox/jellyfin.env
+if dpkg -l jellyfin >/dev/null 2>&1 && ! sudo test -f "$JELLYFIN_ENV"; then
+  if sudo grep -q 'IsStartupWizardCompleted>true' /etc/jellyfin/system.xml 2>/dev/null; then
+    log "Jellyfin is configured but not by us — wiping for fresh setup"
+    sudo systemctl stop jellyfin
+    sudo rm -f /var/lib/jellyfin/data/jellyfin.db \
+               /var/lib/jellyfin/data/jellyfin.db-shm \
+               /var/lib/jellyfin/data/jellyfin.db-wal \
+               /etc/jellyfin/system.xml
+    sudo systemctl start jellyfin
+  fi
+fi
+
+log "running Jellyfin first-run automation"
+sudo BOOMBOX_VIDEO_DIR="$VIDEO_DIR" python3 \
+  "$REPO_DIR/services/boombox-jellyfin-setup.py" \
+  || warn "Jellyfin auto-setup didn't finish cleanly (check /etc/boombox/jellyfin.env)"
 
 log "installing /etc/mopidy/mopidy.conf"
 sudo mkdir -p /etc/mopidy
