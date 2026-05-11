@@ -100,20 +100,29 @@ async def maybe_restore(sess: aiohttp.ClientSession) -> None:
     if state == "playing":
         log.info("Mopidy already playing — not restoring")
         return
+
+    # If the snapshot says the user paused us before shutdown, we restore the
+    # tracklist + position but leave Mopidy paused. Otherwise the boombox
+    # plays unexpectedly at boot, which is jarring on an appliance.
+    was_paused = snap.get("state") == "paused"
+
     cur = await rpc(sess, "core.playback.get_current_track")
     if cur and cur.get("uri") == snap["track_uri"] and state in ("paused", "stopped"):
-        # Looks like the same track; just seek + play.
-        log.info("resuming current track at %d ms", snap["position_ms"])
+        # Looks like the same track; seek + play, then pause if appropriate.
+        log.info("resuming current track at %d ms (was_paused=%s)",
+                 snap["position_ms"], was_paused)
         await rpc(sess, "core.playback.seek", {"time_position": snap["position_ms"]})
         await rpc(sess, "core.playback.play")
+        if was_paused:
+            await rpc(sess, "core.playback.pause")
         return
 
     # Otherwise rebuild tracklist + jump to snapshot track.
     uris = snap.get("tracklist") or []
     if not uris:
         uris = [snap["track_uri"]]
-    log.info("restoring tracklist of %d, jumping to %s @ %d ms",
-             len(uris), snap["track_uri"], snap["position_ms"])
+    log.info("restoring tracklist of %d, jumping to %s @ %d ms (was_paused=%s)",
+             len(uris), snap["track_uri"], snap["position_ms"], was_paused)
     await rpc(sess, "core.tracklist.clear")
     await rpc(sess, "core.tracklist.add", {"uris": uris})
     # Find the tlid for the snapshot track and play it.
@@ -130,6 +139,8 @@ async def maybe_restore(sess: aiohttp.ClientSession) -> None:
     # Seek shortly after play has actually started.
     await asyncio.sleep(0.6)
     await rpc(sess, "core.playback.seek", {"time_position": snap["position_ms"]})
+    if was_paused:
+        await rpc(sess, "core.playback.pause")
 
 
 async def main() -> None:

@@ -16,6 +16,9 @@ ExecStart=/usr/bin/chromium \
   --noerrdialogs \
   --disable-session-crashed-bubble \
   --overscroll-history-navigation=0 \
+  --password-store=basic \
+  --no-first-run \
+  --no-default-browser-check \
   --user-data-dir=%h/.config/chromium
 Restart=on-failure
 RestartSec=3

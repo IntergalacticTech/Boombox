@@ -11,6 +11,11 @@ import { useEffect, useRef, useState } from "react";
 
 const POLL_INTERVAL_MS = 4000;
 const RIGHT_GUTTER_WIDTH_PX = 64;
+// Top and bottom of the right edge belong to skin chrome (settings gear,
+// queue badge, source pill, etc.). Reserving these bands stops the volume
+// gesture from swallowing taps on the corner buttons.
+const CHROME_CLEAR_TOP_PX = 96;
+const CHROME_CLEAR_BOTTOM_PX = 96;
 const PILL_FADE_MS = 1100;
 
 type Vol = { value: number; muted: boolean };
@@ -63,10 +68,14 @@ export function VolumeGesture() {
   };
 
   const yToVolume = (clientY: number) => {
-    // Top of screen = max volume, bottom = 0. Range capped at 1.0 even though
-    // wpctl can boost to 1.5; safer default for the touchscreen.
-    const h = window.innerHeight;
-    const t = 1 - clientY / h;
+    // Top of the gutter = max volume, bottom = 0. Range capped at 1.0 even
+    // though wpctl can boost to 1.5; safer default for the touchscreen.
+    // We map within the visible gutter bounds (not the full viewport) so a
+    // single drag spans the whole 0..1 range despite the chrome clear-zones.
+    const top = CHROME_CLEAR_TOP_PX;
+    const bot = window.innerHeight - CHROME_CLEAR_BOTTOM_PX;
+    const span = Math.max(1, bot - top);
+    const t = 1 - (clientY - top) / span;
     return Math.max(0, Math.min(1, t));
   };
 
@@ -102,7 +111,8 @@ export function VolumeGesture() {
 
   return (
     <>
-      {/* Invisible touch region: the right 64px of the viewport */}
+      {/* Invisible touch region: the right 64px of the viewport, minus
+          ~100px reserved at top and bottom for skin chrome buttons. */}
       <div
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -110,10 +120,10 @@ export function VolumeGesture() {
         onPointerCancel={endDrag}
         style={{
           position: "fixed",
-          top: 0,
+          top: CHROME_CLEAR_TOP_PX,
           right: 0,
+          bottom: CHROME_CLEAR_BOTTOM_PX,
           width: RIGHT_GUTTER_WIDTH_PX,
-          height: "100%",
           zIndex: 700,
           touchAction: "none",
           background: "transparent",

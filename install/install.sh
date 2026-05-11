@@ -154,6 +154,18 @@ log "installing user systemd units"
 mkdir -p "$HOME/.config/systemd/user"
 install -m 0644 "$SCRIPT_DIR/systemd/user/"*.service "$HOME/.config/systemd/user/"
 
+# Sweep any legacy chromium-kiosk autostart entries — they predate the
+# boombox-kiosk.service and otherwise launch a second, unmanaged kiosk
+# Chromium at session start, fighting with our systemd-managed one.
+for f in "$HOME/.config/autostart/chromium-kiosk.desktop" \
+         "$HOME/.config/autostart/chromium-kiosk.desktop.bak" \
+         "$HOME/.config/autostart/unclutter.desktop"; do
+  if [[ -e "$f" ]]; then
+    log "removing legacy autostart: $f"
+    rm -f "$f"
+  fi
+done
+
 systemctl --user daemon-reload
 
 USER_UNITS=(
