@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<!--
+  ~/.config/labwc/rc.xml — installed by install.sh.
+
+  Touch mapping (kept from Pi OS default) so taps land on the right output.
+  windowRule suppresses server-side decorations on Chromium so the kiosk
+  shows no title bar; wvkbd's overlay layer can render cleanly without a
+  Chromium-app titlebar eating screen space.
+-->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <touch deviceName="10-0038 generic ft5x06 (79)" mapToOutput="DSI-1" mouseEmulation="yes"/>
+  <windowRules>
+    <windowRule identifier="*">
+      <serverDecoration>no</serverDecoration>
+      <skipTaskbar>yes</skipTaskbar>
+    </windowRule>
+  </windowRules>
+</openbox_config>

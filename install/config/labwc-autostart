@@ -1,0 +1,16 @@
+# ~/.config/labwc/autostart — installed by install.sh.
+#
+# This OVERRIDES /etc/xdg/labwc/autostart for this user, so the desktop
+# panel, file-manager-as-desktop, and lxsession's xdg autostart no longer
+# launch. The boombox is a kiosk; it needs:
+#   - the cursor to be parked off-screen (touchscreen-only)
+#   - kanshi for output configuration (optional but harmless)
+#
+# Everything else — wf-panel-pi, pcmanfm-pi — is intentionally absent.
+# The boombox-kiosk.service brings up Chromium once labwc is up.
+
+# Warp the cursor off-screen at session start.
+( sleep 2; wlrctl pointer move 9999 9999 ) &
+
+# Keep the display config sane (HDMI hotplug, rotations).
+/usr/bin/kanshi &
