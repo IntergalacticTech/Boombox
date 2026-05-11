@@ -11,6 +11,8 @@ ExecStart=/usr/bin/chromium \
   --kiosk http://localhost/ \
   --ozone-platform=wayland \
   --enable-features=UseOzonePlatform \
+  --enable-wayland-ime \
+  --wayland-text-input-version=3 \
   --remote-debugging-port=9222 \
   --remote-allow-origins=* \
   --noerrdialogs \
