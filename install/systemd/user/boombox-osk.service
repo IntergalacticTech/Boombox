@@ -9,18 +9,20 @@ Type=simple
 # height. SIGUSR1 hides it, SIGUSR2 shows it. boombox-state's /api/osk
 # endpoints + the kiosk extension's focus listeners drive the toggle.
 #
-# `--layer overlay` is the critical bit: Trixie's apt wvkbd is 0.15 and
-# defaults to the layer-shell "top" layer, which sits below Chromium's
-# --kiosk fullscreen surface. install.sh builds a current wvkbd from
-# source into /usr/local/bin specifically so we can pass `--layer overlay`
-# and have the keyboard render above the kiosk.
+# wvkbd's `-l` / `--layer` flag is for KEYBOARD LAYOUTS (qwerty, etc.) — not
+# Wayland layer-shell. Stock wvkbd 0.20 already pins its surface to the
+# overlay layer, so it floats above Chromium's --kiosk fullscreen surface.
+# Trixie's apt-installed 0.15 was too old to expose `--non-exclusive`;
+# install.sh builds 0.20 to /usr/local/bin/wvkbd-mobintl so we get the
+# non-exclusive flag (avoids the keyboard reserving an exclusive zone
+# that fights the kiosk's full-screen claim).
 #
 # Pi OS labwc doesn't integrate systemd-user with the desktop session env,
 # so we point wvkbd at the Wayland socket explicitly — matches what the
 # kiosk service does.
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=WAYLAND_DISPLAY=wayland-0
-ExecStart=/usr/local/bin/wvkbd-mobintl --hidden --layer overlay -H 280 -L 280
+ExecStart=/usr/local/bin/wvkbd-mobintl --hidden --non-exclusive -H 280 -L 280
 Restart=on-failure
 RestartSec=3
 
