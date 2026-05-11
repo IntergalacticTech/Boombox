@@ -33,18 +33,26 @@ log = logging.getLogger("boombox-uploader")
 PORT = int(os.environ.get("BOOMBOX_UPLOADER_PORT", "6683"))
 HOME = Path(os.environ["HOME"])
 MUSIC_ROOT = Path(os.environ.get("BOOMBOX_MUSIC_DIR", HOME / "Music"))
-UPLOAD_DIR = MUSIC_ROOT / "uploads"
+VIDEO_ROOT = Path(os.environ.get("BOOMBOX_VIDEO_DIR", HOME / "Videos"))
+MUSIC_UPLOAD_DIR = MUSIC_ROOT / "uploads"
+VIDEO_UPLOAD_DIR = VIDEO_ROOT / "uploads"
 RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
 PIN_FILE = RUNTIME_DIR / "boombox-uploader.pin"
 SCAN_TRIGGER_URL = "http://127.0.0.1:6681/library/scan"
+JELLYFIN_KEY_FILE = Path(os.environ.get("BOOMBOX_JELLYFIN_KEY", "/etc/boombox/jellyfin-api-key"))
 
-# Audio-ish file types we accept. Not exhaustive — the goal is to keep
-# accidental .exe drops from filling the disk.
-ALLOWED_EXTS = {
+# File types we accept. Audio lands in ~/Music/uploads (Mopidy scans).
+# Video lands in ~/Videos/uploads (Jellyfin scans). Anything else: 400.
+AUDIO_EXTS = {
     ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
     ".wav", ".aiff", ".alac", ".wma",
 }
-MAX_FILE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB cap per file
+VIDEO_EXTS = {
+    ".mp4", ".m4v", ".mkv", ".mov", ".avi", ".webm", ".wmv",
+    ".mpg", ".mpeg", ".ts", ".3gp",
+}
+ALLOWED_EXTS = AUDIO_EXTS | VIDEO_EXTS
+MAX_FILE_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB cap per file (movies)
 COOKIE_NAME = "bbx_pin"
 
 
@@ -131,7 +139,7 @@ def _count_audio_recursive(d: Path, limit: int = 5000) -> int:
     try:
         for p in d.rglob("*"):
             try:
-                if p.is_file() and p.suffix.lower() in ALLOWED_EXTS:
+                if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
                     n += 1
                     if n >= limit:
                         return n
@@ -170,7 +178,7 @@ def browse_dir(rel_path: str) -> dict:
                     # so album-folder drives don't show "0 tracks".
                     n_audio = _count_audio_recursive(entry)
                     dirs.append({"name": name, "kind": "dir", "tracks": n_audio})
-                elif entry.is_file() and entry.suffix.lower() in ALLOWED_EXTS:
+                elif entry.is_file() and entry.suffix.lower() in AUDIO_EXTS:
                     st = entry.stat()
                     files.append({
                         "name": name,
@@ -514,8 +522,8 @@ INDEX_HTML_TEMPLATE = """\
 <div id=upload-card class=card hidden>
   <label>Upload</label>
   <div id=drop class=drop>
-    <div>Drop audio files here, or <button type=button id=pick>choose files</button></div>
-    <input id=picker type=file accept="audio/*,.flac,.opus,.alac" multiple hidden>
+    <div>Drop audio or video files here, or <button type=button id=pick>choose files</button></div>
+    <input id=picker type=file accept="audio/*,video/*,.flac,.opus,.alac,.mkv,.m4v" multiple hidden>
   </div>
   <div id=upload-list></div>
   <div class=ok  id=upload-ok></div>
@@ -1040,20 +1048,26 @@ async def upload_handler(request: web.Request) -> web.Response:
     if not request_authed(request):
         return web.json_response({"error": "pin required"}, status=401)
 
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    MUSIC_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    VIDEO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    saved: list[str] = []
+    saved_audio: list[str] = []
+    saved_video: list[str] = []
     reader = await request.multipart()
     async for part in reader:
         if part.name != "file" or not part.filename:
             continue
         name = safe_filename(part.filename)
         ext = Path(name).suffix.lower()
-        if ext not in ALLOWED_EXTS:
+        if ext in AUDIO_EXTS:
+            dest_dir, dest_root, bucket = MUSIC_UPLOAD_DIR, MUSIC_ROOT, saved_audio
+        elif ext in VIDEO_EXTS:
+            dest_dir, dest_root, bucket = VIDEO_UPLOAD_DIR, VIDEO_ROOT, saved_video
+        else:
             return web.json_response({"error": f"unsupported type: {ext}"}, status=400)
 
-        target = unique_path(UPLOAD_DIR / name)
-        if not under_root(target, MUSIC_ROOT):
+        target = unique_path(dest_dir / name)
+        if not under_root(target, dest_root):
             return web.json_response({"error": "bad path"}, status=400)
 
         size = 0
@@ -1069,13 +1083,16 @@ async def upload_handler(request: web.Request) -> web.Response:
                     return web.json_response({"error": "file too large"}, status=413)
                 f.write(chunk)
         log.info("uploaded %s (%d bytes)", target, size)
-        saved.append(str(target.relative_to(MUSIC_ROOT)))
+        bucket.append(str(target.relative_to(dest_root)))
 
-    # Best-effort: ask boombox-state to kick a Mopidy library scan. We don't
-    # block the response on it — the user gets their 200 and the library
-    # refresh happens in the background.
-    if saved:
+    saved = saved_audio + saved_video
+    # Kick whichever library scans are relevant. Both are best-effort —
+    # the user gets their 200 either way and the refresh runs in the
+    # background.
+    if saved_audio:
         asyncio.create_task(_trigger_scan())
+    if saved_video:
+        asyncio.create_task(_trigger_jellyfin_scan())
 
     if not saved:
         # Empty upload (the UI uses this as a PIN-probe). Still return 200 so
@@ -1094,6 +1111,31 @@ async def _trigger_scan() -> None:
             await s.post(SCAN_TRIGGER_URL, timeout=aiohttp.ClientTimeout(total=2))
     except Exception as e:
         log.debug("scan trigger failed (boombox-state down?): %s", e)
+
+
+async def _trigger_jellyfin_scan() -> None:
+    """Kick Jellyfin's library refresh after a video upload.
+
+    The token lives in /etc/boombox/jellyfin-api-key (mode 0640, group
+    boombox so the user-side service can read it). If Jellyfin isn't
+    boombox-managed yet the file is absent and we just no-op.
+    """
+    try:
+        token = JELLYFIN_KEY_FILE.read_text().strip()
+    except (FileNotFoundError, OSError):
+        return
+    if not token:
+        return
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as s:
+            await s.post(
+                "http://127.0.0.1:8096/Library/Refresh",
+                headers={"X-MediaBrowser-Token": token},
+                timeout=aiohttp.ClientTimeout(total=3),
+            )
+    except Exception as e:
+        log.debug("jellyfin scan trigger failed: %s", e)
 
 
 async def browse_handler(request: web.Request) -> web.Response:
@@ -1235,7 +1277,8 @@ async def main() -> None:
     write_pin(PIN)
     log.info("PIN: %s (written to %s)", PIN, PIN_FILE)
 
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    MUSIC_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    VIDEO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
     app = make_app()
     runner = web.AppRunner(app)
