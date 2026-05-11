@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import type { ActiveSource } from "./activeSource";
 import { controlExternal } from "./activeSource";
 
-type SourceId = "mopidy" | "airplay" | "spotify" | "bluetooth" | "aux";
+type SourceId = "mopidy" | "movies" | "airplay" | "spotify" | "bluetooth" | "aux";
 
 type SourceCard = {
   id: SourceId;
@@ -33,6 +33,14 @@ const CARDS: SourceCard[] = [
     blurb: "Local music, playlists, internet radio",
     accent: "#5be7ff",
     glyph: "♪",
+  },
+  {
+    id: "movies",
+    name: "Movies",
+    tag: "JELLYFIN",
+    blurb: "Open Jellyfin on the touchscreen. A return pill appears top-left so you can come back here. Music pauses while video plays.",
+    accent: "#ff7a35",
+    glyph: "▶",
   },
   {
     id: "airplay",
@@ -82,7 +90,7 @@ function activeIdFor(extSource: string | null, extStatus: string, mopidyPlaying:
   return mopidyPlaying ? "mopidy" : null;
 }
 
-type ActionKind = "browse" | "info" | "pair";
+type ActionKind = "browse" | "info" | "pair" | "watch";
 
 type Props = {
   ext: ActiveSource;
@@ -120,6 +128,18 @@ export function SourceDrawer({ ext, mopidyPlaying, onClose, onOpenLibrary }: Pro
 
   const triggerCard = (id: SourceId) => {
     if (id === "mopidy") { onOpenLibrary(); return; }
+    if (id === "movies") {
+      // Best-effort pause Mopidy so a movie's audio doesn't fight music,
+      // then swap the kiosk to Jellyfin. The kiosk extension's return
+      // pill brings the user back.
+      fetch("/mopidy/rpc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "core.playback.pause" }),
+      }).catch(() => { /* fine */ });
+      window.location.href = "http://localhost:8096/";
+      return;
+    }
     if (id === "bluetooth") {
       if (expanded === id) { setExpanded(null); return; }
       setExpanded(id);
@@ -311,18 +331,19 @@ export function SourceDrawer({ ext, mopidyPlaying, onClose, onOpenLibrary }: Pro
 
 function primaryActionFor(id: SourceId): ActionKind {
   if (id === "mopidy") return "browse";
+  if (id === "movies") return "watch";
   if (id === "bluetooth") return "pair";
   return "info";
 }
 
 function actionBgFor(a: ActionKind, accent: string): string {
-  if (a === "browse") return accent;
-  if (a === "pair") return accent;
+  if (a === "browse" || a === "pair" || a === "watch") return accent;
   return "transparent";
 }
 
 function labelForAction(a: ActionKind, expanded: boolean): string {
   if (a === "browse") return "▶ BROWSE";
-  if (a === "pair") return expanded ? "DISCOVERABLE" : "PAIR DEVICE";
+  if (a === "watch")  return "▶ WATCH";
+  if (a === "pair")   return expanded ? "DISCOVERABLE" : "PAIR DEVICE";
   return expanded ? "HIDE" : "HOW TO";
 }
