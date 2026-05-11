@@ -28,12 +28,26 @@ configured.
 
 ### `nginx`
 
-Reverse proxy and static-file server. The only public-facing thing.
+Reverse proxy and static-file server. The kiosk uses unauthenticated
+`http://localhost/` on loopback. LAN clients use the uncommon web port
+configured in `/etc/boombox/web-auth.env` (default `8090`) and must pass
+HTTP Basic auth. The generated htpasswd file lives at
+`/etc/nginx/boombox.htpasswd`.
 
 - **Config:** `/etc/nginx/sites-available/boombox` (a copy of
   `install/config/nginx.conf`)
 - **Logs:** `sudo tail -F /var/log/nginx/{access,error}.log`
 - **Reload:** `sudo nginx -t && sudo systemctl reload nginx`
+
+### `smbd`
+
+Samba publishes the music library as a password-protected SMB share:
+`smb://<pi-ip>/boombox-music`. It uses the desktop user as the Samba user and
+the same generated password/PIN as the authenticated LAN web UI.
+
+- **Config:** `/etc/samba/smb.conf` (a copy of `install/config/smb.conf`)
+- **Credentials:** `/etc/boombox/web-auth.env`
+- **Restart:** `sudo systemctl restart smbd`
 
 ### `shairport-sync`, `raspotify` (optional), `bluetooth`
 
@@ -163,6 +177,8 @@ Chromium and returns 404 now.) Closes duplicate tabs.
 Toggled from the touchscreen Settings drawer. When on, hosts a PIN-gated
 remote-control, playlist, upload, and download page at `/upload/` (proxied to
 `127.0.0.1:6683`). PIN is regenerated on every start and cleared on stop.
+The LAN nginx port requires the static web password first; the uploader PIN is
+still a short-lived session gate for the remote/upload page itself.
 
 - **Code:** [`services/boombox-uploader.py`](../services/boombox-uploader.py)
 - **Unit:** `install/systemd/user/boombox-uploader.service` —

@@ -57,12 +57,14 @@ npm run dev          # http://localhost:5173
 Point the Vite proxy at your Pi's nginx server:
 
 ```bash
-BOOMBOX_DEV_TARGET=http://10.0.5.178 npm run dev
+BOOMBOX_DEV_TARGET=http://10.0.5.178:8090 BOOMBOX_WEB_USER=boombox BOOMBOX_WEB_PASSWORD=123456 npm run dev
 ```
 
-The dev server proxies `/mopidy`, `/api`, and `/audio` through that target,
+The dev server proxies `/mopidy`, `/api`, and `/audio` through that target and
+injects the Basic auth header from `BOOMBOX_WEB_USER` / `BOOMBOX_WEB_PASSWORD`,
 so Mopidy RPC, boombox-state endpoints, and the visualizer WebSocket all work
-from the laptop browser.
+from the laptop browser. Read the real password with
+`./pi ssh "sudo cat /etc/boombox/web-auth.env"`.
 
 When you're happy, push to the Pi:
 

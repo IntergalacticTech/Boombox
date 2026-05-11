@@ -92,7 +92,9 @@ cp .env.example .env
 Edit `.env` — at minimum set:
 
 - `BOOMBOX_HOST` — your SSH alias from above (`boombox`)
-- `BOOMBOX_DEV_TARGET` — `http://<pi-ip>` (no port — goes through the Pi's nginx)
+- `BOOMBOX_DEV_TARGET` — `http://<pi-ip>:8090` (authenticated LAN nginx)
+- `BOOMBOX_WEB_USER` / `BOOMBOX_WEB_PASSWORD` — generated on the Pi by
+  `install.sh`; read with `./pi ssh "sudo cat /etc/boombox/web-auth.env"`
 
 `.env` is gitignored. The `./pi` helper and `ui/vite.config.ts` both
 auto-load it; you don't have to `export` anything.
@@ -125,8 +127,8 @@ npm run dev          # http://localhost:5173 with live Pi state
 ```
 
 The Vite proxy forwards `/mopidy`, `/api`, and `/audio` straight to the
-Pi's nginx (target from `BOOMBOX_DEV_TARGET` in `.env`), so the page sees
-the same routes the kiosk does.
+Pi's nginx (target from `BOOMBOX_DEV_TARGET` in `.env`, with Basic auth
+injected by Vite), so the page sees the same routes the kiosk does.
 
 Ship it:
 
@@ -189,7 +191,7 @@ Files land in `./screenshots/` (gitignored, attach them to PRs as needed).
 |---|---|
 | `./pi ssh` times out | You're not on the same Wi-Fi as the Pi. |
 | `./pi ssh` says "Permission denied (publickey)" | Your key isn't in `/home/jwc/.ssh/authorized_keys`. Ask the maintainer. |
-| `npm run dev` loads the page but Mopidy is offline | `.env` has the wrong `BOOMBOX_DEV_TARGET`. Try `curl $BOOMBOX_DEV_TARGET/mopidy/rpc` and check you can reach nginx. |
+| `npm run dev` loads the page but Mopidy is offline | `.env` has the wrong `BOOMBOX_DEV_TARGET` or web password. Try `curl -u "$BOOMBOX_WEB_USER:$BOOMBOX_WEB_PASSWORD" "$BOOMBOX_DEV_TARGET/mopidy/rpc"` and check you can reach nginx. |
 | `./pi reload` says "no devtools page found" | The kiosk Chromium isn't running, or was started without `--remote-debugging-port=9222`. Run `./pi restart-kiosk`. |
 | You changed something on the Pi by hand and `boombox-update` refuses | `boombox-update --force` will hard-reset to `origin/main`. |
 | The page on the kiosk doesn't show your build | You deployed `dist/` but Chromium has a stale hash. `./pi reload` (or just wait — index.html is `no-cache`, JS is hash-named so it refetches on rebuild). |

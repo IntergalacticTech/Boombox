@@ -204,7 +204,7 @@ REMOTE
   status)
     ssh "$HOST" '
       echo "=== services ==="
-      systemctl is-active mopidy nginx 2>&1 | paste <(echo -e "mopidy\nnginx") -
+      systemctl is-active mopidy nginx smbd 2>&1 | paste <(echo -e "mopidy\nnginx\nsmbd") -
       echo
       echo "=== chromium ==="
       pgrep -af "chromium --kiosk" | head -1 || echo "  not running"
@@ -215,6 +215,17 @@ REMOTE
       echo "=== ip / uptime ==="
       hostname -I
       uptime
+      echo
+      echo "=== remote access ==="
+      if [ -r /etc/boombox/web-auth.env ]; then
+        . /etc/boombox/web-auth.env
+        ip="$(hostname -I | awk "{print \$1}")"
+        port="${BOOMBOX_WEB_PORT:-8090}"
+        echo "web: http://$ip:$port/  user=${BOOMBOX_WEB_USER:-boombox}"
+        echo "smb: smb://$ip/boombox-music  user=${BOOMBOX_SMB_USER:-$USER}"
+      else
+        echo "  /etc/boombox/web-auth.env not readable"
+      fi
     '
     ;;
 

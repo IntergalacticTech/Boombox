@@ -13,13 +13,14 @@ repo organises itself in your head.
                       └──────────────┬───────────────┘
                                      │
    ┌─────────────┐     ┌─────────────┴────────────┐     ┌──────────────┐
-   │   Touch UI  │◀────│           nginx :80      │────▶│  /var/www/   │
+   │   Touch UI  │◀────│  nginx localhost:80      │────▶│  /var/www/   │
    │  (Chromium) │     │  ┌────────────────────┐  │     │  boombox/    │
    │  kiosk mode │     │  │ / → SPA            │  │     │  (Vite dist) │
    └──────┬──────┘     │  │ /mopidy/  → :6680  │  │     └──────────────┘
           │            │  │ /api/     → :6681  │  │
    GPIO   │            │  │ /audio/ws → :6682  │  │
    buttons│            │  └────────────────────┘  │
+          │            │  LAN :8090 → Basic auth  │
           │            └──────────────────────────┘
           ▼                       │       │       │
    ┌──────────────┐               ▼       ▼       ▼
@@ -50,7 +51,8 @@ repo organises itself in your head.
 
 | Process | Type | Port | Purpose |
 |---------|------|------|---------|
-| `nginx` | system | 80 | Reverse proxy; serves the SPA |
+| `nginx` | system | 127.0.0.1:80, LAN 8090 | Reverse proxy; serves the SPA. Local kiosk is unauthenticated; LAN clients require HTTP Basic auth. |
+| `smbd` | system | 445 | Password-protected SMB share for the music library |
 | `mopidy` | system | 6680 | Music server (local files, Spotify-via-Mopidy, Iris UI, JSON-RPC + WebSocket) |
 | `pipewire`, `wireplumber` | user | — | Audio graph |
 | `shairport-sync` | system | — | AirPlay receiver (sink → PipeWire) |
@@ -67,7 +69,7 @@ repo organises itself in your head.
 | `boombox-uploader` | user | 6683 | Off by default. Toggled from the touchscreen; serves a PIN-gated remote/upload page at `/upload/`. See [ACCESS.md](./ACCESS.md). |
 | `boombox-usb-mount@<dev>` | system (template) | — | Triggered by udev. Mounts USB drives R/O under `/media/boombox/<id>` and symlinks them into the Mopidy library at `~/Music/.usb/<id>`. |
 
-**System vs user.** `nginx`, `mopidy`, `shairport-sync`, `bluetoothd`,
+**System vs user.** `nginx`, `mopidy`, `smbd`, `shairport-sync`, `bluetoothd`,
 `raspotify` are system-wide and start before login. The `boombox-*` services
 run as **user** units because they need the desktop session's
 `XDG_RUNTIME_DIR` (PipeWire, BlueZ user session, Wayland for the kiosk).

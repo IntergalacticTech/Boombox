@@ -79,11 +79,34 @@ fi
 
 if config_changed; then
   log "configs changed — reinstalling"
+  REMOTE_WEB_PORT="${BOOMBOX_WEB_PORT:-8090}"
+  if sudo test -f /etc/boombox/web-auth.env; then
+    while IFS='=' read -r key val; do
+      case "$key" in
+        BOOMBOX_WEB_PORT) REMOTE_WEB_PORT="${BOOMBOX_WEB_PORT:-$val}" ;;
+      esac
+    done < <(sudo cat /etc/boombox/web-auth.env)
+  fi
   sudo install -m 0644 "$SCRIPT_DIR/config/asound.conf" /etc/asound.conf || true
   sudo install -m 0644 "$SCRIPT_DIR/config/mopidy.conf" /etc/mopidy/mopidy.conf
   sudo sed -i "s|__MUSIC_DIR__|${BOOMBOX_MUSIC_DIR:-/home/$USER/Music}|g" /etc/mopidy/mopidy.conf
-  sudo install -m 0644 "$SCRIPT_DIR/config/nginx.conf" /etc/nginx/sites-available/boombox
+  sudo mkdir -p /etc/nginx/snippets
+  sudo install -m 0644 "$SCRIPT_DIR/config/nginx-boombox-common.conf" /etc/nginx/snippets/boombox-common.conf
+  TMP_NGINX="$(mktemp)"
+  sed "s|__REMOTE_WEB_PORT__|$REMOTE_WEB_PORT|g" "$SCRIPT_DIR/config/nginx.conf" > "$TMP_NGINX"
+  sudo install -m 0644 "$TMP_NGINX" /etc/nginx/sites-available/boombox
+  rm -f "$TMP_NGINX"
   sudo nginx -t && sudo systemctl reload nginx
+  if [[ -f "$SCRIPT_DIR/config/smb.conf" ]]; then
+    TMP_SMB="$(mktemp)"
+    sed \
+      -e "s|__MUSIC_DIR__|${BOOMBOX_MUSIC_DIR:-/home/$USER/Music}|g" \
+      -e "s|__BOOMBOX_USER__|$USER|g" \
+      "$SCRIPT_DIR/config/smb.conf" > "$TMP_SMB"
+    sudo install -m 0644 "$TMP_SMB" /etc/samba/smb.conf
+    rm -f "$TMP_SMB"
+    sudo testparm -s >/dev/null && sudo systemctl reload-or-restart smbd 2>/dev/null || true
+  fi
   sudo systemctl restart mopidy
 fi
 

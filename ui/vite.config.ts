@@ -26,7 +26,13 @@ if (fs.existsSync(repoEnv)) {
   }
 }
 
-const boomboxTarget = process.env.BOOMBOX_DEV_TARGET ?? 'http://10.0.5.178'
+const boomboxTarget = process.env.BOOMBOX_DEV_TARGET ?? 'http://10.0.5.178:8090'
+const boomboxAuth = process.env.BOOMBOX_WEB_AUTH
+  ?? (process.env.BOOMBOX_WEB_USER && process.env.BOOMBOX_WEB_PASSWORD
+    ? `Basic ${Buffer.from(`${process.env.BOOMBOX_WEB_USER}:${process.env.BOOMBOX_WEB_PASSWORD}`).toString('base64')}`
+    : undefined)
+
+const proxyHeaders = boomboxAuth ? { Authorization: boomboxAuth } : undefined
 
 export default defineConfig({
   plugins: [react()],
@@ -41,15 +47,18 @@ export default defineConfig({
         target: boomboxTarget,
         changeOrigin: true,
         ws: true,
+        headers: proxyHeaders,
       },
       '/api': {
         target: boomboxTarget,
         changeOrigin: true,
+        headers: proxyHeaders,
       },
       '/audio': {
         target: boomboxTarget,
         changeOrigin: true,
         ws: true,
+        headers: proxyHeaders,
       },
     },
   },

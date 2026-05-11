@@ -48,7 +48,7 @@ sudo apt install -y \
   python3 python3-venv python3-pip \
   python3-dbus python3-gi python3-gi-cairo gir1.2-glib-2.0 \
   mopidy mopidy-mpd mopidy-local mpc \
-  nginx \
+  nginx apache2-utils samba \
   chromium unclutter grim \
   playerctl \
   pipewire pipewire-pulse wireplumber pulseaudio-utils \
@@ -112,6 +112,46 @@ sudo install -m 0644 "$SCRIPT_DIR/config/asound.conf" /etc/asound.conf
 log "ensuring music dirs exist: $MUSIC_DIR (+ uploads/, .usb/)"
 mkdir -p "$MUSIC_DIR" "$MUSIC_DIR/uploads" "$MUSIC_DIR/.usb"
 
+# Remote LAN credentials. The kiosk keeps using http://localhost/ with no
+# auth, but anything off-device goes through nginx on BOOMBOX_WEB_PORT and
+# requires HTTP Basic. Samba uses the same generated password for the music
+# share so there is one remote credential to manage.
+log "configuring remote web/SMB credentials"
+sudo mkdir -p /etc/boombox
+WEB_AUTH_ENV=/etc/boombox/web-auth.env
+EXISTING_WEB_PORT=""
+EXISTING_WEB_USER=""
+EXISTING_WEB_PASSWORD=""
+if sudo test -f "$WEB_AUTH_ENV"; then
+  while IFS='=' read -r key val; do
+    case "$key" in
+      BOOMBOX_WEB_PORT) EXISTING_WEB_PORT="$val" ;;
+      BOOMBOX_WEB_USER) EXISTING_WEB_USER="$val" ;;
+      BOOMBOX_WEB_PASSWORD) EXISTING_WEB_PASSWORD="$val" ;;
+    esac
+  done < <(sudo cat "$WEB_AUTH_ENV")
+fi
+REMOTE_WEB_PORT="${BOOMBOX_WEB_PORT:-${EXISTING_WEB_PORT:-8090}}"
+WEB_AUTH_USER="${BOOMBOX_WEB_USER:-${EXISTING_WEB_USER:-boombox}}"
+WEB_AUTH_PASSWORD="${BOOMBOX_WEB_PASSWORD:-${EXISTING_WEB_PASSWORD:-}}"
+if [[ -z "$WEB_AUTH_PASSWORD" ]]; then
+  WEB_AUTH_PASSWORD="$(python3 -c 'import secrets; print(f"{secrets.randbelow(900000) + 100000:06d}")')"
+fi
+
+TMP_AUTH="$(mktemp)"
+cat >"$TMP_AUTH" <<EOF
+BOOMBOX_WEB_PORT=$REMOTE_WEB_PORT
+BOOMBOX_WEB_USER=$WEB_AUTH_USER
+BOOMBOX_WEB_PASSWORD=$WEB_AUTH_PASSWORD
+BOOMBOX_SMB_USER=$BOOMBOX_USER
+EOF
+sudo install -m 0640 -o root -g "$BOOMBOX_GROUP" "$TMP_AUTH" "$WEB_AUTH_ENV"
+rm -f "$TMP_AUTH"
+
+printf '%s\n' "$WEB_AUTH_PASSWORD" | sudo htpasswd -iB -c /etc/nginx/boombox.htpasswd "$WEB_AUTH_USER" >/dev/null
+sudo chown root:www-data /etc/nginx/boombox.htpasswd
+sudo chmod 0640 /etc/nginx/boombox.htpasswd
+
 log "installing /etc/mopidy/mopidy.conf"
 sudo mkdir -p /etc/mopidy
 sudo install -m 0644 "$SCRIPT_DIR/config/mopidy.conf" /etc/mopidy/mopidy.conf
@@ -141,11 +181,33 @@ sudo chown -R www-data:www-data /var/www/boombox
 # 8. nginx site
 # ---------------------------------------------------------------------------
 log "installing nginx site"
-sudo install -m 0644 "$SCRIPT_DIR/config/nginx.conf" /etc/nginx/sites-available/boombox
+sudo mkdir -p /etc/nginx/snippets
+sudo install -m 0644 "$SCRIPT_DIR/config/nginx-boombox-common.conf" /etc/nginx/snippets/boombox-common.conf
+TMP_NGINX="$(mktemp)"
+sed "s|__REMOTE_WEB_PORT__|$REMOTE_WEB_PORT|g" "$SCRIPT_DIR/config/nginx.conf" > "$TMP_NGINX"
+sudo install -m 0644 "$TMP_NGINX" /etc/nginx/sites-available/boombox
+rm -f "$TMP_NGINX"
 sudo ln -sf /etc/nginx/sites-available/boombox /etc/nginx/sites-enabled/boombox
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl restart nginx
+
+log "installing Samba music share"
+TMP_SMB="$(mktemp)"
+sed \
+  -e "s|__MUSIC_DIR__|$MUSIC_DIR|g" \
+  -e "s|__BOOMBOX_USER__|$BOOMBOX_USER|g" \
+  "$SCRIPT_DIR/config/smb.conf" > "$TMP_SMB"
+sudo install -m 0644 "$TMP_SMB" /etc/samba/smb.conf
+rm -f "$TMP_SMB"
+if sudo pdbedit -L -u "$BOOMBOX_USER" >/dev/null 2>&1; then
+  printf '%s\n%s\n' "$WEB_AUTH_PASSWORD" "$WEB_AUTH_PASSWORD" | sudo smbpasswd -s "$BOOMBOX_USER" >/dev/null
+else
+  printf '%s\n%s\n' "$WEB_AUTH_PASSWORD" "$WEB_AUTH_PASSWORD" | sudo smbpasswd -s -a "$BOOMBOX_USER" >/dev/null
+fi
+sudo smbpasswd -e "$BOOMBOX_USER" >/dev/null
+sudo testparm -s >/dev/null
+sudo systemctl enable --now smbd
 
 # ---------------------------------------------------------------------------
 # 9. systemd units
@@ -196,7 +258,6 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=block --action=change || true
 
 # usb-mount needs to know which user owns the music directory.
-sudo mkdir -p /etc/boombox
 echo "$BOOMBOX_USER" | sudo tee /etc/boombox/desktop-user >/dev/null
 sudo chmod 0644 /etc/boombox/desktop-user
 
@@ -215,6 +276,7 @@ log "enabling system services"
 sudo systemctl enable mopidy
 sudo systemctl restart mopidy
 sudo systemctl enable nginx
+sudo systemctl enable smbd
 
 # ---------------------------------------------------------------------------
 # 10. /etc/boombox config dir
@@ -249,4 +311,9 @@ Next:
 Status from your laptop (via ./pi):
   ./pi status
   ./pi logs mopidy
+
+Remote access:
+  Web UI: http://<pi-ip>:$REMOTE_WEB_PORT/  user: $WEB_AUTH_USER
+  SMB:    smb://<pi-ip>/boombox-music     user: $BOOMBOX_USER
+  Password/PIN is stored on the Pi at: $WEB_AUTH_ENV
 EOF

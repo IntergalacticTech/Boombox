@@ -177,6 +177,7 @@ def browse_dir(rel_path: str) -> dict:
                         "kind": "file",
                         "size": st.st_size,
                         "mtime": int(st.st_mtime),
+                        "deletable": under_root(entry, MUSIC_ROOT),
                     })
             except (OSError, ValueError):
                 continue
@@ -422,6 +423,9 @@ INDEX_HTML_TEMPLATE = """\
   .row button.inline {{
     min-height: 34px; padding: 8px 10px; border-radius: 8px;
     font-size: 12px; flex-shrink: 0;
+  }}
+  .row button.danger {{
+    background: transparent; color: #ff9a9a; border: 1px solid rgba(255,120,120,0.30);
   }}
 </style>
 
@@ -865,6 +869,24 @@ async function upload(files) {{
   loadDir(cwd);
 }}
 
+async function deletePath(rel, name) {{
+  if (!confirm(`Delete "${{name}}" from the boombox library?`)) return;
+  $('upload-err').textContent = '';
+  $('upload-ok').textContent = '';
+  const r = await fetch('delete', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ path: rel }}),
+  }});
+  if (!r.ok) {{
+    const j = await r.json().catch(() => ({{ error: 'delete failed' }}));
+    $('upload-err').textContent = j.error || 'delete failed';
+    return;
+  }}
+  $('upload-ok').textContent = `Deleted "${{name}}" — boombox is rescanning the library.`;
+  loadDir(cwd);
+}}
+
 async function loadDir(rel) {{
   const r = await fetch('browse?path=' + encodeURIComponent(rel || ''));
   if (!r.ok) return;
@@ -940,7 +962,7 @@ function renderEntries() {{
     }} else {{
       row.className = 'row';
       const sizeMB = (e.size / 1048576).toFixed(1) + ' MB';
-      row.innerHTML = `<div class=icon>♪</div><div class=name></div><div class=meta>${{sizeMB}}</div><a class=dl></a>`;
+      row.innerHTML = `<div class=icon>♪</div><div class=name></div><div class=meta>${{sizeMB}}</div><a class=dl></a><button class="inline danger" type=button></button>`;
       row.querySelector('.name').textContent = e.name;
       const a = row.querySelector('.dl');
       const dlPath = cwd ? cwd + '/' + e.name : e.name;
@@ -948,6 +970,15 @@ function renderEntries() {{
       a.textContent = '⤓';
       a.title = 'download';
       a.setAttribute('download', '');
+      const del = row.querySelector('button.danger');
+      if (e.deletable) {{
+        del.textContent = 'Delete';
+        del.onclick = () => deletePath(dlPath, e.name);
+      }} else {{
+        del.textContent = 'USB';
+        del.disabled = true;
+        del.title = 'USB files are read-only from the web UI.';
+      }}
     }}
     list.appendChild(row);
   }}
@@ -1089,6 +1120,32 @@ async def download_handler(request: web.Request) -> web.StreamResponse:
     return web.FileResponse(target)
 
 
+async def delete_handler(request: web.Request) -> web.Response:
+    if not request_authed(request):
+        return web.json_response({"error": "pin required"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    rel = str(body.get("path", "") or "").strip("/").replace("\\", "/")
+    target = safe_compose(MUSIC_ROOT, rel)
+    if target is None or not target.is_file():
+        return web.json_response({"error": "not found"}, status=404)
+    if not under_root(target, MUSIC_ROOT):
+        return web.json_response({"error": "USB and symlinked files are read-only from the web UI"}, status=403)
+    if target.suffix.lower() not in ALLOWED_EXTS:
+        return web.json_response({"error": "unsupported file type"}, status=400)
+    try:
+        target.unlink()
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    asyncio.create_task(_trigger_scan())
+    resp = web.json_response({"deleted": rel})
+    set_pin_cookie(resp)
+    return resp
+
+
 async def health(_request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "pin_present": bool(PIN)})
 
@@ -1107,6 +1164,7 @@ def make_app() -> web.Application:
     # routes to browse() at the root.
     app.router.add_get("/list", browse_handler)
     app.router.add_get("/download/{path:.+}", download_handler)
+    app.router.add_post("/delete", delete_handler)
     app.router.add_get("/health", health)
     return app
 

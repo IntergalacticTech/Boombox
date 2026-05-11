@@ -1,16 +1,38 @@
-# Access — web remote, upload mode, and USB drives
+# Access — web remote, network share, and USB drives
 
 How guests control the boombox from a larger screen, get music *onto* the
 boombox, and how a plugged-in USB stick joins the library automatically.
 
 ---
 
-## Web remote / upload mode
+## Web access and auth
 
-The boombox runs a PIN-gated web app on its LAN, **off by default**. You
+The physical touchscreen is the trusted local device. Chromium loads
+`http://localhost/` through nginx on loopback port 80 and does **not** need a
+password.
+
+Anything from the LAN uses nginx's authenticated web port, default `8090`:
+
+```text
+http://<pi-ip>:8090/
+```
+
+The installer generates one static remote credential and stores it in:
+
+```bash
+sudo cat /etc/boombox/web-auth.env
+```
+
+The touchscreen Settings drawer also shows this web login while Remote mode is
+enabled. The same password is used for the SMB share.
+
+## Remote / upload mode
+
+The boombox runs a PIN-gated remote/upload web app, **off by default**. You
 toggle it from the touchscreen Settings drawer; while it's on, the touchscreen
-displays the URL and a 4-digit PIN. Anyone on the same Wi-Fi opens the URL on
-a phone or laptop and gets a larger remote UI.
+displays the URL, the static web login, and a fresh 4-digit page PIN. Anyone on
+the same Wi-Fi opens the URL on a phone or laptop, passes the web login, then
+types the page PIN.
 
 The remote UI can:
 
@@ -18,15 +40,16 @@ The remote UI can:
 - create M3U playlists from library search results or the current queue
 - play saved playlists
 - upload audio files
-- browse/download the library, including symlinked USB drives
+- browse/download/delete local library files
+- browse/download symlinked USB drives
 
 ```
        Touchscreen                         Phone / laptop on the LAN
    ┌──────────────────┐                ┌────────────────────────┐
    │  Settings →      │                │  Boombox · Remote      │
-   │  Remote mode     │   nginx :80    │  ┌────────────────┐    │
+   │  Remote mode     │  nginx :8090   │  ┌────────────────┐    │
    │  ┌──────────┐    │ ──────────────▶│  │ drop files here│    │
-   │  │ TURN ON  │    │   /upload/     │  └────────────────┘    │
+   │  │ TURN ON  │    │ auth + /upload │  └────────────────┘    │
    │  └──────────┘    │                │  Library [filter…]     │
    │                  │                │   • track-1.flac  ⇣    │
    │  http://192…/up… │                │   • track-2.mp3   ⇣    │
@@ -41,7 +64,8 @@ The remote UI can:
 3. The uploader generates a fresh 4-digit PIN, writes it to
    `$XDG_RUNTIME_DIR/boombox-uploader.pin`, and starts listening on
    `127.0.0.1:6683`.
-4. nginx, which is always running, proxies `/upload/` → `127.0.0.1:6683`.
+4. nginx, which is always running, proxies `/upload/` → `127.0.0.1:6683`
+   from both localhost and the authenticated LAN web port.
 5. The touchscreen polls `/api/upload/status` every 4 s and shows the
    URL + PIN.
 
@@ -80,22 +104,42 @@ seconds.
 | Upload | Drag-and-drop, or tap "choose files". Uploads stream with a progress bar; failures surface inline. |
 | Browse the library | Filter box at the bottom; lists every audio file under `~/Music/`, including symlinked USB drives. |
 | Download | Each row has a `download` link. Files are streamed via aiohttp's `FileResponse`. |
+| Delete | Local library file rows have a delete button. USB/symlinked files are read-only from the web UI. |
+
+### SMB network share
+
+The installer publishes the music library as:
+
+```text
+smb://<pi-ip>/boombox-music
+```
+
+Use the desktop user (`jwc` on the current appliance) and the password from
+`/etc/boombox/web-auth.env`. The share is read/write, so adding, renaming, and
+deleting files through Finder, Windows Explorer, or another SMB client changes
+`~/Music/` directly. Run a library scan from the touchscreen Settings drawer if
+you make large changes and Mopidy has not picked them up yet.
 
 ### Security posture
 
 This is **not** a hardened public-internet service. It is a friction gate
 for a LAN appliance. Specifically:
 
-- **PIN is a 4-digit number.** A determined attacker on the same LAN can
-  brute-force it in about 30 seconds. The mitigation is "the toggle is
-  off by default."
-- **No HTTPS.** Everything is plaintext on port 80. Don't enable upload
-  mode on a Wi-Fi network you don't trust.
+- **LAN web has a static password.** It keeps casual browsers out of the
+  player UI, but it is still a shared appliance credential.
+- **Remote/upload mode also has a 4-digit page PIN.** A determined attacker on
+  the same LAN could brute-force it; the mitigation is "the toggle is off by
+  default" and the LAN web password sits in front of it.
+- **No HTTPS.** Everything is plaintext on the LAN web port. Don't enable
+  remote/upload mode on a Wi-Fi network you don't trust.
 - **Path-traversal defense:** filenames are sanitized
   (`safe_filename()`), uploads are pinned to `~/Music/uploads/` via
   `under_root()`, and downloads validate that the resolved path is
   inside `MUSIC_ROOT`. Symlink-following downloads do let you grab files
   from mounted USB drives — that's the point.
+- **Delete is intentionally narrower than download.** The web UI deletes only
+  audio files that resolve inside the local music library. USB/symlinked files
+  are read-only there; use SMB or remount workflows for broader file work.
 - **No quotas.** A guest could fill the SD card. The 1 GB per-file cap is
   the only limit.
 
@@ -153,10 +197,9 @@ When you unplug:
    (lazy unmount) if the kernel still has open handles.
 3. Another scan fires so the tracks disappear from the library.
 
-The drive stays read-only by default. Push-to-drive (see below)
-remounts read-write transparently for the duration of the copy. (TODO:
-not yet implemented — current drives need to be mounted RW manually if
-you want the push direction to work.)
+The drive stays read-only by default. Push-to-drive is still planned; current
+drives need to be mounted read-write manually if you want that direction to
+work outside the SMB/local library path.
 
 ### Pull and push from the touchscreen
 
@@ -202,17 +245,18 @@ File browsers ignore it; Mopidy doesn't.
 
 | Endpoint | Method | What |
 |---|---|---|
-| `/api/upload/status` | GET | `{enabled, pin, url, ip}` |
+| `/api/upload/status` | GET | remote/upload status, URL, page PIN, web login, SMB URL |
 | `/api/upload/enable` | POST | start the uploader unit |
 | `/api/upload/disable` | POST | stop the uploader unit |
 | `/api/usb/devices` | GET | mounted-drive list with disk usage |
 | `/api/usb/copy` | POST | bulk copy in either direction |
 | `/api/library/scan` | POST | trigger a Mopidy local scan |
-| `/upload/` | GET | the public upload page (proxied) |
+| `/upload/` | GET | the remote/upload page (proxied) |
 | `/upload/upload` | POST | multipart upload (PIN-gated) |
 | `/upload/browse?path=` | GET | browsable library JSON (PIN-gated) |
 | `/upload/list` | GET | deprecated alias for root browse (PIN-gated) |
 | `/upload/download/{path}` | GET | file download (PIN-gated) |
+| `/upload/delete` | POST | delete a local library file (PIN-gated) |
 
 ---
 

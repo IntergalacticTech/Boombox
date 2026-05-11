@@ -8,12 +8,13 @@ touchscreen by `ScaleToFit`.
 
 ```bash
 npm install
-BOOMBOX_DEV_TARGET=http://10.0.5.178 npm run dev
+BOOMBOX_DEV_TARGET=http://10.0.5.178:8090 BOOMBOX_WEB_USER=boombox BOOMBOX_WEB_PASSWORD=123456 npm run dev
 ```
 
-`BOOMBOX_DEV_TARGET` should point at the Pi's nginx server. The Vite dev
-server proxies `/mopidy`, `/api`, and `/audio` through that target so local
-development sees the same paths as the kiosk.
+`BOOMBOX_DEV_TARGET` should point at the Pi's authenticated LAN nginx port.
+Read the real password with `../pi ssh "sudo cat /etc/boombox/web-auth.env"`.
+The Vite dev server proxies `/mopidy`, `/api`, and `/audio` through that
+target so local development sees the same paths as the kiosk.
 
 ## Build
 

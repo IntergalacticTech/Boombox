@@ -30,7 +30,17 @@ type SystemInfo = {
 type Sink = { name: string; label: string; default: boolean; state: string };
 type SinksState = { ok: boolean; default: string | null; sinks: Sink[] };
 
-type UploadStatus = { enabled: boolean; pin: string; url: string; ip: string };
+type UploadStatus = {
+  enabled: boolean;
+  pin: string;
+  url: string;
+  ip: string;
+  web_port?: string;
+  web_user?: string;
+  web_password?: string;
+  smb_user?: string;
+  smb_url?: string;
+};
 type UsbDevice = {
   id: string;
   label: string;
@@ -303,12 +313,20 @@ export function SettingsDrawer({ onClose }: Props) {
                     fontFamily: "'JetBrains Mono', monospace",
                     fontSize: 22, fontWeight: 700, marginTop: 4, wordBreak: "break-all",
                   }}>{upload.url || "(no LAN IP yet)"}</div>
+                  <div style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 12, color: "rgba(255,255,255,0.68)", marginTop: 6,
+                    wordBreak: "break-all",
+                  }}>
+                    WEB {upload.web_user || "boombox"} / {upload.web_password || "—"}
+                    {upload.smb_url ? ` · SMB ${upload.smb_url}` : ""}
+                  </div>
                 </div>
                 <div>
                   <div style={{
                     fontFamily: "'JetBrains Mono', monospace",
                     fontSize: 11, letterSpacing: "0.18em", color: "#7afcb0", textAlign: "center",
-                  }}>PIN</div>
+                  }}>PAGE PIN</div>
                   <div style={{
                     fontFamily: "'JetBrains Mono', monospace",
                     fontSize: 36, fontWeight: 700, letterSpacing: "0.20em", textAlign: "center",
