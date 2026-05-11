@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="Boombox is an open-source Raspberry Pi touchscreen stereo appliance with local music, streaming sources, remote control, SMB sharing, and video support."
+    >
+    <meta property="og:title" content="Boombox">
+    <meta
+      property="og:description"
+      content="An open-source touchscreen stereo appliance for Raspberry Pi."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="assets/tapeshift.png">
+    <meta name="theme-color" content="#0b0f0d">
+    <title>Boombox | Open-source touchscreen stereo</title>
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <script>document.documentElement.classList.add("js");</script>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" data-site-header>
+      <a class="brand" href="#top" aria-label="Boombox home">
+        <img src="assets/favicon.svg" alt="" width="28" height="28">
+        <span>Boombox</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+        <span class="sr-only">Open navigation</span>
+        <span></span>
+        <span></span>
+      </button>
+      <nav id="site-nav" class="site-nav" aria-label="Primary navigation">
+        <a href="#features">Features</a>
+        <a href="#remote">Web UI</a>
+        <a href="#install">Install</a>
+        <a href="#docs">Docs</a>
+        <a class="nav-github" href="https://github.com/IntergalacticTech/Boombox">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section id="top" class="hero section">
+        <div class="hero-media" aria-hidden="true">
+          <img class="hero-shot hero-shot-main" src="assets/tapeshift.png" alt="">
+          <img class="hero-shot hero-shot-alt" src="assets/deckos-watch.png" alt="">
+        </div>
+        <div class="hero-gridline" aria-hidden="true"></div>
+        <div class="hero-content reveal">
+          <p class="eyebrow">Open-source Raspberry Pi stereo appliance</p>
+          <h1>Boombox</h1>
+          <p class="hero-copy">
+            A touchscreen-driven retro boombox that turns a Raspberry Pi 5,
+            a HiFiBerry-class I2S DAC, and a 5-inch display into a complete
+            local music, streaming, remote-control, and video machine.
+          </p>
+          <div class="hero-actions" aria-label="Project actions">
+            <a class="button button-primary" href="https://github.com/IntergalacticTech/Boombox">
+              View on GitHub
+            </a>
+            <a class="button button-secondary" href="#install">Install from source</a>
+          </div>
+          <dl class="hero-stats" aria-label="Project highlights">
+            <div>
+              <dt>7</dt>
+              <dd>user services</dd>
+            </div>
+            <div>
+              <dt>8090</dt>
+              <dd>auth LAN UI</dd>
+            </div>
+            <div>
+              <dt>5&quot;</dt>
+              <dd>touchscreen first</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="section intro-band" aria-label="Project summary">
+        <div class="container intro-layout">
+          <p class="section-kicker">What it is</p>
+          <h2>A real appliance, not a browser demo.</h2>
+          <p>
+            Boombox boots into a Chromium kiosk UI, routes audio through PipeWire,
+            exposes Mopidy and system state through small Python services, and keeps
+            the physical screen focused on playback while the web UI handles richer
+            tasks like playlist management and file transfer.
+          </p>
+        </div>
+      </section>
+
+      <section id="features" class="section feature-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Machine capabilities</p>
+            <h2>Built around the jobs a stereo actually does.</h2>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-card reveal">
+              <span class="feature-mark feature-mark-orange" aria-hidden="true"></span>
+              <h3>Music-first playback</h3>
+              <p>Mopidy drives the local library and streaming sources, with transport controls exposed through the touchscreen and web UI.</p>
+            </article>
+            <article class="feature-card reveal">
+              <span class="feature-mark feature-mark-cyan" aria-hidden="true"></span>
+              <h3>Source orchestration</h3>
+              <p>Bluetooth, AirPlay, Spotify Connect, and local playback are coordinated so the active source owns the speakers cleanly.</p>
+            </article>
+            <article class="feature-card reveal">
+              <span class="feature-mark feature-mark-magenta" aria-hidden="true"></span>
+              <h3>Skinnable touchscreen</h3>
+              <p>The 5-inch interface ships with retro-inspired skins and a documented path for designing new ones.</p>
+            </article>
+            <article class="feature-card reveal">
+              <span class="feature-mark feature-mark-green" aria-hidden="true"></span>
+              <h3>Remote-friendly workflows</h3>
+              <p>Playlist editing, uploads, deletes, SMB access, and machine controls live on the browser UI where a keyboard helps.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="remote" class="section remote-section">
+        <div class="container remote-layout">
+          <div class="remote-copy reveal">
+            <p class="section-kicker">Full web UI</p>
+            <h2>The browser gets the jobs that do not belong on five inches.</h2>
+            <p>
+              The local screen stays immediate: play, pause, seek, volume, queue, skin,
+              and source switching. The authenticated LAN interface can go deeper:
+              curate playlists, manage files, restart services, review library state,
+              and use the same design language without crowding the kiosk.
+            </p>
+            <ul class="check-list">
+              <li>Playlist creation and editing from a desktop browser.</li>
+              <li>Upload and delete library files without SSH.</li>
+              <li>Password-protected remote access on the uncommon web port.</li>
+              <li>SMB share for direct network-drive workflows.</li>
+            </ul>
+          </div>
+          <div class="screen-stack reveal" aria-label="Boombox interface screenshots">
+            <figure class="screen-shot screen-shot-wide">
+              <img src="assets/deckos-watch.png" alt="Boombox Deck OS touchscreen skin with music playback and Watch button">
+              <figcaption>Touchscreen skin</figcaption>
+            </figure>
+            <figure class="screen-shot screen-shot-overlap">
+              <img src="assets/settings-upload.png" alt="Boombox settings panel showing LAN upload mode, PIN, USB drive controls, and karaoke setting">
+              <figcaption>Remote settings</figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="section architecture-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">How it fits together</p>
+            <h2>Small services, clear boundaries, hardware-aware defaults.</h2>
+          </div>
+          <div class="architecture-grid">
+            <article class="architecture-panel reveal">
+              <h3>Audio path</h3>
+              <p>HiFiBerry-class I2S DAC, PipeWire mixer, Mopidy, shairport-sync, raspotify, and BlueZ A2DP sink.</p>
+            </article>
+            <article class="architecture-panel reveal">
+              <h3>Control path</h3>
+              <p>Touchscreen, GPIO buttons, MPRIS, playerctl, AVRCP volume, and the boombox source orchestrator.</p>
+            </article>
+            <article class="architecture-panel reveal">
+              <h3>UI and web</h3>
+              <p>Chromium kiosk on localhost, authenticated LAN web access, remote API, audio WebSocket, SMB, and Jellyfin video mode.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="install" class="section install-section">
+        <div class="container install-layout">
+          <div class="install-copy reveal">
+            <p class="section-kicker">Run it from GitHub</p>
+            <h2>Install on Raspberry Pi OS, then update from main.</h2>
+            <p>
+              The installer is idempotent. It configures packages, systemd units,
+              nginx, the UI build, and service wiring so a Pi can stay current with
+              the public repository.
+            </p>
+          </div>
+          <div class="terminal reveal" aria-label="Installation commands">
+            <div class="terminal-bar">
+              <span>fresh-pi.sh</span>
+              <button class="copy-button" type="button" data-copy-target="install-code">Copy</button>
+            </div>
+            <pre id="install-code"><code>sudo apt update &amp;&amp; sudo apt install -y git
+sudo git clone https://github.com/IntergalacticTech/Boombox.git /opt/boombox
+sudo chown -R "$USER:$USER" /opt/boombox
+/opt/boombox/install/install.sh
+sudo reboot</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="docs" class="section docs-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Documentation</p>
+            <h2>Start with the system map, then drill into the part you are changing.</h2>
+          </div>
+          <div class="docs-grid">
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/ARCHITECTURE.md">
+              <span>Architecture</span>
+              <small>Processes, ports, and data flow</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/ACCESS.md">
+              <span>Access</span>
+              <small>LAN web auth, SMB, uploads, USB</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/SKINS.md">
+              <span>Skins</span>
+              <small>Designing a new touchscreen look</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/VIDEO.md">
+              <span>Video</span>
+              <small>Jellyfin, Watch mode, native apps</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/ONBOARDING.md">
+              <span>Onboarding</span>
+              <small>SSH, environment setup, first loop</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/DEVELOPMENT.md">
+              <span>Development</span>
+              <small>Mac workflow and the pi helper</small>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-layout">
+        <p>Boombox is MIT-licensed open-source software.</p>
+        <div class="footer-links">
+          <a href="https://github.com/IntergalacticTech/Boombox">Repository</a>
+          <a href="https://github.com/IntergalacticTech/Boombox/blob/main/LICENSE">License</a>
+          <a href="#top">Back to top</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>

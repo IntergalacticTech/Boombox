@@ -81,6 +81,17 @@ and log tailing.
 Set `BOOMBOX_HOST` (or define a `boombox` host in `~/.ssh/config`) to point
 it at your Pi.
 
+## Project website
+
+The open-source website lives in [`site/`](./site). It is plain static HTML,
+CSS, JavaScript, and image assets, so there is no Node build step for the
+website itself.
+
+GitHub Pages publishing is handled by
+[`.github/workflows/pages.yml`](./.github/workflows/pages.yml). On a repository
+with Pages enabled for **GitHub Actions**, pushes to `main` that touch the site
+folder will publish the latest site.
+
 ## Services overview
 
 | Service | Port | Role |
