@@ -162,11 +162,16 @@ def run_wizard(username: str, password: str) -> None:
     if code not in (200, 204):
         raise RuntimeError(f"Startup/Configuration failed: {code} {raw!r}")
 
-    # /Startup/User modifies _userManager.Users.First(). On a freshly-wiped
-    # database Jellyfin seeds the default admin in InitializeAsync, which
-    # runs asynchronously after the HTTP listener comes up. If we POST too
-    # early Jellyfin throws "Sequence contains no elements". Retry with
-    # backoff until the seed lands.
+    # Jellyfin 10.10+ doesn't seed a default user on startup — it does so
+    # lazily when GET /Startup/FirstUser is called. The web wizard hits
+    # this between the locale step and the name/password step; without it
+    # /Startup/User throws 'Sequence contains no elements'.
+    code, raw = request("GET", "/Startup/FirstUser")
+    if code not in (200, 204):
+        log(f"Startup/FirstUser returned {code} {raw!r} (continuing)")
+
+    # /Startup/User modifies _userManager.Users.First(). If the lazy seed
+    # above hasn't landed yet (race), retry through 500s.
     code = 0
     raw = b""
     for attempt in range(20):
