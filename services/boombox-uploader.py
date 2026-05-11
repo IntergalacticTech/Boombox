@@ -552,7 +552,7 @@ function show(authedNow) {{
 }}
 
 async function rpc(method, params = {{}}) {{
-  const r = await fetch('/mopidy/rpc', {{
+  const r = await fetch('mopidy/rpc', {{
     method: 'POST',
     headers: {{ 'Content-Type': 'application/json' }},
     body: JSON.stringify({{ jsonrpc: '2.0', id: rpcId++, method, params }}),
@@ -587,7 +587,7 @@ async function refreshRemote() {{
       rpc('core.playback.get_state').catch(() => 'stopped'),
       rpc('core.playback.get_time_position').catch(() => 0),
       rpc('core.tracklist.get_tl_tracks').catch(() => []),
-      fetch('/api/state', {{ cache: 'no-store' }}).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('api/state', {{ cache: 'no-store' }}).then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
     remoteExternal = !!(ext?.source && (ext.status === 'playing' || ext.status === 'paused'));
     remoteState = remoteExternal ? ext.status : state;
@@ -609,7 +609,7 @@ async function refreshRemote() {{
     $('remote-state').textContent = remoteState;
     $('remote-queue').textContent = String(queue?.length || 0);
     $('btn-toggle').textContent = remoteState === 'playing' ? '❚❚' : '▶';
-    const vol = await fetch('/api/volume', {{ cache: 'no-store' }}).then(r => r.ok ? r.json() : null).catch(() => null);
+    const vol = await fetch('api/volume', {{ cache: 'no-store' }}).then(r => r.ok ? r.json() : null).catch(() => null);
     if (vol && typeof vol.volume === 'number') {{
       const pct = Math.round(Math.max(0, Math.min(1.5, vol.volume)) * 100);
       $('remote-volume').value = String(Math.min(100, pct));
@@ -630,7 +630,7 @@ function startRemote() {{
 async function remoteAction(action) {{
   try {{
     if (remoteExternal) {{
-      await fetch('/api/control/' + action, {{ method: 'POST' }});
+      await fetch('api/control/' + action, {{ method: 'POST' }});
     }} else if (action === 'toggle') {{
       await rpc(remoteState === 'playing' ? 'core.playback.pause' : 'core.playback.play');
     }} else if (action === 'next') {{
@@ -652,7 +652,7 @@ $('btn-stop').addEventListener('click', () => remoteAction('stop'));
 $('remote-volume').addEventListener('input', e => {{
   const pct = Number(e.target.value) || 0;
   $('remote-vol-label').textContent = pct + '%';
-  fetch('/api/volume', {{
+  fetch('api/volume', {{
     method: 'POST',
     headers: {{ 'Content-Type': 'application/json' }},
     body: JSON.stringify({{ volume: pct / 100 }}),
@@ -1151,6 +1151,62 @@ async def health(_request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# Reverse proxy for /api/, /mopidy/, /audio/
+#
+# The upload page makes calls like fetch('/api/state') and fetch('/mopidy/rpc')
+# to drive playback. Those routes on nginx port 8090 require HTTP Basic auth
+# (LAN-wide gate), but the upload page is reached via the PIN, not Basic
+# auth — so guests would get a credential modal mid-session. We forward the
+# same requests through the uploader (PIN-gated) so the remote stays inside
+# /upload/ for its lifetime.
+# ---------------------------------------------------------------------------
+
+PROXY_BACKENDS = {
+    "api":    "http://127.0.0.1:6681",
+    "mopidy": "http://127.0.0.1:6680/mopidy",   # nginx prepends /mopidy/
+    "audio":  "http://127.0.0.1:6682",
+}
+
+
+async def proxy_handler(request: web.Request) -> web.StreamResponse:
+    if not request_authed(request):
+        return web.json_response({"error": "pin required"}, status=401)
+    backend_key = request.match_info["backend"]
+    base = PROXY_BACKENDS.get(backend_key)
+    if not base:
+        return web.json_response({"error": "unknown backend"}, status=404)
+    tail = request.match_info.get("tail", "")
+    target = base + "/" + tail
+    if request.query_string:
+        target += "?" + request.query_string
+
+    import aiohttp
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in ("host", "content-length", "accept-encoding")}
+
+    body = await request.read() if request.can_read_body else None
+    timeout = aiohttp.ClientTimeout(total=30)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.request(
+                request.method, target, data=body, headers=headers,
+                allow_redirects=False,
+            ) as up:
+                resp = web.StreamResponse(status=up.status, headers={
+                    k: v for k, v in up.headers.items()
+                    if k.lower() not in ("transfer-encoding", "content-encoding", "content-length")
+                })
+                await resp.prepare(request)
+                async for chunk in up.content.iter_chunked(64 * 1024):
+                    await resp.write(chunk)
+                await resp.write_eof()
+                return resp
+    except Exception as e:
+        log.warning("proxy %s %s failed: %s", request.method, target, e)
+        return web.json_response({"error": str(e)}, status=502)
+
+
+# ---------------------------------------------------------------------------
 # Bootstrap
 # ---------------------------------------------------------------------------
 
@@ -1166,6 +1222,10 @@ def make_app() -> web.Application:
     app.router.add_get("/download/{path:.+}", download_handler)
     app.router.add_post("/delete", delete_handler)
     app.router.add_get("/health", health)
+    # Reverse proxy: /upload/{api,mopidy,audio}/<anything> → backend port.
+    # The page uses relative paths so all traffic stays inside /upload/.
+    for method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+        app.router.add_route(method, "/{backend:api|mopidy|audio}/{tail:.*}", proxy_handler)
     return app
 
 
