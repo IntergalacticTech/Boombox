@@ -211,16 +211,17 @@ fi
 # state file present), wipe its DB and the StartupWizardCompleted flag so
 # our automation can take ownership of admin credentials + library config.
 JELLYFIN_ENV=/etc/boombox/jellyfin.env
+# Take ownership if Jellyfin isn't boombox-managed yet. Triggers in two
+# cases: a hand-completed wizard (IsStartupWizardCompleted=true) OR a
+# half-wiped state where the DB exists but seeding never finished.
 if dpkg -l jellyfin >/dev/null 2>&1 && ! sudo test -f "$JELLYFIN_ENV"; then
-  if sudo grep -q 'IsStartupWizardCompleted>true' /etc/jellyfin/system.xml 2>/dev/null; then
-    log "Jellyfin is configured but not by us — wiping for fresh setup"
-    sudo systemctl stop jellyfin
-    sudo rm -f /var/lib/jellyfin/data/jellyfin.db \
-               /var/lib/jellyfin/data/jellyfin.db-shm \
-               /var/lib/jellyfin/data/jellyfin.db-wal \
-               /etc/jellyfin/system.xml
-    sudo systemctl start jellyfin
-  fi
+  log "Jellyfin not boombox-managed yet — full reset for clean wizard"
+  sudo systemctl stop jellyfin
+  # Whole data dir, not just jellyfin.db, so EF migrations seed users.
+  sudo rm -rf /var/lib/jellyfin/data /var/lib/jellyfin/metadata \
+              /var/lib/jellyfin/transcodes
+  sudo find /etc/jellyfin -maxdepth 1 -name '*.xml' -delete
+  sudo systemctl start jellyfin
 fi
 
 log "running Jellyfin first-run automation"

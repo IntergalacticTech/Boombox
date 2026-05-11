@@ -169,18 +169,19 @@ def run_wizard(username: str, password: str) -> None:
     # backoff until the seed lands.
     code = 0
     raw = b""
-    for attempt in range(12):
+    for attempt in range(20):
         code, raw = request("POST", "/Startup/User", body={
             "Name": username,
             "Password": password,
         })
         if code in (200, 204):
             break
-        if code == 500 and b"Sequence contains no elements" in raw:
-            log(f"default user not seeded yet (attempt {attempt + 1}); waiting")
+        if code == 500:
+            # Body is opaque ("Error processing request"); retry through any
+            # 500 while Jellyfin's InitializeAsync seeds the default user.
+            log(f"Startup/User HTTP 500 (attempt {attempt + 1}); retrying in 2 s")
             time.sleep(2.0)
             continue
-        # Any other failure: stop retrying so we don't loop on a real error.
         break
     if code not in (200, 204):
         raise RuntimeError(f"Startup/User failed: {code} {raw!r}")
