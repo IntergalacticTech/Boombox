@@ -57,10 +57,19 @@ the music — that's a deliberate "you decide what plays" stance.
 
 ## First-run setup (one-time, per box)
 
+> **Note about text entry:** the wizard expects you to type a server name,
+> admin username, and admin password. The boombox's on-screen keyboard
+> (wvkbd) is wired up but is currently visually occluded by Chromium's
+> kiosk window — see [SERVICES.md](./SERVICES.md#boombox-osk--on-screen-keyboard-partial-see-limitation).
+> Until that lands, the cleanest path is to open
+> `http://<pi-ip>:8096/` on a **phone or laptop** and complete the
+> wizard there. The Pi-side boombox sees the result either way.
+
 After `install.sh` finishes and you reboot:
 
 1. On the touchscreen, open Settings → tap **WATCH**. (Or visit
-   `http://<pi-ip>:8096/` in any browser.)
+   `http://<pi-ip>:8096/` in any browser — phone strongly recommended for
+   the wizard.)
 2. Jellyfin's first-run wizard runs:
    - Language: English.
    - **Admin user:** pick a username/password. Write it down.

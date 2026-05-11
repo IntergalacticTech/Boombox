@@ -172,6 +172,26 @@ Chromium and returns 404 now.) Closes duplicate tabs.
 - **Env knobs:** `BOOMBOX_KIOSK_CDP` (DevTools URL), `BOOMBOX_KIOSK_HOME`
   (target URL), `BOOMBOX_KIOSK_POLL` (seconds).
 
+### `boombox-osk` — on-screen keyboard (partial, see limitation)
+
+Runs `wvkbd-mobintl --hidden` so a Wayland virtual keyboard is resident
+and listening for `SIGUSR2` (show) / `SIGUSR1` (hide). The kiosk extension
+(`install/kiosk-extension/`) listens for `focusin` / `focusout` on text-like
+inputs and posts to `POST /api/osk/show` / `POST /api/osk/hide` on
+boombox-state, which signals wvkbd.
+
+- **Code:** unit at `install/systemd/user/boombox-osk.service`; endpoints
+  in [`services/boombox-state.py`](../services/boombox-state.py); focus
+  hooks in [`install/kiosk-extension/content.js`](../install/kiosk-extension/content.js);
+  service-worker fetch in [`install/kiosk-extension/background.js`](../install/kiosk-extension/background.js).
+- **Status:** ⚠ wvkbd 0.15 (Trixie's version) draws on the layer-shell
+  `top` layer, but Chromium's `--kiosk` surface sits above it. The
+  keyboard *does* show — taps register through it — but it is visually
+  occluded by the kiosk window. **Workaround today:** use the LAN web
+  remote from a phone to type long text. **Proper fix (tracked):** build
+  wvkbd ≥0.17 from source so we can pass `--layer overlay`, or trade
+  `--kiosk` for `--start-maximized` so the top layer wins.
+
 ### `boombox-uploader` — LAN remote + file drop (off by default)
 
 Toggled from the touchscreen Settings drawer. When on, hosts a PIN-gated
