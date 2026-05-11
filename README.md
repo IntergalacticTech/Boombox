@@ -34,7 +34,6 @@ and keeps the kiosk pinned to its UI.
 | `install/` | First-time installer, systemd units, config templates, self-update script |
 | `install/legacy/` | Earlier setup scripts kept for reference |
 | `bin/` | Helpers shipped onto the Pi (e.g. `boombox-update`) |
-| `tools/` | Developer tooling that runs on your laptop |
 | `docs/` | Design notes, PRD, conversation history |
 
 ## Quick start — install on a fresh Pi
@@ -104,7 +103,7 @@ system services.
 - **[ARCHITECTURE.md](./docs/ARCHITECTURE.md)** — one-screen picture of how everything fits together
 - **[SERVICES.md](./docs/SERVICES.md)** — per-service reference: what each daemon does and how to debug it
 - **[SKINS.md](./docs/SKINS.md)** — end-to-end guide to creating a new touchscreen skin
-- **[ACCESS.md](./docs/ACCESS.md)** — upload-mode (LAN file drop with PIN) and USB auto-mount
+- **[ACCESS.md](./docs/ACCESS.md)** — PIN-gated LAN remote/upload page and USB auto-mount
 - **[DEVELOPMENT.md](./docs/DEVELOPMENT.md)** — dev workflow on a laptop, the `pi` helper, common tasks
 
 ## Roadmap

@@ -64,7 +64,7 @@ repo organises itself in your head.
 | `boombox-resume` | user | — | Snapshots Mopidy state, restores after reboot |
 | `boombox-bt-volume` | user | — | AVRCP absolute-volume → `bluez_input` node volume |
 | `boombox-kiosk-guard` | user | — | DevTools watchdog that keeps Chromium pinned to `http://localhost/` |
-| `boombox-uploader` | user | 6683 | Off by default. Toggled from the touchscreen; serves a PIN-gated upload/download page at `/upload/`. See [ACCESS.md](./ACCESS.md). |
+| `boombox-uploader` | user | 6683 | Off by default. Toggled from the touchscreen; serves a PIN-gated remote/upload page at `/upload/`. See [ACCESS.md](./ACCESS.md). |
 | `boombox-usb-mount@<dev>` | system (template) | — | Triggered by udev. Mounts USB drives R/O under `/media/boombox/<id>` and symlinks them into the Mopidy library at `~/Music/.usb/<id>`. |
 
 **System vs user.** `nginx`, `mopidy`, `shairport-sync`, `bluetoothd`,

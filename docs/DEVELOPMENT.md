@@ -37,7 +37,7 @@ Env vars it understands:
 | `BOOMBOX_HOST` | `boombox` | The SSH alias (or `user@host`) |
 | `BOOMBOX_DEBUG_PORT` | `9222` | DevTools port on the Pi |
 | `BOOMBOX_SHOTS_DIR` | `<repo>/screenshots` | Where `./pi shot` saves to |
-| `KIOSK_URL` | `http://localhost:6680/iris` | Default URL for `./pi goto` |
+| `KIOSK_URL` | `http://localhost/` | Default URL for `./pi goto` / `./pi restart-kiosk` |
 
 ---
 
@@ -54,13 +54,15 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-Edit `vite.config.ts` to point the `/mopidy` proxy at your Pi:
+Point the Vite proxy at your Pi's nginx server:
 
-```ts
-proxy: {
-  '/mopidy': { target: 'http://10.0.5.178:6680', changeOrigin: true, ws: true },
-}
+```bash
+BOOMBOX_DEV_TARGET=http://10.0.5.178 npm run dev
 ```
+
+The dev server proxies `/mopidy`, `/api`, and `/audio` through that target,
+so Mopidy RPC, boombox-state endpoints, and the visualizer WebSocket all work
+from the laptop browser.
 
 When you're happy, push to the Pi:
 

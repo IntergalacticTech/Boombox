@@ -1,5 +1,5 @@
 [Unit]
-Description=Boombox uploader (LAN file drop, PIN-gated)
+Description=Boombox uploader (LAN remote + file drop, PIN-gated)
 After=default.target nginx.service
 
 [Service]

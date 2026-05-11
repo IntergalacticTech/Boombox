@@ -261,20 +261,20 @@ export function SettingsDrawer({ onClose }: Props) {
           WebkitOverflowScrolling: "touch",
           padding: "8px 0",
         }}>
-          {/* Upload mode */}
+          {/* Remote mode */}
           <div style={{
             padding: "14px 16px",
             borderBottom: "1px solid rgba(255,255,255,0.06)",
           }}>
             <div style={{display: "flex", alignItems: "center", gap: 14, minHeight: 48}}>
               <div style={{flex: 1, minWidth: 0}}>
-                <div style={{fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em"}}>Upload mode</div>
+                <div style={{fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em"}}>Remote mode</div>
                 <div style={{fontSize: 13, color: "rgba(255,255,255,0.65)", marginTop: 2}}>
                   {upload == null
                     ? "loading…"
                     : upload.enabled
-                      ? "broadcasting on the LAN — guests can drop audio files"
-                      : "off — turn on to expose a phone-friendly upload page"}
+                      ? "broadcasting on the LAN — remote control and file drop are live"
+                      : "off — turn on to expose the phone-friendly remote"}
                 </div>
               </div>
               <button
@@ -366,9 +366,10 @@ export function SettingsDrawer({ onClose }: Props) {
                   >{usbBusy === pullKey ? "PULLING…" : "PULL → LIBRARY"}</button>
                   <button
                     onClick={() => usbCopy(d.id, "to-drive")}
-                    disabled={usbBusy != null}
-                    style={{...secondaryButton(), opacity: usbBusy === pushKey ? 0.5 : (usbBusy != null ? 0.4 : 1)}}
-                  >{usbBusy === pushKey ? "PUSHING…" : "PUSH → DRIVE"}</button>
+                    disabled
+                    title="USB drives are mounted read-only today; push-to-drive needs the RW remount flow first."
+                    style={{...secondaryButton(), opacity: usbBusy === pushKey ? 0.5 : 0.35, cursor: "default"}}
+                  >PUSH SOON</button>
                 </div>
               );
             })}

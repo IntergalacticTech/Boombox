@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Boombox uploader — LAN file drop with a PIN gate.
+"""Boombox uploader — PIN-gated LAN remote and file drop.
 
 Disabled by default. The touchscreen Settings drawer toggles this service on
-to expose a one-page web UI at http://<pi>/upload/ where guests can drop
-audio files and download anything in the library.
+to expose a one-page web UI at http://<pi>/upload/ where guests can control
+playback, make playlists, drop audio files, and download library content.
 
 PIN model: when the unit starts, generate a fresh 4-digit PIN, write it to
 a runtime file the touchscreen can read. The PIN expires the moment the
-service stops. The touchscreen displays it; the upload page asks for it.
+service stops. The touchscreen displays it; the remote page asks for it.
 
 Wire: 127.0.0.1:6683 (nginx forwards /upload/ → here).
 
@@ -266,7 +266,7 @@ INDEX_HTML_TEMPLATE = """\
     margin: 0; padding: 0; min-height: 100vh;
   }}
   body {{ padding: 22px 18px 60px; max-width: 880px; margin: 0 auto; }}
-  h1 {{ font-size: 28px; letter-spacing: -0.01em; margin: 0 0 4px; font-weight: 800; }}
+  h1 {{ font-size: 28px; letter-spacing: 0; margin: 0 0 4px; font-weight: 800; }}
   .sub {{ color: var(--ink2); margin-bottom: 20px; }}
   .pill {{
     display: inline-block; padding: 2px 10px; border-radius: 999px;
@@ -364,15 +364,147 @@ INDEX_HTML_TEMPLATE = """\
     letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink2);
     margin-left: 8px;
   }}
+
+  .remote-grid {{
+    display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(220px, 0.75fr);
+    gap: 14px;
+  }}
+  @media (max-width: 720px) {{
+    .remote-grid {{ grid-template-columns: 1fr; }}
+  }}
+  .now-title {{
+    font-size: clamp(26px, 7vw, 54px); line-height: 0.98;
+    font-weight: 850; letter-spacing: 0;
+    overflow-wrap: anywhere;
+  }}
+  .now-sub {{ color: var(--ink2); margin-top: 8px; font-size: 15px; }}
+  .button-row {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+  .transport {{
+    min-width: 48px; height: 48px; padding: 0 16px; border-radius: 999px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }}
+  .transport.primary {{ min-width: 64px; background: var(--accent2); }}
+  .remote-pill {{
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border: 1px solid var(--rule); border-radius: 999px;
+    color: var(--ink2); font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.12em; text-transform: uppercase;
+  }}
+  .dot {{
+    width: 9px; height: 9px; border-radius: 99px; background: var(--accent);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent);
+  }}
+  .range {{
+    width: 100%; accent-color: var(--accent); min-height: 42px;
+  }}
+  .split {{
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 0.95fr);
+    gap: 14px;
+  }}
+  @media (max-width: 760px) {{
+    .split {{ grid-template-columns: 1fr; }}
+  }}
+  .mini-list {{
+    border: 1px solid var(--rule); border-radius: 12px;
+    overflow: hidden; background: color-mix(in srgb, var(--panel) 76%, var(--bg));
+  }}
+  .mini-list .row {{
+    display: grid; grid-template-columns: 24px minmax(0, 1fr) minmax(80px, 0.8fr) auto;
+  }}
+  .mini-list .row .name, .mini-list .row .meta {{
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }}
+  .mini-list-scroll {{ max-height: 310px; overflow: auto; }}
+  .mini-empty {{
+    padding: 18px; color: var(--ink2); font-family: var(--mono);
+    font-size: 12px; letter-spacing: 0.05em;
+  }}
+  .row button.inline {{
+    min-height: 34px; padding: 8px 10px; border-radius: 8px;
+    font-size: 12px; flex-shrink: 0;
+  }}
 </style>
 
 <h1>Boombox <span class=skin-tag>{skin_name}</span></h1>
-<div class="sub">Drop tracks onto the boombox, or grab anything from its library.</div>
+<div class="sub">Control playback, build playlists, drop tracks, or grab anything from its library.</div>
 
 <div id="auth-card" class=card hidden>
   <label for=pin>4-digit PIN (shown on the touchscreen)</label>
   <input id=pin type=password inputmode=numeric autocomplete=one-time-code maxlength=4 placeholder="••••">
   <div class=err id=auth-err></div>
+</div>
+
+<div id=remote-card class=card hidden>
+  <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;margin-bottom:14px;">
+    <label style="margin:0;">Remote</label>
+    <span class=remote-pill><span class=dot></span><span id=remote-source>loading</span></span>
+  </div>
+  <div class=remote-grid>
+    <div>
+      <div class=now-title id=remote-title>—</div>
+      <div class=now-sub id=remote-sub>Waiting for Mopidy…</div>
+      <div class=button-row style="margin-top:18px;">
+        <button class=transport id=btn-prev type=button>‹‹</button>
+        <button class="transport primary" id=btn-toggle type=button>▶</button>
+        <button class=transport id=btn-next type=button>››</button>
+        <button class=transport id=btn-stop type=button>STOP</button>
+        <button class=ghost id=btn-add-current type=button>Add to playlist draft</button>
+      </div>
+    </div>
+    <div>
+      <label>System volume <span id=remote-vol-label class=pill>—</span></label>
+      <input id=remote-volume class=range type=range min=0 max=100 value=50>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px;">
+        <div class=remote-pill>Queue · <span id=remote-queue>0</span></div>
+        <div class=remote-pill>Status · <span id=remote-state>—</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id=playlist-card class=card hidden>
+  <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;margin-bottom:14px;">
+    <label style="margin:0;">Playlist studio</label>
+    <span class=pill id=builder-count>0 tracks</span>
+  </div>
+  <div class=split>
+    <div>
+      <label for=pl-search>Find tracks</label>
+      <input id=pl-search type=text placeholder="artist, album, or song">
+      <div class=mini-list style="margin-top:10px;">
+        <div id=pl-results class=mini-list-scroll>
+          <div class=mini-empty>Search your library to add tracks.</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+        <button class=ghost id=btn-load-current-queue type=button>Use current queue</button>
+        <button class=ghost id=btn-clear-builder type=button>Clear draft</button>
+      </div>
+    </div>
+    <div>
+      <label for=pl-name>Draft playlist name</label>
+      <input id=pl-name type=text placeholder="Road trip, garage night, Saturday…">
+      <div class=mini-list style="margin-top:10px;">
+        <div id=pl-builder class=mini-list-scroll>
+          <div class=mini-empty>No tracks in the draft yet.</div>
+        </div>
+      </div>
+      <div class=button-row style="margin-top:10px;">
+        <button id=btn-save-playlist type=button>Save playlist</button>
+        <button class=ghost id=btn-play-draft type=button>Play draft</button>
+      </div>
+      <div class=ok id=pl-ok></div>
+      <div class=err id=pl-err></div>
+    </div>
+  </div>
+  <div style="margin-top:16px;">
+    <label>Saved playlists</label>
+    <div class=mini-list>
+      <div id=playlist-list class=mini-list-scroll>
+        <div class=mini-empty>Loading playlists…</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id=upload-card class=card hidden>
@@ -399,12 +531,275 @@ let authed = false;
 let cwd = "";        // current relative path inside MUSIC_ROOT
 let entries = [];    // last browse() result
 let filterText = "";
+let rpcId = 1;
+let remoteExternal = false;
+let remoteState = "stopped";
+let currentTrack = null;
+let playlistDraft = [];
+let remoteTimer = null;
 
 function show(authedNow) {{
   authed = authedNow;
   $('auth-card').hidden = authedNow;
+  $('remote-card').hidden = !authedNow;
+  $('playlist-card').hidden = !authedNow;
   $('upload-card').hidden = !authedNow;
   $('lib-card').hidden = !authedNow;
+}}
+
+async function rpc(method, params = {{}}) {{
+  const r = await fetch('/mopidy/rpc', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ jsonrpc: '2.0', id: rpcId++, method, params }}),
+  }});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
+  return j.result;
+}}
+
+function artistText(track) {{
+  return (track?.artists || []).map(a => a?.name).filter(Boolean).join(', ');
+}}
+
+function trackLabel(track) {{
+  return {{
+    title: track?.name || track?.title || track?.uri || 'Untitled',
+    artist: artistText(track) || track?.artist || '',
+    album: track?.album?.name || track?.album || '',
+  }};
+}}
+
+function mmss(ms) {{
+  const sec = Math.max(0, Math.floor((ms || 0) / 1000));
+  return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+}}
+
+async function refreshRemote() {{
+  try {{
+    const [track, state, pos, queue, ext] = await Promise.all([
+      rpc('core.playback.get_current_track').catch(() => null),
+      rpc('core.playback.get_state').catch(() => 'stopped'),
+      rpc('core.playback.get_time_position').catch(() => 0),
+      rpc('core.tracklist.get_tl_tracks').catch(() => []),
+      fetch('/api/state', {{ cache: 'no-store' }}).then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    remoteExternal = !!(ext?.source && (ext.status === 'playing' || ext.status === 'paused'));
+    remoteState = remoteExternal ? ext.status : state;
+    currentTrack = remoteExternal ? null : track;
+    const label = remoteExternal
+      ? {{
+          title: ext.track?.title || ext.label || ext.source || 'External source',
+          artist: ext.track?.artist || ext.label || '',
+          album: ext.track?.album || '',
+        }}
+      : trackLabel(track);
+    $('remote-title').textContent = label.title || '—';
+    $('remote-sub').textContent = [
+      label.artist,
+      label.album,
+      remoteExternal ? 'external source' : mmss(pos),
+    ].filter(Boolean).join(' · ') || 'No track loaded';
+    $('remote-source').textContent = remoteExternal ? (ext.label || ext.source || 'external') : 'library';
+    $('remote-state').textContent = remoteState;
+    $('remote-queue').textContent = String(queue?.length || 0);
+    $('btn-toggle').textContent = remoteState === 'playing' ? '❚❚' : '▶';
+    const vol = await fetch('/api/volume', {{ cache: 'no-store' }}).then(r => r.ok ? r.json() : null).catch(() => null);
+    if (vol && typeof vol.volume === 'number') {{
+      const pct = Math.round(Math.max(0, Math.min(1.5, vol.volume)) * 100);
+      $('remote-volume').value = String(Math.min(100, pct));
+      $('remote-vol-label').textContent = pct + '%';
+    }}
+  }} catch (err) {{
+    $('remote-title').textContent = 'Offline';
+    $('remote-sub').textContent = String(err.message || err);
+  }}
+}}
+
+function startRemote() {{
+  refreshRemote();
+  loadPlaylists();
+  if (!remoteTimer) remoteTimer = setInterval(refreshRemote, 2500);
+}}
+
+async function remoteAction(action) {{
+  try {{
+    if (remoteExternal) {{
+      await fetch('/api/control/' + action, {{ method: 'POST' }});
+    }} else if (action === 'toggle') {{
+      await rpc(remoteState === 'playing' ? 'core.playback.pause' : 'core.playback.play');
+    }} else if (action === 'next') {{
+      await rpc('core.playback.next');
+    }} else if (action === 'previous') {{
+      await rpc('core.playback.previous');
+    }} else if (action === 'stop') {{
+      await rpc('core.playback.stop');
+    }}
+  }} finally {{
+    setTimeout(refreshRemote, 250);
+  }}
+}}
+
+$('btn-prev').addEventListener('click', () => remoteAction('previous'));
+$('btn-toggle').addEventListener('click', () => remoteAction('toggle'));
+$('btn-next').addEventListener('click', () => remoteAction('next'));
+$('btn-stop').addEventListener('click', () => remoteAction('stop'));
+$('remote-volume').addEventListener('input', e => {{
+  const pct = Number(e.target.value) || 0;
+  $('remote-vol-label').textContent = pct + '%';
+  fetch('/api/volume', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ volume: pct / 100 }}),
+  }}).catch(() => {{}});
+}});
+
+function addTrackToDraft(track) {{
+  if (!track?.uri) return;
+  playlistDraft.push(track);
+  renderDraft();
+}}
+
+$('btn-add-current').addEventListener('click', () => {{
+  if (currentTrack) addTrackToDraft(currentTrack);
+}});
+
+function renderTrackRow(track, actionLabel, action) {{
+  const label = trackLabel(track);
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = '<div class=icon>♪</div><div class=name></div><div class=meta></div><button class=inline type=button></button>';
+  row.querySelector('.name').textContent = label.title;
+  row.querySelector('.meta').textContent = [label.artist, label.album].filter(Boolean).join(' · ');
+  const btn = row.querySelector('button');
+  btn.textContent = actionLabel;
+  btn.onclick = action;
+  return row;
+}}
+
+function renderDraft() {{
+  $('builder-count').textContent = `${{playlistDraft.length}} track${{playlistDraft.length === 1 ? '' : 's'}}`;
+  const root = $('pl-builder');
+  root.innerHTML = '';
+  if (!playlistDraft.length) {{
+    root.innerHTML = '<div class=mini-empty>No tracks in the draft yet.</div>';
+    return;
+  }}
+  playlistDraft.forEach((track, idx) => {{
+    const row = renderTrackRow(track, 'Remove', () => {{
+      playlistDraft.splice(idx, 1);
+      renderDraft();
+    }});
+    const icon = row.querySelector('.icon');
+    icon.textContent = String(idx + 1).padStart(2, '0');
+    root.appendChild(row);
+  }});
+}}
+
+let searchTimer = null;
+$('pl-search').addEventListener('input', e => {{
+  const q = e.target.value.trim();
+  clearTimeout(searchTimer);
+  if (!q) {{
+    $('pl-results').innerHTML = '<div class=mini-empty>Search your library to add tracks.</div>';
+    return;
+  }}
+  searchTimer = setTimeout(() => searchPlaylistTracks(q), 260);
+}});
+
+async function searchPlaylistTracks(q) {{
+  const root = $('pl-results');
+  root.innerHTML = '<div class=mini-empty>Searching…</div>';
+  try {{
+    const results = await rpc('core.library.search', {{ query: {{ any: [q] }} }});
+    const tracks = (results || []).flatMap(r => r.tracks || []).slice(0, 60);
+    root.innerHTML = '';
+    if (!tracks.length) {{
+      root.innerHTML = '<div class=mini-empty>No matching tracks.</div>';
+      return;
+    }}
+    tracks.forEach(track => root.appendChild(renderTrackRow(track, 'Add', () => addTrackToDraft(track))));
+  }} catch (err) {{
+    root.innerHTML = '<div class=mini-empty>Search failed.</div>';
+  }}
+}}
+
+$('btn-clear-builder').addEventListener('click', () => {{
+  playlistDraft = [];
+  renderDraft();
+}});
+
+$('btn-load-current-queue').addEventListener('click', async () => {{
+  try {{
+    const q = await rpc('core.tracklist.get_tl_tracks');
+    playlistDraft = (q || []).map(t => t.track).filter(Boolean);
+    renderDraft();
+  }} catch {{
+    $('pl-err').textContent = 'Could not read current queue.';
+  }}
+}});
+
+$('btn-play-draft').addEventListener('click', async () => {{
+  if (!playlistDraft.length) return;
+  await playUris(playlistDraft.map(t => t.uri));
+}});
+
+async function playUris(uris) {{
+  await rpc('core.tracklist.clear');
+  await rpc('core.tracklist.add', {{ uris }});
+  await rpc('core.playback.play');
+  refreshRemote();
+}}
+
+$('btn-save-playlist').addEventListener('click', async () => {{
+  $('pl-ok').textContent = '';
+  $('pl-err').textContent = '';
+  const name = $('pl-name').value.trim();
+  if (!name) {{ $('pl-err').textContent = 'Name the playlist first.'; return; }}
+  if (!playlistDraft.length) {{ $('pl-err').textContent = 'Add at least one track.'; return; }}
+  try {{
+    let playlist = await rpc('core.playlists.create', {{ name, uri_scheme: 'm3u' }});
+    if (!playlist) throw new Error('Mopidy did not create a playlist.');
+    playlist.tracks = playlistDraft;
+    const saved = await rpc('core.playlists.save', {{ playlist }});
+    if (!saved) throw new Error('Mopidy did not save the playlist.');
+    await rpc('core.playlists.refresh', {{ uri_scheme: 'm3u' }}).catch(() => {{}});
+    $('pl-ok').textContent = `Saved "${{saved.name || name}}" with ${{playlistDraft.length}} tracks.`;
+    $('pl-name').value = '';
+    playlistDraft = [];
+    renderDraft();
+    loadPlaylists();
+  }} catch (err) {{
+    $('pl-err').textContent = 'Save failed: ' + (err.message || err);
+  }}
+}});
+
+async function loadPlaylists() {{
+  const root = $('playlist-list');
+  try {{
+    const refs = await rpc('core.playlists.as_list');
+    root.innerHTML = '';
+    if (!refs?.length) {{
+      root.innerHTML = '<div class=mini-empty>No saved playlists yet.</div>';
+      return;
+    }}
+    refs.forEach(ref => {{
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = '<div class=icon>▸</div><div class=name></div><div class=meta></div><button class=inline type=button>Play</button>';
+      row.querySelector('.name').textContent = ref.name || ref.uri;
+      row.querySelector('.meta').textContent = ref.uri || '';
+      row.querySelector('button').onclick = async () => {{
+        const items = await rpc('core.playlists.get_items', {{ uri: ref.uri }});
+        const uris = (items || []).map(x => x.uri).filter(Boolean);
+        if (uris.length) await playUris(uris);
+      }};
+      root.appendChild(row);
+    }});
+  }} catch {{
+    root.innerHTML = '<div class=mini-empty>Could not load playlists.</div>';
+  }}
 }}
 
 async function tryPin(p) {{
@@ -418,7 +813,7 @@ $('pin').addEventListener('input', async (e) => {{
   const v = e.target.value.replace(/\\D/g, '').slice(0, 4);
   e.target.value = v;
   if (v.length === 4) {{
-    if (await tryPin(v)) {{ show(true); loadDir(""); }}
+    if (await tryPin(v)) {{ show(true); loadDir(""); startRemote(); }}
     else {{ $('auth-err').textContent = 'Wrong PIN.'; e.target.value = ''; }}
   }}
 }});
@@ -561,7 +956,7 @@ function renderEntries() {{
 // Boot. If cookie is already set, browse will succeed.
 (async () => {{
   const r = await fetch('browse?path=', {{ credentials: 'include' }});
-  if (r.ok) {{ show(true); const j = await r.json(); cwd = j.path; entries = j.entries; renderCrumbs(); renderEntries(); }}
+  if (r.ok) {{ show(true); const j = await r.json(); cwd = j.path; entries = j.entries; renderCrumbs(); renderEntries(); startRemote(); }}
   else {{ show(false); }}
 }})();
 </script>

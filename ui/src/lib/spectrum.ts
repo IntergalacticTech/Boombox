@@ -37,7 +37,7 @@ const ZERO: SpectrumFrame = {
 
 let _ws: WebSocket | null = null;
 let _frame: SpectrumFrame = ZERO;
-let _subs: Set<(f: SpectrumFrame) => void> = new Set();
+const _subs: Set<(f: SpectrumFrame) => void> = new Set();
 let _lastFrameAt = 0;
 let _liveTimer: ReturnType<typeof setInterval> | null = null;
 

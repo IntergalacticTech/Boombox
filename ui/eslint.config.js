@@ -18,5 +18,14 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // React Compiler is not enabled for this kiosk app. These compiler-era
+      // rules reject common async data-loading patterns we intentionally use.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/purity': 'off',
+      // shared.tsx intentionally exports demo constants and small helpers used
+      // by both runtime skins and design-derived components.
+      'react-refresh/only-export-components': 'off',
+    },
   },
 ])

@@ -67,9 +67,14 @@ exposes:
 | `GET  /api/info` | UI: settings drawer (host, ip, uptime) |
 | `GET  /api/sinks`, `POST /api/sinks/default` | UI: audio sink picker |
 | `GET  /api/karaoke`, `POST /api/karaoke/{on,off}` | UI: karaoke mode toggle |
+| `POST /api/bluetooth/pair` | UI: temporary Bluetooth discoverable/pairable mode |
 | `GET  /api/lyrics?artist=&title=` | UI: lyrics drawer |
 | `GET  /api/art?artist=&album=&track=` | UI: album-art lookup with cache |
 | `POST /api/mopidy/restart` | UI: settings → restart mopidy |
+| `GET/POST /api/theme` | Upload/remote page: match active skin palette |
+| `GET/POST /api/upload/*` | UI: toggle PIN-gated LAN remote/upload service |
+| `GET /api/usb/devices`, `POST /api/usb/copy` | UI: USB device list and pull-to-library copy |
+| `POST /api/library/scan` | UI/upload service: trigger Mopidy local scan |
 
 - **Code:** [`services/boombox-state.py`](../services/boombox-state.py)
 - **Logs:** `journalctl --user -u boombox-state -f`
@@ -153,11 +158,11 @@ Chromium and returns 404 now.) Closes duplicate tabs.
 - **Env knobs:** `BOOMBOX_KIOSK_CDP` (DevTools URL), `BOOMBOX_KIOSK_HOME`
   (target URL), `BOOMBOX_KIOSK_POLL` (seconds).
 
-### `boombox-uploader` — LAN file drop (off by default)
+### `boombox-uploader` — LAN remote + file drop (off by default)
 
 Toggled from the touchscreen Settings drawer. When on, hosts a PIN-gated
-upload/download page at `/upload/` (proxied to `127.0.0.1:6683`). PIN is
-regenerated on every start and cleared on stop.
+remote-control, playlist, upload, and download page at `/upload/` (proxied to
+`127.0.0.1:6683`). PIN is regenerated on every start and cleared on stop.
 
 - **Code:** [`services/boombox-uploader.py`](../services/boombox-uploader.py)
 - **Unit:** `install/systemd/user/boombox-uploader.service` —

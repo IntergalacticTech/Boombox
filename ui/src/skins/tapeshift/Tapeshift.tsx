@@ -1,7 +1,7 @@
 // TAPE//SHIFT — adapted from skins/tapeshift/source.jsx
 // Horizontal "reel" of sources/tracks · cassette-as-data without drawing one.
 import React from "react";
-import { Icon, useTicker, vu, mmss, TRACKS } from "../../lib/shared";
+import { Icon, useTicker, vu, mmss } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
 import { ChromeSourceBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
 import { SeekableBar } from "../../lib/SeekableBar";
@@ -171,14 +171,20 @@ export type TapeshiftAudioProps = {
   onToggleRepeat?: () => void;
 };
 
-export function TapeshiftAudio({ track, state, elapsed, shuffle, repeat, chrome, onToggle, onNext, onPrev, onToggleShuffle, onToggleRepeat, onSeek }: TapeshiftAudioProps & { chrome?: ChromeApi; onSeek?: (sec: number) => void }) {
+export function TapeshiftAudio({ track, state, elapsed, volume, shuffle, repeat, chrome, onToggle, onNext, onPrev, onToggleShuffle, onToggleRepeat, onSeek }: TapeshiftAudioProps & { chrome?: ChromeApi; onSeek?: (sec: number) => void }) {
   const playing = state === "playing";
   const tr = track ?? { title: "—", artist: "—", album: "—", len: 0, time: "0:00" };
   const len = tr.len > 0 ? tr.len : 1;
   const pct = Math.min(1, elapsed / len);
-  // Reel uses the demo TRACKS as visual queue context. Active card: 3 (mid).
-  const reelItems: ReelItem[] = TRACKS.map(d => ({ title: d.title, sub: `${d.artist} · ${d.time}` }));
-  const idx = 3;
+  const sourceLabel = chrome?.sourceLabel ?? "IDLE";
+  const queueCount = chrome?.queueCount ?? 0;
+  const reelItems: ReelItem[] = [
+    { title: tr.title, sub: `${tr.artist} · ${tr.time}` },
+    { title: sourceLabel, sub: chrome?.sourceLive ? "external source live" : "selected source" },
+    { title: "Queue", sub: `${queueCount} track${queueCount === 1 ? "" : "s"}` },
+    { title: playing ? "Playing" : state === "paused" ? "Paused" : "Stopped", sub: "transport state" },
+  ];
+  const idx = 0;
   const tsSpec = useSpectrum();
   void useTicker;
 
@@ -187,7 +193,7 @@ export function TapeshiftAudio({ track, state, elapsed, shuffle, repeat, chrome,
       <div style={{padding: "22px 24px 0", display: "grid", gridTemplateColumns: "1fr 360px", gap: 24}}>
         <div>
           <div style={{fontFamily: TS.mono, fontSize: 11, letterSpacing: "0.28em", color: TS.ember, marginBottom: 8}}>
-            ▶ NOW PLAYING · LOCAL
+            ▶ NOW PLAYING · {sourceLabel}
           </div>
           <div style={{
             fontFamily: TS.font, fontSize: 54, fontWeight: 700, letterSpacing: "-0.03em", lineHeight: 1,
@@ -263,9 +269,9 @@ export function TapeshiftAudio({ track, state, elapsed, shuffle, repeat, chrome,
         <TsBtn w={88} h={88} active={shuffle} onClick={onToggleShuffle}><Icon name="shuffle" size={22} stroke={TS.ink}/></TsBtn>
         <TsBtn w={88} h={88} active={repeat} onClick={onToggleRepeat}><Icon name="repeat" size={22} stroke={TS.ink}/></TsBtn>
         <div style={{flex: 1}}></div>
-        <TsBtn w={88} h={88}><Icon name="queue" size={22} stroke={TS.ink}/></TsBtn>
-        <TsBtn w={88} h={88}><Icon name="search" size={22} stroke={TS.ink}/></TsBtn>
-        <TsBtn w={120} h={88}>VOL · {/* live volume display */}<span style={{color: TS.ember}}>62</span></TsBtn>
+        <TsBtn w={88} h={88} onClick={chrome?.onOpenQueue}><Icon name="queue" size={22} stroke={TS.ink}/></TsBtn>
+        <TsBtn w={88} h={88} onClick={chrome?.onOpenSource}><Icon name="search" size={22} stroke={TS.ink}/></TsBtn>
+        <TsBtn w={120} h={88}>VOL · <span style={{color: TS.ember}}>{volume ?? "—"}</span></TsBtn>
       </div>
     </TsChrome>
   );

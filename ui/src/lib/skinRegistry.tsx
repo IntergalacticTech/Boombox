@@ -50,7 +50,7 @@ export type SkinAudioProps = {
 };
 
 /** Public palette every skin exposes for chrome / external surfaces (the
- * upload page, future remote control, etc.) so they can match visually. */
+ * LAN remote/upload page, etc.) so they can match visually. */
 export type SkinTheme = {
   bg:       string;   // page background
   panel:    string;   // elevated surface (cards, drawers)

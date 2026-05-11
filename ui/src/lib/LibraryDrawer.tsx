@@ -57,6 +57,7 @@ export function LibraryDrawer({ onClose }: Props) {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const here = stack.length === 0 ? null : stack[stack.length - 1];
+  const hereUri = here?.uri ?? null;
   const searchActive = query.trim().length > 0;
 
   // Debounced search. When the query is non-empty, we override the directory
@@ -87,12 +88,12 @@ export function LibraryDrawer({ onClose }: Props) {
       setLoading(true);
       setError(null);
       try {
-        if (!here) {
+        if (!hereUri) {
           setItems(ROOTS);
           setTracks(null);
           setHistory(null);
           setRadio(null);
-        } else if (here.uri === "boombox:favorites") {
+        } else if (hereUri === "boombox:favorites") {
           // Resolve favourite track URIs to full metadata for thumbs/labels.
           const uris = getFavorites();
           setItems([]);
@@ -110,12 +111,12 @@ export function LibraryDrawer({ onClose }: Props) {
               setTracks([]);
             }
           }
-        } else if (here.uri === "boombox:radio") {
+        } else if (hereUri === "boombox:radio") {
           setRadio(RADIO_STATIONS);
           setItems([]);
           setTracks(null);
           setHistory(null);
-        } else if (here.uri === "boombox:recent") {
+        } else if (hereUri === "boombox:recent") {
           // Special: fetch Mopidy's playback history. We resolve full metadata
           // for each unique URI so rows show artist + album for art lookup.
           const hist = await getHistory();
@@ -140,7 +141,7 @@ export function LibraryDrawer({ onClose }: Props) {
             }
           }
         } else {
-          const refs = await browse(here.uri);
+          const refs = await browse(hereUri);
           if (cancelled) return;
           setItems(refs);
           setHistory(null);
@@ -171,7 +172,7 @@ export function LibraryDrawer({ onClose }: Props) {
     load();
     if (listRef.current) listRef.current.scrollTop = 0;
     return () => { cancelled = true; };
-  }, [here?.uri, searchActive]);
+  }, [hereUri, searchActive]);
 
   // Esc closes; backspace navigates up.
   useEffect(() => {

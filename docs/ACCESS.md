@@ -1,23 +1,30 @@
-# Access — upload mode and USB drives
+# Access — web remote, upload mode, and USB drives
 
-How guests get music *onto* the boombox, and how a plugged-in USB stick
-joins the library automatically.
+How guests control the boombox from a larger screen, get music *onto* the
+boombox, and how a plugged-in USB stick joins the library automatically.
 
 ---
 
-## Upload mode
+## Web remote / upload mode
 
-The boombox runs a tiny upload web app on its LAN, **off by default**.
-You toggle it from the touchscreen Settings drawer; while it's on, the
-touchscreen displays the URL and a 4-digit PIN. Anyone on the same Wi-Fi
-opens the URL on a phone or laptop, types the PIN, and can drop audio
-files or download anything in the library.
+The boombox runs a PIN-gated web app on its LAN, **off by default**. You
+toggle it from the touchscreen Settings drawer; while it's on, the touchscreen
+displays the URL and a 4-digit PIN. Anyone on the same Wi-Fi opens the URL on
+a phone or laptop and gets a larger remote UI.
+
+The remote UI can:
+
+- control Mopidy playback and system volume
+- create M3U playlists from library search results or the current queue
+- play saved playlists
+- upload audio files
+- browse/download the library, including symlinked USB drives
 
 ```
        Touchscreen                         Phone / laptop on the LAN
    ┌──────────────────┐                ┌────────────────────────┐
-   │  Settings →      │                │  Boombox · Drop        │
-   │  Upload mode     │   nginx :80    │  ┌────────────────┐    │
+   │  Settings →      │                │  Boombox · Remote      │
+   │  Remote mode     │   nginx :80    │  ┌────────────────┐    │
    │  ┌──────────┐    │ ──────────────▶│  │ drop files here│    │
    │  │ TURN ON  │    │   /upload/     │  └────────────────┘    │
    │  └──────────┘    │                │  Library [filter…]     │
@@ -62,11 +69,14 @@ After every successful upload, the uploader fires a best-effort
 `POST /api/library/scan` so Mopidy picks up the new tracks within a few
 seconds.
 
-### What the upload page can do
+### What the remote page can do
 
 | Action | How |
 |--------|-----|
 | Authenticate | Type the 4-digit PIN. The page sets a 12-hour cookie; subsequent visits skip the PIN unless the boombox restarts. |
+| Remote control | Play/pause/next/previous/stop, see source/status/queue count, and set system volume. |
+| Create playlists | Search the library, add tracks to a draft, import the current queue, save via Mopidy's bundled M3U playlist backend. |
+| Play playlists | Saved playlists are listed with a one-tap play action. |
 | Upload | Drag-and-drop, or tap "choose files". Uploads stream with a progress bar; failures surface inline. |
 | Browse the library | Filter box at the bottom; lists every audio file under `~/Music/`, including symlinked USB drives. |
 | Download | Each row has a `download` link. Files are streamed via aiohttp's `FileResponse`. |
@@ -91,6 +101,22 @@ for a LAN appliance. Specifically:
 
 If you ever want to expose this to the internet (don't), wrap it in
 something with rate-limiting and TLS.
+
+### Remote-first workflow ideas
+
+These fit the laptop/tablet web UI better than the 5" touchscreen:
+
+- **Playlist studio:** drag/reorder drafts, edit existing playlists, import
+  current queue, duplicate playlists, and bulk-add search results.
+- **Queue surgery:** multi-select queue rows, reorder blocks, save queue as
+  playlist, clear played tracks.
+- **Library maintenance:** batch rename uploaded files, delete duplicates,
+  rescan by folder, show files added today.
+- **Party mode:** guest request queue with approve/reject controls on the
+  touchscreen.
+- **Set builder:** timed blocks for events: warmup, peak, cooldown, karaoke.
+- **Diagnostics:** service health, recent logs, audio sink graph, library scan
+  progress, storage usage, and temperature history.
 
 ---
 
@@ -134,12 +160,12 @@ you want the push direction to work.)
 
 ### Pull and push from the touchscreen
 
-The Settings drawer shows every mounted drive with two bulk actions:
+The Settings drawer shows mounted drives and supports:
 
 - **PULL → LIBRARY** — copies every audio file on the drive into
   `~/Music/from-usb/<drive-id>/` and triggers a scan.
-- **PUSH → DRIVE** — copies every audio file in the local library to
-  `<drive>/from-boombox/`.
+- **PUSH → DRIVE** — planned, but disabled in the UI until the RW remount
+  flow is implemented.
 
 Both end-to-end loop through `POST /api/usb/copy`:
 
@@ -184,7 +210,8 @@ File browsers ignore it; Mopidy doesn't.
 | `/api/library/scan` | POST | trigger a Mopidy local scan |
 | `/upload/` | GET | the public upload page (proxied) |
 | `/upload/upload` | POST | multipart upload (PIN-gated) |
-| `/upload/list` | GET | library JSON (PIN-gated) |
+| `/upload/browse?path=` | GET | browsable library JSON (PIN-gated) |
+| `/upload/list` | GET | deprecated alias for root browse (PIN-gated) |
 | `/upload/download/{path}` | GET | file download (PIN-gated) |
 
 ---
@@ -193,7 +220,7 @@ File browsers ignore it; Mopidy doesn't.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Upload toggle says "TURN ON" but nothing happens after | `boombox-uploader.service` failed to start | `journalctl --user -u boombox-uploader -n 50` — usually a missing dep in the venv |
+| Remote toggle says "TURN ON" but nothing happens after | `boombox-uploader.service` failed to start | `journalctl --user -u boombox-uploader -n 50` — usually a missing dep in the venv |
 | URL field shows "(no LAN IP yet)" | `hostname -I` returned nothing | Wi-Fi not connected; or you're on link-local only |
 | PIN keeps regenerating | Service is restart-looping | Check `systemctl --user status boombox-uploader` |
 | USB drive plugged in, nothing happens | udev didn't match (rule not loaded?) | `sudo udevadm control --reload-rules`, then re-plug the drive |

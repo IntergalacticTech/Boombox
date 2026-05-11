@@ -829,7 +829,7 @@ async def library_scan(_request: web.Request) -> web.Response:
 
 # ---------------------------------------------------------------------------
 # Theme — the kiosk SPA POSTs the active skin's palette here so external
-# surfaces (the LAN upload page) can render in matching colors.
+# surfaces (the LAN remote/upload page) can render in matching colors.
 # ---------------------------------------------------------------------------
 
 THEME_FILE = Path(os.environ.get(

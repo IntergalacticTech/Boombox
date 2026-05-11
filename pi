@@ -5,7 +5,7 @@
 set -euo pipefail
 
 HOST="${BOOMBOX_HOST:-boombox}"          # ssh alias defined in ~/.ssh/config
-KIOSK_URL_DEFAULT="${KIOSK_URL:-http://localhost:6680/iris}"
+KIOSK_URL_DEFAULT="${KIOSK_URL:-http://localhost/}"
 DEBUG_PORT="${BOOMBOX_DEBUG_PORT:-9222}"
 SHOTS_DIR="${BOOMBOX_SHOTS_DIR:-$(cd "$(dirname "$0")" && pwd)/screenshots}"
 WAYLAND_ENV='XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0'
@@ -62,25 +62,49 @@ case "$cmd" in
   goto)
     # Navigate the kiosk to a URL. Usage: ./pi goto <url>
     url="${1:?usage: pi goto <url>}"
-    ensure_tunnel
-    tid="$(devtools_target_id)"
-    [[ -z "$tid" ]] && { echo "no devtools page found" >&2; exit 1; }
-    curl -s "http://localhost:$DEBUG_PORT/json/page/$tid/navigate" \
-      -d "{\"url\":\"$url\"}" >/dev/null || true
-    # Fallback: use agent-browser if curl/json route is wrong on this chromium build
-    /opt/homebrew/bin/agent-browser connect "$DEBUG_PORT" >/dev/null 2>&1 || true
-    /opt/homebrew/bin/agent-browser open "$url"
+    ssh "$HOST" /opt/boombox/.venv/bin/python - "$url" "$DEBUG_PORT" <<'REMOTE'
+import asyncio
+import json
+import sys
+import urllib.request
+
+import websockets
+
+url = sys.argv[1]
+port = sys.argv[2]
+
+async def main():
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/json", timeout=3) as r:
+        pages = [p for p in json.loads(r.read()) if p.get("type") == "page"]
+    if not pages:
+        raise SystemExit("no devtools page found")
+    ws_url = pages[0].get("webSocketDebuggerUrl")
+    if not ws_url:
+        raise SystemExit("devtools page has no websocket url")
+    async with websockets.connect(ws_url, max_size=2**24, open_timeout=3) as ws:
+        await ws.send(json.dumps({
+            "id": 1,
+            "method": "Page.navigate",
+            "params": {"url": url},
+        }))
+        await asyncio.wait_for(ws.recv(), timeout=3)
+
+asyncio.run(main())
+REMOTE
+    echo "navigated kiosk to $url"
     ;;
 
   browse)
     # Connect agent-browser to the kiosk. Usage: ./pi browse [agent-browser args...]
     ensure_tunnel
-    /opt/homebrew/bin/agent-browser connect "$DEBUG_PORT" >/dev/null
+    AGENT_BROWSER="${AGENT_BROWSER:-$(command -v agent-browser || true)}"
+    [[ -z "$AGENT_BROWSER" ]] && { echo "agent-browser not found on PATH" >&2; exit 1; }
+    "$AGENT_BROWSER" connect "$DEBUG_PORT" >/dev/null
     if [[ $# -eq 0 ]]; then
       echo "tunnel up on localhost:$DEBUG_PORT — agent-browser is connected."
       echo "try: agent-browser snapshot   |   agent-browser screenshot"
     else
-      exec /opt/homebrew/bin/agent-browser "$@"
+      exec "$AGENT_BROWSER" "$@"
     fi
     ;;
 
@@ -142,7 +166,7 @@ exec chromium --kiosk "$url" \\
   --remote-allow-origins=* \\
   --noerrdialogs --disable-session-crashed-bubble \\
   --overscroll-history-navigation=0 \\
-  --user-data-dir=/home/jwc/.config/chromium
+  --user-data-dir="$HOME/.config/chromium"
 EOF
 chmod +x /tmp/launch-kiosk.sh
 nohup setsid /tmp/launch-kiosk.sh </dev/null >/tmp/chromium.log 2>&1 &
@@ -169,7 +193,7 @@ REMOTE
   status)
     ssh "$HOST" '
       echo "=== services ==="
-      systemctl is-active mopidy nginx php8.4-fpm 2>&1 | paste <(echo -e "mopidy\nnginx\nphp-fpm") -
+      systemctl is-active mopidy nginx 2>&1 | paste <(echo -e "mopidy\nnginx") -
       echo
       echo "=== chromium ==="
       pgrep -af "chromium --kiosk" | head -1 || echo "  not running"
