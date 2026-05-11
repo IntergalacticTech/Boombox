@@ -335,6 +335,16 @@ mkdir -p "$HOME/.config/labwc"
 install -m 0644 "$SCRIPT_DIR/config/labwc-rc.xml" "$HOME/.config/labwc/rc.xml"
 install -m 0644 "$SCRIPT_DIR/config/labwc-autostart" "$HOME/.config/labwc/autostart"
 
+# Pi OS's rpd-labwc session sources /etc/xdg/labwc/autostart explicitly
+# (not the labwc lookup path), so the user override above isn't enough
+# to keep wf-panel-pi / pcmanfm-pi off the screen. Replace it system-
+# wide. We keep a .pi-os.orig copy in case anyone needs the desktop
+# session back.
+if [[ -f /etc/xdg/labwc/autostart && ! -f /etc/xdg/labwc/autostart.pi-os.orig ]]; then
+  sudo cp /etc/xdg/labwc/autostart /etc/xdg/labwc/autostart.pi-os.orig
+fi
+sudo install -m 0644 "$SCRIPT_DIR/config/labwc-autostart" /etc/xdg/labwc/autostart
+
 log "enabling system services"
 sudo systemctl enable mopidy
 sudo systemctl restart mopidy
