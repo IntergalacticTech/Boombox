@@ -238,23 +238,38 @@ def add_library(token: str) -> None:
     log(f"adding {LIBRARY_NAME!r} ({LIBRARY_COLLECTION_TYPE}) → {LIBRARY_PATH}")
     LIBRARY_PATH.mkdir(parents=True, exist_ok=True)
 
+    # Two-call dance: POST /Library/VirtualFolders creates the empty
+    # virtual folder, then POST /Library/VirtualFolders/Paths attaches
+    # the filesystem path. Doing both in one call (paths= query param
+    # plus PathInfos body) leaves Jellyfin's scanner with a registered
+    # library that has no scan path — silent dead-end.
     query = {
         "name": LIBRARY_NAME,
         "collectionType": LIBRARY_COLLECTION_TYPE,
-        "refreshLibrary": "true",
-        "paths": str(LIBRARY_PATH),
+        "refreshLibrary": "false",
     }
     body = {
         "LibraryOptions": {
             "EnableRealtimeMonitoring": True,
-            "EnableLUFSScan": False,
             "EnablePhotos": False,
-            "PathInfos": [{"Path": str(LIBRARY_PATH)}],
         }
     }
     code, raw = request("POST", "/Library/VirtualFolders", body=body, token=token, query=query)
     if code not in (200, 204):
-        raise RuntimeError(f"VirtualFolders failed: {code} {raw!r}")
+        raise RuntimeError(f"VirtualFolders create failed: {code} {raw!r}")
+
+    code, raw = request(
+        "POST", "/Library/VirtualFolders/Paths",
+        body={
+            "Name": LIBRARY_NAME,
+            "Path": str(LIBRARY_PATH),
+            "PathInfo": {"Path": str(LIBRARY_PATH)},
+            "RefreshLibrary": True,
+        },
+        token=token,
+    )
+    if code not in (200, 204):
+        raise RuntimeError(f"VirtualFolders/Paths failed: {code} {raw!r}")
 
 
 # ---------------------------------------------------------------------------
