@@ -51,6 +51,7 @@ sudo apt install -y \
   nginx apache2-utils samba \
   chromium unclutter grim wvkbd \
   libwayland-dev libxkbcommon-dev wayland-protocols pkg-config build-essential \
+  libpango1.0-dev libcairo2-dev scdoc \
   playerctl \
   pipewire pipewire-pulse wireplumber pulseaudio-utils \
   shairport-sync \
