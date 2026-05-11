@@ -12,7 +12,7 @@ Type=simple
 # -L 280 picks a comfortable key height for a 5–7" panel.
 # `--layer overlay` keeps the kiosk Chromium full-screen; the keyboard
 # floats above instead of resizing the page.
-ExecStart=/usr/bin/wvkbd-mobintl --hidden -L 280 --layer overlay
+ExecStart=/usr/bin/wvkbd-mobintl --hidden -H 280 -L 280
 Restart=on-failure
 RestartSec=3
 
