@@ -9,9 +9,12 @@ Type=simple
 # height. SIGUSR1 hides it, SIGUSR2 shows it. boombox-state's /api/osk
 # endpoints + the kiosk extension's focus listeners drive the toggle.
 #
-# -L 280 picks a comfortable key height for a 5–7" panel.
-# `--layer overlay` keeps the kiosk Chromium full-screen; the keyboard
-# floats above instead of resizing the page.
+# -H / -L give portrait / landscape key heights. Pi OS labwc doesn't
+# integrate systemd-user with the desktop session env, so we have to
+# point wvkbd at the Wayland socket explicitly — matches what the
+# kiosk service does.
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=WAYLAND_DISPLAY=wayland-0
 ExecStart=/usr/bin/wvkbd-mobintl --hidden -H 280 -L 280
 Restart=on-failure
 RestartSec=3
