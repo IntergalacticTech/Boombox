@@ -97,6 +97,29 @@ sudo systemctl start jellyfin
 /opt/boombox/install/install.sh    # re-runs the setup
 ```
 
+### File-naming requirements
+
+Jellyfin's `movies` collection (the default) only picks up files named
+**`Title (Year).ext`** — for example:
+
+- ✅ `Sintel (2010).mp4`
+- ✅ `Blade Runner 2049 (2017).mkv`
+- ❌ `sintel_trailer.mp4`  ← silently skipped, no entry in the library
+- ❌ `cool video.mp4`     ← skipped
+
+Files that don't match the pattern are scanned but get no movie entry.
+If you drop arbitrary files (USB downloads, family videos) and want them
+visible, either:
+
+1. Rename them locally before they reach `~/Videos/`, or
+2. From the Jellyfin admin UI, switch the library type from "Movies" to
+   "Mixed Content" and create subfolders like `Movies/` and `Home Videos/`
+   with appropriate content in each.
+
+For media that's deliberately not movie-shaped (TV episodes, music
+videos, etc.) it's better to add a *second* library of the right type
+than to coerce the Movies library into accepting everything.
+
 ### Adding more content paths
 
 The auto-created library is a single mixed-content folder at `~/Videos`.

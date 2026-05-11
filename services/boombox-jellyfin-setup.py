@@ -39,7 +39,7 @@ JF_KEY_FILE = Path(os.environ.get("BOOMBOX_JELLYFIN_KEY", "/etc/boombox/jellyfin
 
 # The boombox is a single-user appliance — one shared library is the goal.
 LIBRARY_NAME = os.environ.get("BOOMBOX_VIDEO_LIBRARY_NAME", "Library")
-LIBRARY_COLLECTION_TYPE = os.environ.get("BOOMBOX_VIDEO_COLLECTION_TYPE", "homevideos")
+LIBRARY_COLLECTION_TYPE = os.environ.get("BOOMBOX_VIDEO_COLLECTION_TYPE", "movies")
 LIBRARY_PATH = Path(os.environ.get("BOOMBOX_VIDEO_DIR", f"/home/{os.environ.get('USER', 'jwc')}/Videos"))
 
 
