@@ -4,6 +4,17 @@
 
 set -euo pipefail
 
+# Auto-load per-developer config from <repo>/.env (gitignored). Real shell
+# env still wins — `BOOMBOX_HOST=other-pi ./pi status` overrides what's in
+# the file.
+_ENV_FILE="$(cd "$(dirname "$0")" && pwd)/.env"
+if [ -f "$_ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$_ENV_FILE"
+  set +a
+fi
+
 HOST="${BOOMBOX_HOST:-boombox}"          # ssh alias defined in ~/.ssh/config
 KIOSK_URL_DEFAULT="${KIOSK_URL:-http://localhost/}"
 DEBUG_PORT="${BOOMBOX_DEBUG_PORT:-9222}"

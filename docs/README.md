@@ -8,6 +8,7 @@ Reference docs for working on the boombox.
 | [SERVICES.md](./SERVICES.md) | Per-service reference: what each daemon does, how to debug it |
 | [SKINS.md](./SKINS.md) | How to create a new touchscreen skin from scratch |
 | [ACCESS.md](./ACCESS.md) | Remote/upload toggle, playlist workflow, LAN file drop with PIN, and USB auto-mount |
+| [ONBOARDING.md](./ONBOARDING.md) | New-developer setup: SSH access, `.env`, first dev loop |
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | Dev workflow on a laptop, the `pi` helper, common tasks |
 | [archive/](./archive/) | Original PRD and conversation export — historical context only |
 
