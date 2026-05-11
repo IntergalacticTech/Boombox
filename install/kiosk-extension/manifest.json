@@ -1,8 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Boombox Kiosk Helper",
-  "version": "0.1.0",
-  "description": "Injects a floating return pill so the touchscreen can leave Jellyfin (or any other detour) and get back to the boombox UI.",
+  "version": "0.2.0",
+  "description": "Injects a floating return pill so the touchscreen can leave Jellyfin (or any other detour), and summons the on-screen keyboard when a text field is focused.",
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
@@ -12,5 +15,5 @@
       "all_frames": false
     }
   ],
-  "host_permissions": ["<all_urls>"]
+  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"]
 }

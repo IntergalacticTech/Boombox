@@ -915,6 +915,42 @@ async def theme_post(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+# ---------------------------------------------------------------------------
+# OSK (on-screen keyboard) — toggles the hidden wvkbd instance via signals.
+# SIGUSR1 hides, SIGUSR2 shows. The kiosk extension posts here on text-input
+# focus / blur so any page (Jellyfin's login, the boombox remote, etc.) gets
+# a keyboard automatically on the touchscreen.
+# ---------------------------------------------------------------------------
+
+import signal
+
+
+async def _signal_wvkbd(sig: int) -> bool:
+    """Send `sig` to every running wvkbd-mobintl process. Returns True iff at
+    least one process was signaled."""
+    rc, out = await run("pgrep", "-x", "wvkbd-mobintl")
+    if rc != 0 or not out:
+        return False
+    sent = False
+    for pid_s in out.splitlines():
+        try:
+            os.kill(int(pid_s.strip()), sig)
+            sent = True
+        except (ProcessLookupError, ValueError, PermissionError) as e:
+            log.debug("osk: kill(%s, %d) failed: %s", pid_s, sig, e)
+    return sent
+
+
+async def osk_show(_request: web.Request) -> web.Response:
+    ok = await _signal_wvkbd(signal.SIGUSR2)
+    return web.json_response({"ok": ok})
+
+
+async def osk_hide(_request: web.Request) -> web.Response:
+    ok = await _signal_wvkbd(signal.SIGUSR1)
+    return web.json_response({"ok": ok})
+
+
 def make_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/state", state_handler)
@@ -941,6 +977,8 @@ def make_app() -> web.Application:
     app.router.add_post("/library/scan", library_scan)
     app.router.add_get("/theme", theme_get)
     app.router.add_post("/theme", theme_post)
+    app.router.add_post("/osk/show", osk_show)
+    app.router.add_post("/osk/hide", osk_hide)
     return app
 
 

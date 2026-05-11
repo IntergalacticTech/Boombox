@@ -49,7 +49,7 @@ sudo apt install -y \
   python3-dbus python3-gi python3-gi-cairo gir1.2-glib-2.0 \
   mopidy mopidy-mpd mopidy-local mpc \
   nginx apache2-utils samba \
-  chromium unclutter grim \
+  chromium unclutter grim wvkbd \
   playerctl \
   pipewire pipewire-pulse wireplumber pulseaudio-utils \
   shairport-sync \
@@ -268,6 +268,7 @@ USER_UNITS=(
   boombox-bt-volume
   boombox-kiosk
   boombox-kiosk-guard
+  boombox-osk
 )
 for u in "${USER_UNITS[@]}"; do
   systemctl --user enable "$u.service"

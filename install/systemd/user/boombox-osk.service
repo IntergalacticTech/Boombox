@@ -1,0 +1,20 @@
+[Unit]
+Description=Boombox on-screen keyboard (wvkbd, hidden until summoned)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# `--hidden` starts wvkbd as a Wayland surface that's collapsed to zero
+# height. SIGUSR1 hides it, SIGUSR2 shows it. boombox-state's /api/osk
+# endpoints + the kiosk extension's focus listeners drive the toggle.
+#
+# -L 280 picks a comfortable key height for a 5–7" panel.
+# `--layer overlay` keeps the kiosk Chromium full-screen; the keyboard
+# floats above instead of resizing the page.
+ExecStart=/usr/bin/wvkbd-mobintl --hidden -L 280 --layer overlay
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

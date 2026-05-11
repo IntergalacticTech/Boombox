@@ -66,4 +66,49 @@
       ensurePill();
     }
   }).observe(document.documentElement, { childList: true, subtree: true });
+
+  // ------------------------------------------------------------------------
+  // On-screen keyboard: ask boombox-state (via the service worker) to show
+  // wvkbd when a text input gets focus, hide on blur.
+  // ------------------------------------------------------------------------
+  const TEXT_INPUT_TYPES = new Set([
+    "", "text", "password", "search", "email", "tel", "url", "number",
+  ]);
+
+  function isTextLike(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.tagName === "TEXTAREA") return true;
+    if (el.tagName === "INPUT") {
+      return TEXT_INPUT_TYPES.has((el.type || "").toLowerCase());
+    }
+    return el.isContentEditable === true;
+  }
+
+  let oskRequested = false;
+  function requestOSK(action) {
+    if (action === "show" && oskRequested) return;
+    if (action === "hide" && !oskRequested) return;
+    oskRequested = (action === "show");
+    try {
+      chrome.runtime.sendMessage({ type: "osk", action });
+    } catch (e) {
+      // Extension context invalidated (Chromium restart, etc.) — bail.
+    }
+  }
+
+  document.addEventListener("focusin", (e) => {
+    if (isTextLike(e.target)) requestOSK("show");
+  }, true);
+
+  document.addEventListener("focusout", () => {
+    // Slight delay so a focus moving from one input to another doesn't
+    // flicker the keyboard.
+    setTimeout(() => {
+      if (!isTextLike(document.activeElement)) requestOSK("hide");
+    }, 80);
+  }, true);
+
+  // Also hide on page hide / navigation away — otherwise wvkbd may stay up
+  // when the kiosk lands somewhere keyboard-less.
+  window.addEventListener("pagehide", () => requestOSK("hide"));
 })();
