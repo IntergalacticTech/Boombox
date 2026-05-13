@@ -22,3 +22,4 @@ load_config = _mod.load_config
 enabled_pins = _mod.enabled_pins
 pin_conflicts = _mod.pin_conflicts
 PressClassifier = _mod.PressClassifier
+EncoderDecoder = _mod.EncoderDecoder

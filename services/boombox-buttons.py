@@ -175,6 +175,40 @@ class PressClassifier:
                 yield ("long_hold",)
 
 
+# ---------- Rotary encoder decoder ----------------------------------------
+
+class EncoderDecoder:
+    """Decodes a two-phase quadrature encoder. Emits ("cw",) or ("ccw",)
+    once per detent (full cycle returning to 11)."""
+
+    # Transition table indexed by ((prev_a, prev_b), (a, b)) -> direction or 0.
+    # Built from the canonical 4-state Gray code transitions: a CW detent
+    # walks the sequence 11 -> 01 -> 00 -> 10 -> 11 (and CCW reversed).
+    _TRANSITION = {
+        ((1, 1), (0, 1)): +1, ((0, 1), (0, 0)): +1, ((0, 0), (1, 0)): +1, ((1, 0), (1, 1)): +1,
+        ((1, 1), (1, 0)): -1, ((1, 0), (0, 0)): -1, ((0, 0), (0, 1)): -1, ((0, 1), (1, 1)): -1,
+    }
+
+    def __init__(self):
+        self._state: tuple[int, int] = (1, 1)
+        self._accum: int = 0
+
+    def feed(self, a: int, b: int):
+        new_state = (a, b)
+        if new_state == self._state:
+            return
+        delta = self._TRANSITION.get((self._state, new_state), 0)
+        self._state = new_state
+        self._accum += delta
+        # A complete detent traverses 4 sub-transitions = ±4 accumulated.
+        while self._accum >= 4:
+            self._accum -= 4
+            yield ("cw",)
+        while self._accum <= -4:
+            self._accum += 4
+            yield ("ccw",)
+
+
 # ---------- Service entry point -------------------------------------------
 # Backend clients (Task 7), GPIO event loop (Task 8), action handlers
 # (Tasks 6, 9-12), and HTTP API server (Task 14) land in subsequent commits.
