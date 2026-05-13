@@ -209,6 +209,60 @@ still a short-lived session gate for the remote/upload page itself.
   start|stop` from `boombox-state`.
 - **Wire-format details:** see [ACCESS.md](./ACCESS.md).
 
+### `boombox-remote` — wireless-remote HTTP API
+
+**Listens on `127.0.0.1:6685`, proxied as `/api/remote/` by nginx.**
+
+The HTTP/WS API for ESP32-based wireless remotes (and any other HTTP
+client on the LAN). Exposes a consolidated state payload, a command
+endpoint, a push-on-change WebSocket, and resized album art. Commands
+flow through the shared `actions.fire()` dispatcher, so GPIO buttons and
+wireless remotes share one code path.
+
+| Endpoint | Used by |
+|----------|---------|
+| `GET  /api/remote/state` | Remote: consolidated state JSON |
+| `POST /api/remote/command` | Remote: `{action, value?}` → `actions.fire()` |
+| `GET  /api/remote/ws` | Remote: WebSocket, pushes state on change (~250 ms poll) |
+| `GET  /api/remote/art/{hash}.jpg` | Remote: current track art, on-the-fly resized to 240×240 (ETag + 304) |
+
+All endpoints require `Authorization: Bearer <token>` except the WS
+endpoint, which accepts the token in the query string (`?token=...`).
+Tokens live in `~/.config/boombox-remote/peers.json`:
+
+```json
+{
+  "<32-byte-hex-token>": {"label": "my-remote", "paired_at": 0}
+}
+```
+
+Until pairing UI ships (Phase 2), add a bootstrap token by hand to test:
+
+```bash
+mkdir -p ~/.config/boombox-remote
+TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+python3 -c "
+import json, os, pathlib
+t = os.environ['TOKEN']
+pathlib.Path.home().joinpath('.config/boombox-remote/peers.json').write_text(
+    json.dumps({t: {'label': 'bootstrap', 'paired_at': 0}}))
+print(t)
+"
+curl -H "Authorization: Bearer $TOKEN" \
+    http://boombox.local:6685/api/remote/state
+```
+
+mDNS: advertised as `_boombox._tcp.local` with TXT records `id`, `name`,
+`version`. Discover with `dns-sd -B _boombox._tcp` (macOS) or
+`avahi-browse -r _boombox._tcp` (Linux).
+
+- **Code:** [`services/boombox-remote.py`](../services/boombox-remote.py)
+- **Logs:** `journalctl --user -u boombox-remote -f`
+- **Env knobs:** `BOOMBOX_REMOTE_PORT` (default `6685`),
+  `BOOMBOX_REMOTE_PEERS` (default `~/.config/boombox-remote/peers.json`),
+  `BOOMBOX_REMOTE_ART_CACHE` (default `~/.cache/boombox-remote/art/`),
+  `BOOMBOX_REMOTE_WS_POLL_MS` (default `250`).
+
 ### `boombox-usb-mount@.service` — USB auto-mount (system template)
 
 Instantiated by udev when a removable filesystem appears. Mounts under
