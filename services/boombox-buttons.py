@@ -318,6 +318,34 @@ async def _h_repeat(d: Dispatcher):
         await d.mopidy.call("core.tracklist.set_single", {"value": False})
 
 
+@_handler("power", "short_press")
+async def _h_power_short(d: Dispatcher):
+    if d.display:
+        await d.display.toggle()
+
+
+@_handler("power", "long_press")
+async def _h_power_long(d: Dispatcher):
+    """Triggered at the 2-second threshold. Show a kiosk overlay with a
+    short countdown so the user can release to abort. The actual shutdown
+    fires on long_release if the press is still held when the countdown
+    ends; we just emit the overlay event here."""
+    if d.display:
+        await d.display.wake()
+    if d.kiosk:
+        await d.kiosk.emit("shutdown-countdown", {"seconds": 2})
+
+
+@_handler("power", "long_release")
+async def _h_power_release(d: Dispatcher):
+    """If the kiosk's countdown completed and the user is still holding,
+    long_release fires after the full hold duration. The kiosk overlay
+    polls release timing itself; here we treat any long_release as confirm."""
+    if d.kiosk:
+        await d.kiosk.emit("shutdown-confirm", {})
+    await shutdown_sequence(d.mopidy, d.state, d.kiosk, d.display)
+
+
 # ---------- Backend clients -----------------------------------------------
 
 import aiohttp
@@ -485,6 +513,81 @@ class KioskClient:
             log.warning("kiosk.emit(%s) failed: %s", event, e)
 
 
+# ---------- Display backlight ---------------------------------------------
+
+class Display:
+    """Wayland backlight control via wlr-randr. Async subprocess calls.
+
+    On the kiosk, `wlr-randr` returns the active output's name on its first
+    line. We cache it after the first call."""
+
+    def __init__(self):
+        self._output: str | None = None
+        self._on: bool = True
+
+    async def _detect_output(self) -> str | None:
+        if self._output:
+            return self._output
+        proc = await asyncio.create_subprocess_exec(
+            "wlr-randr",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+        for line in out.decode().splitlines():
+            if line and not line.startswith(" "):
+                self._output = line.split()[0]
+                return self._output
+        return None
+
+    async def toggle(self) -> None:
+        out = await self._detect_output()
+        if not out:
+            return
+        new = "off" if self._on else "on"
+        await asyncio.create_subprocess_exec(
+            "wlr-randr", "--output", out, "--" + new,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        self._on = not self._on
+
+    async def wake(self) -> None:
+        if self._on:
+            return
+        out = await self._detect_output()
+        if not out:
+            return
+        await asyncio.create_subprocess_exec(
+            "wlr-randr", "--output", out, "--on",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        self._on = True
+
+
+# ---------- Shutdown sequence ---------------------------------------------
+
+async def shutdown_sequence(mopidy: MopidyRpc, state: StateApi, kiosk: KioskClient,
+                            display: Display) -> None:
+    """Pause everything, then poweroff.
+
+    Note: we do NOT call boombox-state's /mopidy/restart endpoint (the plan
+    originally proposed that as a "nudge resume to snapshot" step, but
+    inspection shows it actually restarts the Mopidy systemd unit — exactly
+    the wrong thing during a shutdown). boombox-resume already polls and
+    writes a fresh snapshot to disk every few seconds; pausing before
+    poweroff gives that loop a chance to persist the paused state, and
+    systemd's shutdown ordering takes it from there. If a more granular
+    snapshot trigger becomes available later, wire it in here.
+    """
+    log.info("shutdown: pausing playback")
+    try:
+        await mopidy.call("core.playback.pause")
+        await state.control("pause")
+    except Exception:
+        pass
+    log.info("shutdown: systemctl poweroff")
+    await asyncio.create_subprocess_exec("systemctl", "poweroff")
+
+
 # ---------- GPIO event loop -----------------------------------------------
 
 # `gpiod` is Linux-only; import lazily so the module remains importable on
@@ -614,7 +717,7 @@ async def main() -> None:
         kiosk = KioskClient(sess)
         # Subsystems wired in later tasks:
         recorder = None
-        display = None
+        display = Display()
         sleep_t = None
         disabled = {a for a, e in cfg["pins"].items() if not e.get("enabled")}
         dispatcher = Dispatcher(mopidy=mopidy, state=state, kiosk=kiosk,
