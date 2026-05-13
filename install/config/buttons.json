@@ -1,8 +1,26 @@
 {
-  "_comment": "Override with /etc/boombox/buttons.json. BCM pin numbers. Set a value to null to disable that action.",
-  "play_pause":  17,
-  "next":        27,
-  "previous":    22,
-  "volume_up":   23,
-  "volume_down": 24
+  "_comment": "Override at /etc/boombox/buttons.json. Set pin to null or enabled to false to disable any action. Pin numbers are BCM GPIO. See docs/superpowers/specs/2026-05-12-gpio-buttons-design.md.",
+  "long_press_ms": 600,
+  "power_hold_ms": 2000,
+  "encoder_step": 5,
+  "pins": {
+    "play_pause":  {"pin": 4,  "enabled": true},
+    "stop":        {"pin": 5,  "enabled": true},
+    "previous":    {"pin": 6,  "enabled": true},
+    "next":        {"pin": 12, "enabled": true},
+    "shuffle":     {"pin": 13, "enabled": true},
+    "repeat":      {"pin": 7,  "enabled": true},
+    "sleep_timer": {"pin": 8,  "enabled": true},
+    "skin_cycle":  {"pin": 9,  "enabled": true},
+    "library":     {"pin": 10, "enabled": true},
+    "airplay":     {"pin": 16, "enabled": true},
+    "spotify":     {"pin": 17, "enabled": true},
+    "bluetooth":   {"pin": 22, "enabled": true},
+    "movies":      {"pin": 23, "enabled": true},
+    "web":         {"pin": 24, "enabled": true},
+    "mic_karaoke": {"pin": 25, "enabled": true},
+    "record":      {"pin": 26, "enabled": true},
+    "power":       {"pin": 27, "enabled": true}
+  },
+  "encoder": {"pin_a": 14, "pin_b": 15, "pin_push": 11, "enabled": true}
 }
