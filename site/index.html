@@ -55,7 +55,9 @@
           <p class="hero-copy">
             A touchscreen-driven retro boombox that turns a Raspberry Pi 5,
             a HiFiBerry-class I2S DAC, and a 5-inch display into a complete
-            local music, streaming, remote-control, and video machine.
+            local music, streaming, remote-control, and video machine — with
+            a full panel of physical buttons and a rotary encoder for the
+            hardware-feel things a touchscreen cannot do.
           </p>
           <div class="hero-actions" aria-label="Project actions">
             <a class="button button-primary" href="https://github.com/IntergalacticTech/Boombox">
@@ -65,8 +67,8 @@
           </div>
           <dl class="hero-stats" aria-label="Project highlights">
             <div>
-              <dt>7</dt>
-              <dd>user services</dd>
+              <dt>17 + 1</dt>
+              <dd>buttons &amp; encoder</dd>
             </div>
             <div>
               <dt>8090</dt>
@@ -120,6 +122,11 @@
               <h3>Remote-friendly workflows</h3>
               <p>Playlist editing, uploads, deletes, SMB access, and machine controls live on the browser UI where a keyboard helps.</p>
             </article>
+            <article class="feature-card reveal">
+              <span class="feature-mark feature-mark-yellow" aria-hidden="true"></span>
+              <h3>Physical control surface</h3>
+              <p>17 GPIO buttons and a rotary encoder cover transport, source switching, sleep timer, recording, and a soft-power shutdown. Pins are hot-reloadable and editable from the touchscreen Settings panel.</p>
+            </article>
           </div>
         </div>
       </section>
@@ -168,7 +175,7 @@
             </article>
             <article class="architecture-panel reveal">
               <h3>Control path</h3>
-              <p>Touchscreen, GPIO buttons, MPRIS, playerctl, AVRCP volume, and the boombox source orchestrator.</p>
+              <p>Touchscreen, 17 GPIO buttons with a rotary encoder, MPRIS, playerctl, AVRCP volume, and the boombox source orchestrator. The button pin map is hot-reloadable JSON.</p>
             </article>
             <article class="architecture-panel reveal">
               <h3>UI and web</h3>
@@ -214,9 +221,17 @@ sudo reboot</code></pre>
               <span>Architecture</span>
               <small>Processes, ports, and data flow</small>
             </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/SERVICES.md">
+              <span>Services</span>
+              <small>Per-daemon reference and debugging</small>
+            </a>
             <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/ACCESS.md">
               <span>Access</span>
               <small>LAN web auth, SMB, uploads, USB</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/BUTTONS.md">
+              <span>Buttons</span>
+              <small>Wiring 17 buttons + encoder, pin map, Settings panel</small>
             </a>
             <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/SKINS.md">
               <span>Skins</span>
