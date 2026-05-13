@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { ButtonsPanel } from "./ButtonsPanel";
+import { PairOverlay } from "./PairOverlay";
 import { setSleepMinutes, useSleepTimer } from "./sleepTimer";
 
 type KaraokeMic = { name: string; label: string };
@@ -67,6 +68,7 @@ export function SettingsDrawer({ onClose }: Props) {
   const [usb, setUsb] = useState<UsbList | null>(null);
   const [usbBusy, setUsbBusy] = useState<string | null>(null);   // `${id}:${direction}` while a copy runs
   const [usbResult, setUsbResult] = useState<string | null>(null);
+  const [showPair, setShowPair] = useState(false);
   const sleepRemaining = useSleepTimer();
 
   const refreshKaraoke = async () => {
@@ -209,6 +211,8 @@ export function SettingsDrawer({ onClose }: Props) {
   };
 
   return (
+    <>
+    {showPair && <PairOverlay onClose={() => setShowPair(false)} />}
     <div
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
@@ -550,6 +554,17 @@ export function SettingsDrawer({ onClose }: Props) {
           {/* Physical buttons — GPIO pin map + learn/test */}
           <ButtonsPanel />
 
+          {/* Wireless remote pairing — issues a one-time PIN */}
+          <SettingRow
+            title="Pair wireless remote"
+            subtitle="Generate a one-time PIN for a CYD or other ESP32 remote"
+            action={
+              <button onClick={() => setShowPair(true)} style={primaryButton("#4fc3f7")}>
+                Pair…
+              </button>
+            }
+          />
+
           {/* Library rescan */}
           <SettingRow
             title="Library scan"
@@ -608,6 +623,7 @@ export function SettingsDrawer({ onClose }: Props) {
         </div>
       </div>
     </div>
+    </>
   );
 }
 
