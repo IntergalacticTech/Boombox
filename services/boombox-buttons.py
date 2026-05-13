@@ -120,6 +120,61 @@ def pin_conflicts(cfg: dict) -> list[tuple[int, list[str]]]:
     return [(p, sorted(ns)) for p, ns in sorted(by_pin.items()) if len(ns) > 1]
 
 
+# ---------- Press classifier ----------------------------------------------
+
+class PressClassifier:
+    """State machine: receives (timestamp_ms, edge) events plus periodic ticks,
+    emits ("short_press",) / ("long_press",) / ("long_hold",) / ("long_release",).
+
+    No GPIO awareness — pure logic, fully testable. The GPIO loop wires
+    falling edges to feed(edge="down") and rising edges to feed(edge="up").
+    """
+
+    def __init__(self, long_press_ms: int, long_hold_tick_ms: int = 200):
+        self._long_ms = long_press_ms
+        self._tick_ms = long_hold_tick_ms
+        self._down_at: int | None = None
+        self._long_fired: bool = False
+        self._last_hold_at: int | None = None
+
+    def feed(self, t_ms: int, edge: str):
+        if edge == "down":
+            if self._down_at is not None:
+                return  # already pressed; ignore duplicates
+            self._down_at = t_ms
+            self._long_fired = False
+            self._last_hold_at = None
+            return
+        if edge == "up":
+            if self._down_at is None:
+                return
+            held = t_ms - self._down_at
+            self._down_at = None
+            if self._long_fired:
+                self._long_fired = False
+                self._last_hold_at = None
+                yield ("long_release",)
+            else:
+                if held < self._long_ms:
+                    yield ("short_press",)
+
+    def tick(self, t_ms: int):
+        if self._down_at is None:
+            return
+        held = t_ms - self._down_at
+        if not self._long_fired and held >= self._long_ms:
+            self._long_fired = True
+            self._last_hold_at = t_ms
+            yield ("long_press",)
+            return
+        if self._long_fired:
+            if self._last_hold_at is None:
+                self._last_hold_at = t_ms
+            if t_ms - self._last_hold_at >= self._tick_ms:
+                self._last_hold_at = t_ms
+                yield ("long_hold",)
+
+
 # ---------- Service entry point -------------------------------------------
 # Backend clients (Task 7), GPIO event loop (Task 8), action handlers
 # (Tasks 6, 9-12), and HTTP API server (Task 14) land in subsequent commits.
