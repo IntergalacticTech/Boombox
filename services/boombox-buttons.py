@@ -346,6 +346,25 @@ async def _h_power_release(d: Dispatcher):
     await shutdown_sequence(d.mopidy, d.state, d.kiosk, d.display)
 
 
+@_handler("sleep_timer", "short_press")
+async def _h_sleep(d: Dispatcher):
+    if d.sleep is None:
+        return
+    t_ms = int(asyncio.get_running_loop().time() * 1000)
+    new_mins = await d.sleep.press(t_ms)
+    if d.kiosk:
+        await d.kiosk.emit("sleep-timer", {"minutes": new_mins})
+
+
+@_handler("sleep_timer", "long_press")
+async def _h_sleep_cancel(d: Dispatcher):
+    if d.sleep is None:
+        return
+    await d.sleep.cancel()
+    if d.kiosk:
+        await d.kiosk.emit("sleep-timer", {"minutes": None})
+
+
 # ---------- Backend clients -----------------------------------------------
 
 import aiohttp
@@ -584,6 +603,13 @@ class Display:
             return
         self._on = True
 
+    @property
+    def is_on(self) -> bool:
+        """Public read-only view of the cached backlight state. Used by the
+        sleep-timer expire path so we only invoke toggle() when the screen is
+        currently on (avoids waking an already-asleep panel)."""
+        return self._on
+
 
 # ---------- Shutdown sequence ---------------------------------------------
 
@@ -615,6 +641,59 @@ async def shutdown_sequence(mopidy: MopidyRpc, state: StateApi, kiosk: KioskClie
     if proc.returncode != 0:
         log.error("systemctl poweroff failed (%s): %s",
                   proc.returncode, (err or out).decode(errors="replace").strip())
+
+
+# ---------- Sleep timer ---------------------------------------------------
+
+class SleepTimer:
+    """Cycles 15 -> 30 -> 60 -> off -> 15 (subsequent presses within 3s
+    cycle the duration; otherwise the first press sets the next value).
+    Long-press cancels.
+
+    Fires by calling on_expire() (set externally). The dispatcher hooks
+    in pause + display sleep + kiosk OSD events at startup."""
+
+    _CYCLE = [15, 30, 60, None]
+
+    def __init__(self, on_expire: Callable[[], Awaitable[None]]):
+        self._on_expire = on_expire
+        self._idx: int = -1            # -1 = inactive
+        self._task: asyncio.Task | None = None
+        self._last_press_ms: int | None = None
+
+    @property
+    def active_minutes(self) -> int | None:
+        if self._idx < 0:
+            return None
+        return self._CYCLE[self._idx]
+
+    async def press(self, t_ms: int) -> int | None:
+        """Returns the new value in minutes, or None when cycled to off."""
+        if self._last_press_ms is not None and (t_ms - self._last_press_ms) <= 3000:
+            self._idx = (self._idx + 1) % len(self._CYCLE)
+        else:
+            self._idx = 0
+        self._last_press_ms = t_ms
+        await self._reschedule()
+        return self.active_minutes
+
+    async def cancel(self) -> None:
+        self._idx = -1
+        await self._reschedule()
+
+    async def _reschedule(self) -> None:
+        if self._task and not self._task.done():
+            self._task.cancel()
+        mins = self.active_minutes
+        if mins is None:
+            return
+        async def _runner():
+            try:
+                await asyncio.sleep(mins * 60)
+                await self._on_expire()
+            except asyncio.CancelledError:
+                return
+        self._task = asyncio.create_task(_runner())
 
 
 # ---------- GPIO event loop -----------------------------------------------
@@ -747,7 +826,18 @@ async def main() -> None:
         # Subsystems wired in later tasks:
         recorder = None
         display = Display()
-        sleep_t = None
+
+        async def _on_sleep_expire():
+            try:
+                await mopidy.call("core.playback.pause")
+                await state.control("pause")
+                if display and display.is_on:
+                    await display.toggle()  # sleep the screen
+                if kiosk:
+                    await kiosk.emit("sleep-expired", {})
+            except Exception as e:
+                log.warning("sleep expire failed: %s", e)
+        sleep_t = SleepTimer(on_expire=_on_sleep_expire)
         disabled = {a for a, e in cfg["pins"].items() if not e.get("enabled")}
         dispatcher = Dispatcher(mopidy=mopidy, state=state, kiosk=kiosk,
                                 recorder=recorder, display=display, sleep=sleep_t,
