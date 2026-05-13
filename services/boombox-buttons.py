@@ -485,16 +485,157 @@ class KioskClient:
             log.warning("kiosk.emit(%s) failed: %s", event, e)
 
 
-# ---------- Service entry point -------------------------------------------
-# GPIO event loop (Task 8), action handlers (Tasks 9-12), and HTTP API
-# server (Task 14) land in subsequent commits. Until Task 8 rebuilds main(),
-# running this file as a script is intentionally a no-op.
+# ---------- GPIO event loop -----------------------------------------------
+
+# `gpiod` is Linux-only; import lazily so the module remains importable on
+# dev machines (macOS) where the test suite runs.
+
+GPIO_CHIP = "/dev/gpiochip0"
+DEBOUNCE_MS = 30
+ENCODER_DEBOUNCE_MS = 1
+TICK_INTERVAL_S = 0.05  # 20Hz; resolves long-press windows precisely enough
+
+
+async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event) -> None:
+    """Single-pass GPIO loop. Re-call to rebuild after config hot-reload.
+    Returns when `stop` is set."""
+    import gpiod
+    from datetime import timedelta
+    from gpiod.line import Direction, Bias, Edge
+
+    pins = enabled_pins(cfg)
+    if not pins:
+        log.info("no GPIO pins configured; idling")
+        await stop.wait()
+        return
+
+    long_ms = int(cfg.get("long_press_ms", 600))
+    power_hold_ms = int(cfg.get("power_hold_ms", 2000))
+
+    # gpiod line config: encoder phases get fast debounce + both-edge so we
+    # see every quadrature transition; buttons get falling-edge only.
+    line_config: dict[int, gpiod.LineSettings] = {}
+    by_pin: dict[int, str] = {}
+    for action, pin in pins.items():
+        by_pin[pin] = action
+        if action in ("encoder_a", "encoder_b"):
+            line_config[pin] = gpiod.LineSettings(
+                direction=Direction.INPUT, bias=Bias.PULL_UP,
+                edge_detection=Edge.BOTH,
+                debounce_period=timedelta(milliseconds=ENCODER_DEBOUNCE_MS),
+            )
+        else:
+            line_config[pin] = gpiod.LineSettings(
+                direction=Direction.INPUT, bias=Bias.PULL_UP,
+                edge_detection=Edge.BOTH,  # need both so we can detect release
+                debounce_period=timedelta(milliseconds=DEBOUNCE_MS),
+            )
+
+    log.info("gpio pins: %s", ", ".join(f"{a}=BCM{p}" for a, p in pins.items()))
+
+    # Press classifiers per button action. Power gets the longer threshold.
+    classifiers: dict[str, PressClassifier] = {
+        action: PressClassifier(
+            long_press_ms=power_hold_ms if action == "power" else long_ms,
+        )
+        for action in pins if action not in ("encoder_a", "encoder_b", "encoder_push")
+    }
+    encoder = EncoderDecoder()
+    enc_a_state = enc_b_state = 1
+
+    with gpiod.request_lines(GPIO_CHIP, consumer="boombox-buttons", config=line_config) as req:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def reader():
+            while not stop.is_set():
+                if req.wait_edge_events(timeout=0.5):
+                    for ev in req.read_edge_events():
+                        loop.call_soon_threadsafe(queue.put_nowait, ev)
+
+        loop.run_in_executor(None, reader)
+
+        async def tick():
+            while not stop.is_set():
+                t_ms = int(loop.time() * 1000)
+                for action, pc in classifiers.items():
+                    for evt in pc.tick(t_ms):
+                        await dispatcher.dispatch(action, evt[0])
+                await asyncio.sleep(TICK_INTERVAL_S)
+
+        ticker = asyncio.create_task(tick())
+
+        try:
+            while not stop.is_set():
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+                t_ms = int(loop.time() * 1000)
+                action = by_pin.get(ev.line_offset)
+                if not action:
+                    continue
+                if action == "encoder_a":
+                    enc_a_state = 0 if ev.event_type == gpiod.EdgeEvent.Type.FALLING_EDGE else 1
+                    for evt in encoder.feed(enc_a_state, enc_b_state):
+                        await dispatcher.dispatch("encoder", evt[0])
+                elif action == "encoder_b":
+                    enc_b_state = 0 if ev.event_type == gpiod.EdgeEvent.Type.FALLING_EDGE else 1
+                    for evt in encoder.feed(enc_a_state, enc_b_state):
+                        await dispatcher.dispatch("encoder", evt[0])
+                elif action == "encoder_push":
+                    if ev.event_type == gpiod.EdgeEvent.Type.FALLING_EDGE:
+                        await dispatcher.dispatch("encoder_push", "short_press")
+                else:
+                    edge = "down" if ev.event_type == gpiod.EdgeEvent.Type.FALLING_EDGE else "up"
+                    for evt in classifiers[action].feed(t_ms, edge):
+                        await dispatcher.dispatch(action, evt[0])
+        finally:
+            ticker.cancel()
+
+
+# ---------- Main ----------------------------------------------------------
 
 async def main() -> None:
-    raise NotImplementedError(
-        "boombox-buttons main() is rebuilt in Task 8 of "
-        "docs/superpowers/plans/2026-05-12-gpio-buttons.md"
-    )
+    cfg = load_config()
+    conflicts = pin_conflicts(cfg)
+    for pin, names in conflicts:
+        log.error("pin conflict: BCM%s used by %s — disable all but one", pin, names)
+
+    async with aiohttp.ClientSession() as sess:
+        mopidy = MopidyRpc(sess)
+        state = StateApi(sess)
+        kiosk = KioskClient(sess)
+        # Subsystems wired in later tasks:
+        recorder = None
+        display = None
+        sleep_t = None
+        disabled = {a for a, e in cfg["pins"].items() if not e.get("enabled")}
+        dispatcher = Dispatcher(mopidy=mopidy, state=state, kiosk=kiosk,
+                                recorder=recorder, display=display, sleep=sleep_t,
+                                disabled=disabled)
+
+        # Encoder rotation handlers — these always go through volume.
+        async def _enc_cw(d: Dispatcher):
+            cur = await d.state.volume_get()
+            if cur is None:
+                return
+            step = (cfg.get("encoder_step", 5)) / 100.0
+            await d.state.volume_set(min(1.0, cur[0] + step))
+        async def _enc_ccw(d: Dispatcher):
+            cur = await d.state.volume_get()
+            if cur is None:
+                return
+            step = (cfg.get("encoder_step", 5)) / 100.0
+            await d.state.volume_set(max(0.0, cur[0] - step))
+        async def _enc_push(d: Dispatcher):
+            await d.state.mute_toggle()
+        _HANDLERS[("encoder", "cw")] = _enc_cw
+        _HANDLERS[("encoder", "ccw")] = _enc_ccw
+        _HANDLERS[("encoder_push", "short_press")] = _enc_push
+
+        stop = asyncio.Event()
+        await gpio_loop(cfg, dispatcher, stop)
 
 
 if __name__ == "__main__":
