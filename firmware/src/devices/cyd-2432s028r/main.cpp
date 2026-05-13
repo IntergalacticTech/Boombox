@@ -1,19 +1,14 @@
 // boombox-remote firmware — CYD 2.8" entry point.
 //
-// Phase 2 — Stage 3 stub: instantiates the shared core types so the
-// linker pulls them in and we know they compile. Display + UI come in
-// Stages 4-5; the actual app loop is wired in Task 15.
+// Phase 2 — Stage 4 milestone: brings up the display + touch and paints a
+// centered green square via LVGL. Confirms the device shell works before
+// the Stage 5 UI screens stack on top.
 
 #include <Arduino.h>
-#include "device/IDevice.h"
-#include "device/IUI.h"
-#include "state/BoomboxState.h"
-#include "storage/PairedBoombox.h"
-#include "storage/WifiCreds.h"
-#include "transport/WifiManager.h"
-#include "transport/HttpClient.h"
-#include "transport/WsClient.h"
-#include "action/ActionDispatch.h"
+#include <lvgl.h>
+#include "Device.h"
+
+static boombox::CydDevice gDevice;
 
 void setup() {
     Serial.begin(115200);
@@ -22,19 +17,26 @@ void setup() {
     Serial.println("=== boombox-remote firmware ===");
     Serial.printf("profile: %s\n", PROFILE_ID);
     Serial.printf("version: %s\n", BOOMBOX_FW_VERSION);
-    Serial.printf("chip:    %s rev %d\n",
-                   ESP.getChipModel(), ESP.getChipRevision());
-    Serial.printf("flash:   %u bytes\n", ESP.getFlashChipSize());
 
-    // Touch every shared type so the linker has to resolve them.
-    boombox::BoomboxState st;
-    boombox::WifiManager wifi;
-    Serial.printf("wifi.tryStored placeholder = %d\n", (int)wifi.isConnected());
-    Serial.printf("paired? %d\n", (int)boombox::PairedBoomboxStore::isPaired());
+    gDevice.init();
+
+    // Smoke object so we know LVGL is flushing pixels onto the panel.
+    lv_obj_t* sq = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(sq, 120, 120);
+    lv_obj_center(sq);
+    lv_obj_set_style_bg_color(sq, lv_color_make(64, 200, 96), 0);
+    lv_obj_set_style_border_width(sq, 0, 0);
+    lv_obj_set_style_radius(sq, 12, 0);
+
+    lv_obj_t* lbl = lv_label_create(sq);
+    lv_label_set_text(lbl, "boombox-remote");
+    lv_obj_set_style_text_color(lbl, lv_color_make(0, 0, 0), 0);
+    lv_obj_center(lbl);
+
     Serial.println("ready.");
 }
 
 void loop() {
-    delay(2000);
-    Serial.printf("alive [uptime %lu s]\n", millis() / 1000);
+    lv_timer_handler();
+    delay(5);
 }
