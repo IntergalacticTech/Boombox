@@ -25,7 +25,6 @@ import aiohttp
 
 from clients import (
     MopidyRpc, StateApi, KioskClient, Display, SleepTimer, Recorder,
-    MOPIDY_RPC, STATE_BASE, KIOSK_DEBUG,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
