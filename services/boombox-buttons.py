@@ -1010,18 +1010,21 @@ async def main() -> None:
                                 recorder=recorder, display=display, sleep=sleep_t,
                                 disabled=disabled)
 
-        # Encoder rotation handlers — these always go through volume.
+        cfg_ref = [cfg]
+        # Encoder rotation handlers — these always go through volume. They
+        # close over cfg_ref (not cfg) so a hot-reload's new encoder_step is
+        # picked up on the next tick without restarting the service.
         async def _enc_cw(d: Dispatcher):
             cur = await d.state.volume_get()
             if cur is None:
                 return
-            step = (cfg.get("encoder_step", 5)) / 100.0
+            step = (cfg_ref[0].get("encoder_step", 5)) / 100.0
             await d.state.volume_set(min(1.0, cur[0] + step))
         async def _enc_ccw(d: Dispatcher):
             cur = await d.state.volume_get()
             if cur is None:
                 return
-            step = (cfg.get("encoder_step", 5)) / 100.0
+            step = (cfg_ref[0].get("encoder_step", 5)) / 100.0
             await d.state.volume_set(max(0.0, cur[0] - step))
         async def _enc_push(d: Dispatcher):
             await d.state.mute_toggle()
@@ -1029,18 +1032,77 @@ async def main() -> None:
         _HANDLERS[("encoder", "ccw")] = _enc_ccw
         _HANDLERS[("encoder_push", "short_press")] = _enc_push
 
-        import signal
-        stop = asyncio.Event()
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, stop.set)
-        cfg_ref = [cfg]
         dispatcher_ref = [dispatcher]
         learn_state: dict = {"action": None, "until": 0, "result": None}
         api_runner = await _http_api(cfg_ref, dispatcher_ref, learn_state)
+
+        # Wrap the loop so we can rebuild it on config change.
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler
+
+        reload_event = asyncio.Event()
+        loop_ref = asyncio.get_running_loop()
+
+        class _Handler(FileSystemEventHandler):
+            def _hit(self, path: str) -> bool:
+                return Path(path) == CONFIG_PATH
+
+            def on_modified(self, event):
+                if self._hit(event.src_path):
+                    loop_ref.call_soon_threadsafe(reload_event.set)
+
+            def on_created(self, event):
+                # `sudo mv tmp config` atomically replaces the inode and
+                # surfaces as a CREATE on the destination, not a MODIFY.
+                if self._hit(event.src_path):
+                    loop_ref.call_soon_threadsafe(reload_event.set)
+
+            def on_moved(self, event):
+                # Some editors (vim, sed -i) rename a temp file into place.
+                # Watchdog emits this as a MOVED event whose dest is our file.
+                dest = getattr(event, "dest_path", None)
+                if dest and self._hit(dest):
+                    loop_ref.call_soon_threadsafe(reload_event.set)
+
+        observer = Observer()
+        observer.schedule(_Handler(), str(CONFIG_PATH.parent), recursive=False)
+        observer.start()
+
+        import signal
+        loop = asyncio.get_running_loop()
         try:
-            await gpio_loop(cfg, dispatcher, stop, learn_state=learn_state)
+            while True:
+                stop = asyncio.Event()
+                # Install signal handlers per loop iteration so SIGTERM still wins.
+                for sig in (signal.SIGTERM, signal.SIGINT):
+                    loop.add_signal_handler(sig, stop.set)
+                loop_task = asyncio.create_task(
+                    gpio_loop(cfg_ref[0], dispatcher, stop, learn_state=learn_state)
+                )
+                wait_reload = asyncio.create_task(reload_event.wait())
+                done, _ = await asyncio.wait(
+                    {loop_task, wait_reload}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if wait_reload in done:
+                    log.info("config changed; rebuilding gpio loop")
+                    reload_event.clear()
+                    stop.set()
+                    await loop_task
+                    cfg = load_config()
+                    cfg_ref[0] = cfg
+                    dispatcher.disabled = {a for a, e in cfg["pins"].items() if not e.get("enabled")}
+                    continue
+                # Otherwise: the gpio_loop returned (probably SIGTERM-driven stop).
+                # Cancel the dangling reload waiter before exiting.
+                wait_reload.cancel()
+                try:
+                    await wait_reload
+                except asyncio.CancelledError:
+                    pass
+                break
         finally:
+            observer.stop()
+            observer.join()
             await api_runner.cleanup()
             for sig in (signal.SIGTERM, signal.SIGINT):
                 try:
