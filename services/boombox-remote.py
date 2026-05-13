@@ -12,6 +12,7 @@ Phase 1 has no pairing UI — tokens are added by hand for testing.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ from pathlib import Path
 
 import aiohttp as aiohttp_client_lib
 from aiohttp import web
+from PIL import Image
 
 import actions
 import clients
@@ -30,6 +32,19 @@ log = logging.getLogger("boombox-remote")
 
 PORT = int(os.environ.get("BOOMBOX_REMOTE_PORT", "6685"))
 DEFAULT_PEERS = Path.home() / ".config" / "boombox-remote" / "peers.json"
+DEFAULT_ART_CACHE = Path.home() / ".cache" / "boombox-remote" / "art"
+ART_SIZE = (240, 240)
+
+
+def _art_cache_dir() -> Path:
+    """Resolve the art cache directory. Re-reads env on each call so tests
+    can override BOOMBOX_REMOTE_ART_CACHE between calls. Directory is
+    created lazily, not at import time.
+    """
+    path = Path(os.environ.get("BOOMBOX_REMOTE_ART_CACHE",
+                                str(DEFAULT_ART_CACHE)))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _ws_poll_seconds() -> float:
@@ -157,6 +172,7 @@ def create_app(aggregator: "StateAggregator | None" = None,
     app.router.add_get("/api/remote/state", _get_state)
     app.router.add_post("/api/remote/command", _post_command)
     app.router.add_get("/api/remote/ws", _ws_handler)
+    app.router.add_get("/api/remote/art/{hash}.jpg", _get_art)
     return app
 
 
@@ -249,6 +265,49 @@ async def _ws_handler(request: web.Request) -> web.WebSocketResponse:
     except asyncio.CancelledError:
         pass
     return ws
+
+
+async def _get_art(request: web.Request) -> web.Response:
+    """Serve resized 240x240 album art keyed by sha1 hash.
+
+    Phase 1 reads the raw source bytes from `<cache>/<hash>.src` (populated
+    by a future Mopidy art-fetch task) and produces `<cache>/<hash>.jpg`
+    on first request. Subsequent reads serve the cached file directly.
+    ETag is the hash itself, so clients can revalidate cheaply.
+    """
+    art_hash = request.match_info["hash"]
+    # Reject anything that isn't lowercase hex (defense in depth — caller
+    # always passes a sha1).
+    if not art_hash or not all(c in "0123456789abcdef" for c in art_hash):
+        return web.Response(status=400)
+
+    etag = f'"{art_hash}"'
+    if request.headers.get("If-None-Match") == etag:
+        return web.Response(status=304, headers={"ETag": etag})
+
+    cache = _art_cache_dir()
+    resized_path = cache / f"{art_hash}.jpg"
+    src_path     = cache / f"{art_hash}.src"
+
+    if not resized_path.exists():
+        if not src_path.exists():
+            return web.Response(status=404)
+        # Lazy-resize on first request.
+        with Image.open(src_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail(ART_SIZE, Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85, optimize=True)
+            resized_path.write_bytes(buf.getvalue())
+
+    return web.Response(
+        body=resized_path.read_bytes(),
+        content_type="image/jpeg",
+        headers={
+            "ETag": etag,
+            "Cache-Control": "public, max-age=31536000, immutable",
+        },
+    )
 
 
 async def main() -> None:
