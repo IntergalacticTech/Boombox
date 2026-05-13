@@ -1,0 +1,12 @@
+{
+  "name": "boombox-remote-core",
+  "version": "0.1.0",
+  "description": "Shared core for the Boombox wireless-remote firmware. Transport (WiFi + future BLE), state model, NVS storage, action dispatcher, and IDevice/IUI interfaces that per-profile device shells implement.",
+  "keywords": ["boombox", "esp32", "remote"],
+  "license": "MIT",
+  "platforms": ["espressif32"],
+  "frameworks": ["arduino"],
+  "build": {
+    "srcFilter": ["+<*>"]
+  }
+}

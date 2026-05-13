@@ -35,3 +35,8 @@ install/local/
 # Patches with paths that aren't useful in the repo tree
 *.rej
 *.orig
+
+# PlatformIO firmware build artifacts
+firmware/.pio/
+firmware/.pioenvs/
+firmware/.piolibdeps/
