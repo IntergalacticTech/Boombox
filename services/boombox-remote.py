@@ -12,12 +12,15 @@ Phase 1 has no pairing UI — tokens are added by hand for testing.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import io
 import json
 import logging
 import os
+import secrets
 import socket
 import sys
+import time
 from pathlib import Path
 
 import aiohttp as aiohttp_client_lib
@@ -37,6 +40,23 @@ PORT = int(os.environ.get("BOOMBOX_REMOTE_PORT", "6685"))
 DEFAULT_PEERS = Path.home() / ".config" / "boombox-remote" / "peers.json"
 DEFAULT_ART_CACHE = Path.home() / ".cache" / "boombox-remote" / "art"
 ART_SIZE = (240, 240)
+
+# Process-local pairing state. One active PIN at a time; resets if the
+# service restarts mid-pairing. PIN is stored as a SHA-256 hex digest so
+# memory inspection doesn't leak it; comparison uses hmac.compare_digest.
+_PAIR_STATE: dict = {"pin_hash": None, "expires_at": 0}
+PAIR_PIN_TTL_S = int(os.environ.get("BOOMBOX_REMOTE_PAIR_TTL_S", "120"))
+
+
+def _make_pin() -> str:
+    """Cryptographically random 6-digit numeric PIN."""
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def _hash_pin(pin: str) -> str:
+    """SHA-256 hex digest. Used for hmac.compare_digest comparison."""
+    import hashlib
+    return hashlib.sha256(pin.encode()).hexdigest()
 
 
 def _art_cache_dir() -> Path:
@@ -113,8 +133,14 @@ async def require_auth(request: web.Request, handler):
     The WebSocket path /api/remote/ws bypasses this middleware because it
     authenticates via query string token before the handshake completes —
     aiohttp's WebSocketResponse can't return a JSON 401 (only a close code).
+
+    /api/remote/pair/start and /api/remote/pair bypass auth too — they
+    predate any token (PIN-based pairing is how tokens are minted in the
+    first place). /pair/start is gated to localhost in the handler; /pair
+    is open to the LAN so the CYD can redeem the PIN.
     """
-    if request.path == "/api/remote/ws":
+    if request.path in ("/api/remote/ws", "/api/remote/pair/start",
+                          "/api/remote/pair"):
         return await handler(request)
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -207,6 +233,8 @@ def create_app(aggregator: "StateAggregator | None" = None,
     app.router.add_post("/api/remote/command", _post_command)
     app.router.add_get("/api/remote/ws", _ws_handler)
     app.router.add_get("/api/remote/art/{hash}.jpg", _get_art)
+    app.router.add_post("/api/remote/pair/start", _post_pair_start)
+    app.router.add_post("/api/remote/pair", _post_pair)
     return app
 
 
@@ -342,6 +370,75 @@ async def _get_art(request: web.Request) -> web.Response:
             "Cache-Control": "public, max-age=31536000, immutable",
         },
     )
+
+
+async def _post_pair_start(request: web.Request) -> web.Response:
+    """Mint a fresh 6-digit PIN. Localhost-only (kiosk on the Pi)."""
+    # Localhost-only — the kiosk runs on the Pi and is the only legit caller.
+    peer_ip = request.remote
+    if peer_ip not in ("127.0.0.1", "::1", "localhost"):
+        log.warning("/pair/start from non-localhost: %s", peer_ip)
+        return web.json_response(
+            {"ok": False, "error": "forbidden"}, status=403)
+
+    pin = _make_pin()
+    _PAIR_STATE["pin_hash"] = _hash_pin(pin)
+    _PAIR_STATE["expires_at"] = time.time() + PAIR_PIN_TTL_S
+    log.info("pairing PIN issued, expires in %ds", PAIR_PIN_TTL_S)
+    return web.json_response({
+        "ok": True,
+        "pin": pin,
+        "expires_at": _PAIR_STATE["expires_at"],
+    })
+
+
+async def _post_pair(request: web.Request) -> web.Response:
+    """Redeem a PIN for a 32-byte hex auth token. Single-use, LAN-open."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response(
+            {"ok": False, "error": "invalid_json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response(
+            {"ok": False, "error": "invalid_body"}, status=400)
+
+    pin = body.get("pin", "")
+    label = body.get("label", "remote")
+    if not isinstance(pin, str) or len(pin) != 6 or not pin.isdigit():
+        return web.json_response(
+            {"ok": False, "error": "bad_pin"}, status=403)
+
+    if (_PAIR_STATE["pin_hash"] is None or
+            time.time() > _PAIR_STATE["expires_at"]):
+        return web.json_response(
+            {"ok": False, "error": "no_active_pin"}, status=403)
+
+    if not hmac.compare_digest(_hash_pin(pin), _PAIR_STATE["pin_hash"]):
+        return web.json_response(
+            {"ok": False, "error": "bad_pin"}, status=403)
+
+    # PIN verified — invalidate it (single-use), mint a token, persist.
+    _PAIR_STATE["pin_hash"] = None
+    _PAIR_STATE["expires_at"] = 0
+
+    token = secrets.token_hex(32)
+    peers = _load_peers()
+    peers[token] = {
+        "label": str(label)[:40] or "remote",
+        "paired_at": int(time.time()),
+    }
+    path = Path(os.environ.get("BOOMBOX_REMOTE_PEERS", str(DEFAULT_PEERS)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(peers, indent=2))
+    log.info("paired remote label=%s", peers[token]["label"])
+
+    return web.json_response({
+        "ok": True,
+        "auth_token": token,
+        "boombox_id":   os.environ.get("BOOMBOX_ID", "boombox-default"),
+        "boombox_name": os.environ.get("BOOMBOX_NAME", "Boombox"),
+    })
 
 
 async def main() -> None:
