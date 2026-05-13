@@ -365,6 +365,20 @@ async def _h_sleep_cancel(d: Dispatcher):
         await d.kiosk.emit("sleep-timer", {"minutes": None})
 
 
+@_handler("record", "short_press")
+async def _h_record(d: Dispatcher):
+    if d.recorder is None:
+        return
+    if d.recorder.recording:
+        path = await d.recorder.stop()
+        if d.kiosk:
+            await d.kiosk.emit("record", {"on": False, "path": path})
+    else:
+        path = await d.recorder.start()
+        if d.kiosk:
+            await d.kiosk.emit("record", {"on": True, "path": path})
+
+
 # ---------- Backend clients -----------------------------------------------
 
 import aiohttp
@@ -696,6 +710,60 @@ class SleepTimer:
         self._task = asyncio.create_task(_runner())
 
 
+# ---------- Recorder ------------------------------------------------------
+
+class Recorder:
+    """Captures the current default PipeWire sink's monitor to FLAC.
+    Start = spawn `parec | flac -`. Stop = SIGTERM the pipeline.
+
+    Output: ~/Music/Recordings/YYYY-MM-DD-HHMMSS.flac
+    """
+
+    def __init__(self):
+        self._proc: asyncio.subprocess.Process | None = None
+        self._flac: asyncio.subprocess.Process | None = None
+        self._path: str | None = None
+
+    @property
+    def recording(self) -> bool:
+        return self._proc is not None and self._proc.returncode is None
+
+    async def start(self) -> str | None:
+        if self.recording:
+            return self._path
+        from datetime import datetime
+        rec_dir = Path.home() / "Music" / "Recordings"
+        rec_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        out = rec_dir / f"{ts}.flac"
+        self._path = str(out)
+        # parec reads the default-sink monitor; flac encodes to FLAC stdout->file.
+        self._proc = await asyncio.create_subprocess_exec(
+            "parec", "--monitor-stream=@DEFAULT_AUDIO_SINK@",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        self._flac = await asyncio.create_subprocess_exec(
+            "flac", "--silent", "-", "-o", str(out),
+            stdin=self._proc.stdout, stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return self._path
+
+    async def stop(self) -> str | None:
+        path = self._path
+        for p in (self._proc, self._flac):
+            if p is not None and p.returncode is None:
+                p.terminate()
+                try:
+                    await asyncio.wait_for(p.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    p.kill()
+        self._proc = None
+        self._flac = None
+        self._path = None
+        return path
+
+
 # ---------- GPIO event loop -----------------------------------------------
 
 # `gpiod` is Linux-only; import lazily so the module remains importable on
@@ -824,7 +892,7 @@ async def main() -> None:
         state = StateApi(sess)
         kiosk = KioskClient(sess)
         # Subsystems wired in later tasks:
-        recorder = None
+        recorder = Recorder()
         display = Display()
 
         async def _on_sleep_expire():

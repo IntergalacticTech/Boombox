@@ -55,6 +55,7 @@ sudo apt install -y \
   shairport-sync \
   bluez bluez-tools \
   alsa-utils \
+  flac \
   nodejs npm
 
 # Iris is pip-only; bundle it in a venv we control rather than --break-system-packages.
