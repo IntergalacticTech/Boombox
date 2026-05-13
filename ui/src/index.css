@@ -27,3 +27,25 @@ button {
   cursor: pointer;
 }
 img, svg { -webkit-user-drag: none; user-drag: none; }
+
+/* Touch-friendly scrollbar for drawer scroll containers. The kiosk is a
+   resistive touchscreen — the default 8 px scrollbar is too thin to grab,
+   and resistive panels respond poorly to fast finger-swipes. Bump to 28 px
+   wide with a bright thumb so it's a clear finger-sized drag target.
+   The drawer also renders large floating Up/Down nudge buttons (see
+   SettingsDrawer.tsx) for users who prefer tap-to-scroll. */
+.settings-scroll::-webkit-scrollbar { width: 28px; }
+.settings-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); }
+.settings-scroll::-webkit-scrollbar-thumb {
+  background: rgba(79,195,247,0.55);
+  border-radius: 14px;
+  border: 6px solid transparent;
+  background-clip: content-box;
+  min-height: 56px;
+}
+.settings-scroll::-webkit-scrollbar-thumb:hover,
+.settings-scroll::-webkit-scrollbar-thumb:active {
+  background-color: rgba(79,195,247,0.85);
+  background-clip: content-box;
+}
+

@@ -7,16 +7,19 @@
 
 // ---------- 1. COLOR ----------
 #define LV_COLOR_DEPTH 16
+// LV_COLOR_16_SWAP is off — TFT_eSPI with USER_SETUP_LOADED + ST7789_DRIVER
+// + TFT_RGB_ORDER=TFT_BGR handles byte order correctly on its own.
+#define LV_COLOR_16_SWAP 0
 
 // ---------- 2. MEMORY ----------
 #define LV_USE_STDLIB_MALLOC LV_STDLIB_BUILTIN
-#define LV_MEM_SIZE (48 * 1024U)   // 48 KB heap for LVGL objects
+#define LV_MEM_SIZE (28 * 1024U)   // 28 KB heap for LVGL objects
 #define LV_USE_STDLIB_STRING LV_STDLIB_BUILTIN
 #define LV_USE_STDLIB_SPRINTF LV_STDLIB_BUILTIN
 
 // ---------- 3. HAL ----------
 #define LV_DEF_REFR_PERIOD 16      // ~60 fps
-#define LV_TICK_CUSTOM 0           // we call lv_tick_inc() ourselves, no — use built-in millis based via lv_tick_get
+#define LV_TICK_CUSTOM 0
 #define LV_USE_OS LV_OS_NONE
 
 // ---------- 4. RENDERING ----------

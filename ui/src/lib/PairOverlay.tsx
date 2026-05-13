@@ -73,7 +73,10 @@ export function PairOverlay({ onClose }: Props) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 9000,
+        // Above SettingsDrawer (9990) and NowPlayingBar (9995). PairOverlay
+        // is launched from within the drawer, so it has to sit on top of
+        // both to be visible.
+        zIndex: 9999,
       }}
     >
       <div style={{

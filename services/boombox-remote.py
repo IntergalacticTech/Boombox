@@ -475,9 +475,35 @@ async def main() -> None:
         log.info("boombox-remote on :%d, mDNS as %s (port %d, path %s)",
                   PORT, info.name, info.port, "/api/remote/")
 
+        # BLE peripheral — the primary remote transport per the design spec.
+        # Runs concurrently with the HTTP/WS server; they share the same
+        # PIN state, peers.json, aggregator, and dispatcher.
+        ble_task = None
+        if os.environ.get("BOOMBOX_REMOTE_BLE", "1") == "1":
+            try:
+                from ble_peripheral import run_ble_peripheral
+                ble_task = asyncio.create_task(run_ble_peripheral(
+                    pair_state=_PAIR_STATE,
+                    peers_path_cb=lambda: os.environ.get(
+                        "BOOMBOX_REMOTE_PEERS", str(DEFAULT_PEERS)),
+                    hash_pin_cb=_hash_pin,
+                    aggregator=agg,
+                    dispatcher=dispatcher,
+                    fire_cb=actions.fire,
+                    boombox_id=os.environ.get("BOOMBOX_ID", "boombox-default"),
+                    boombox_name=os.environ.get("BOOMBOX_NAME", "Boombox"),
+                    pair_ttl_s=PAIR_PIN_TTL_S,
+                ))
+                log.info("BLE peripheral starting")
+            except Exception as e:
+                log.warning("BLE peripheral failed to start: %s "
+                             "(continuing without BLE)", e)
+
         try:
             await asyncio.Event().wait()
         finally:
+            if ble_task is not None:
+                ble_task.cancel()
             await azc.async_unregister_service(info)
             await azc.async_close()
 

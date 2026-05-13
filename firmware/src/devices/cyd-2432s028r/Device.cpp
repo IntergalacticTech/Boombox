@@ -31,6 +31,8 @@ static void _flush(lv_display_t* disp, const lv_area_t* area, uint8_t* px) {
     uint32_t h = area->y2 - area->y1 + 1;
     _tft.startWrite();
     _tft.setAddrWindow(area->x1, area->y1, w, h);
+    // LVGL outputs RGB565 in native ESP32 little-endian; tell pushColors
+    // to swap to the big-endian byte order ST7789 expects on the wire.
     _tft.pushColors(reinterpret_cast<uint16_t*>(px), w * h, true);
     _tft.endWrite();
     lv_display_flush_ready(disp);
@@ -72,6 +74,8 @@ void CydDevice::init() {
     lv_indev_t* indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, _read_touch);
+
+    // LVGL ticking happens from the Arduino loop() via lv_timer_handler.
 }
 
 void CydDevice::pollInputs() {
@@ -90,6 +94,10 @@ uint16_t CydDevice::readLdr() {
 
 DeviceCapabilities CydDevice::caps() const {
     return DeviceCapabilities{true, true, true, false};
+}
+
+void CydDevice::paintSolid(uint16_t color565) {
+    _tft.fillScreen(color565);
 }
 
 } // namespace boombox
