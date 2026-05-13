@@ -8,7 +8,7 @@ export function SleepOsd() {
       const detail = (e as CustomEvent).detail as { minutes: number | null };
       setMins(detail.minutes);
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => setMins(prev => prev), 2000); // OSD stays visible
+      timer = window.setTimeout(() => setMins(null), 2000); // auto-hide pill 2s after last event
     };
     const onExpired = () => setMins(null);
     window.addEventListener("boombox:sleep-timer", onTimer as EventListener);
