@@ -8,8 +8,8 @@ Type=simple
 ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-remote.py
 Restart=on-failure
 RestartSec=3
-# Listens on 0.0.0.0:6685 — exposed through nginx /api/remote/ and
-# advertised on the LAN via mDNS (_boombox-remote._tcp).
+# Listens on 127.0.0.1:6685 — exposed to the LAN by nginx as
+# /api/remote/ and advertised over mDNS as _boombox._tcp.
 
 [Install]
 WantedBy=default.target

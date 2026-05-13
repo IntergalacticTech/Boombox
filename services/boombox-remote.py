@@ -50,24 +50,32 @@ def _art_cache_dir() -> Path:
     return path
 
 
-def build_mdns_service_info(port: int) -> ServiceInfo:
+def build_mdns_service_info(port: int | None = None) -> ServiceInfo:
     """Build the ServiceInfo for our `_boombox._tcp.local` advertisement.
 
     Read on every call so tests can monkeypatch BOOMBOX_ID / BOOMBOX_NAME.
     TXT property values must be bytes — zeroconf treats str values as
     "raw" (no length prefix), which breaks record parsing on the client.
+
+    The advertised port is the LAN-facing nginx port (`BOOMBOX_LAN_PORT`,
+    default 8090), NOT the loopback aiohttp port — clients off-host must
+    reach the service via nginx. The `path` TXT record tells clients to
+    prepend `/api/remote/` to discover the API surface.
     """
     boombox_id = os.environ.get("BOOMBOX_ID", "boombox-default")
     boombox_name = os.environ.get("BOOMBOX_NAME", "Boombox")
+    lan_port = port if port is not None else int(
+        os.environ.get("BOOMBOX_LAN_PORT", "8090"))
     hostname = socket.gethostname()
     return ServiceInfo(
         type_="_boombox._tcp.local.",
         name=f"{boombox_id}._boombox._tcp.local.",
-        port=port,
+        port=lan_port,
         properties={
             "id":      boombox_id.encode(),
             "name":    boombox_name.encode(),
             "version": b"1",
+            "path":    b"/api/remote/",
         },
         server=f"{hostname}.local.",
     )
@@ -360,11 +368,15 @@ async def main() -> None:
         await site.start()
 
         # Advertise on the LAN so remotes can discover us. IPv4-only because
-        # ESP32 firmware typically resolves A records, not AAAA.
+        # ESP32 firmware typically resolves A records, not AAAA. The
+        # advertised port is the nginx LAN port (BOOMBOX_LAN_PORT, default
+        # 8090) — not the loopback aiohttp port — because off-host traffic
+        # enters via nginx /api/remote/.
         azc = AsyncZeroconf(ip_version=IPVersion.V4Only)
-        info = build_mdns_service_info(PORT)
+        info = build_mdns_service_info()
         await azc.async_register_service(info)
-        log.info("boombox-remote on :%d, mDNS as %s", PORT, info.name)
+        log.info("boombox-remote on :%d, mDNS as %s (port %d, path %s)",
+                  PORT, info.name, info.port, "/api/remote/")
 
         try:
             await asyncio.Event().wait()

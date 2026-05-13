@@ -65,3 +65,33 @@ async def test_fire_handler_exception_returns_error():
     d = _make_dispatcher(mopidy=ExplodingMopidy())
     result = await actions.fire(d, "stop")
     assert result == {"ok": False, "error": "handler_raised"}
+
+
+@pytest.mark.asyncio
+async def test_fire_passes_value_to_volume_handler():
+    """fire(d, 'volume', 70) calls StateApi.volume_set(70.0)."""
+    calls = []
+
+    class StubState:
+        async def volume_set(self, v):
+            calls.append(v)
+
+    d = _make_dispatcher(state=StubState())
+    result = await actions.fire(d, "volume", 70)
+    assert result == {"ok": True}
+    assert calls == [70.0]
+
+
+@pytest.mark.asyncio
+async def test_fire_mute_toggles_via_state_api():
+    """fire(d, 'mute') calls StateApi.mute_toggle()."""
+    calls = []
+
+    class StubState:
+        async def mute_toggle(self):
+            calls.append("toggle")
+
+    d = _make_dispatcher(state=StubState())
+    result = await actions.fire(d, "mute")
+    assert result == {"ok": True}
+    assert calls == ["toggle"]

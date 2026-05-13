@@ -301,16 +301,36 @@ async def shutdown_sequence(mopidy: MopidyRpc, state: StateApi, kiosk: KioskClie
                   proc.returncode, (err or out).decode(errors="replace").strip())
 
 
+# ---------- Volume / mute — value-aware handlers --------------------------
+
+@_handler("volume")
+async def _h_volume(d: Dispatcher, value=None):
+    """Set absolute volume (0-100). Requires `value` from the remote command."""
+    if d.state is None or value is None:
+        return
+    await d.state.volume_set(float(value))
+
+
+@_handler("mute")
+async def _h_mute(d: Dispatcher, value=None):
+    """Toggle mute. `value` ignored — semantics are toggle, not set."""
+    if d.state is None:
+        return
+    await d.state.mute_toggle()
+
+
 # ---------- High-level entry point ----------------------------------------
+
+import inspect as _inspect  # noqa: E402 — registered handlers above
+
 
 async def fire(dispatcher: "Dispatcher", action: str, value=None, *,
                source: str = "unknown") -> dict:
     """High-level dispatch entry. Returns {ok, error?}.
 
-    `value` is reserved for actions that take a parameter
-    (e.g. {"action": "volume", "value": 70}); short_press handlers
-    ignore it for now (the existing Dispatcher.dispatch path passes
-    only the dispatcher to the handler). `source` is for telemetry.
+    Routes short_press handlers. Handlers that declare a `value` parameter
+    receive the command's `value` (e.g. `_h_volume(d, value=70)`); handlers
+    that take only the dispatcher are called as before.
     """
     event = "short_press"
     if dispatcher.disabled and action in dispatcher.disabled:
@@ -319,7 +339,10 @@ async def fire(dispatcher: "Dispatcher", action: str, value=None, *,
     if handler is None:
         return {"ok": False, "error": f"unknown_action:{action}"}
     try:
-        await handler(dispatcher)
+        if "value" in _inspect.signature(handler).parameters:
+            await handler(dispatcher, value=value)
+        else:
+            await handler(dispatcher)
         log.info("fired %s/%s from %s", action, event, source)
         return {"ok": True}
     except Exception as exc:

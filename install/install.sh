@@ -298,6 +298,7 @@ USER_UNITS=(
   boombox-audio
   boombox-orchestrator
   boombox-buttons
+  boombox-remote
   boombox-resume
   boombox-bt-volume
   boombox-kiosk
