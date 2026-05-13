@@ -16,12 +16,15 @@ import io
 import json
 import logging
 import os
+import socket
 import sys
 from pathlib import Path
 
 import aiohttp as aiohttp_client_lib
 from aiohttp import web
 from PIL import Image
+from zeroconf import IPVersion, ServiceInfo
+from zeroconf.asyncio import AsyncZeroconf
 
 import actions
 import clients
@@ -45,6 +48,29 @@ def _art_cache_dir() -> Path:
                                 str(DEFAULT_ART_CACHE)))
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def build_mdns_service_info(port: int) -> ServiceInfo:
+    """Build the ServiceInfo for our `_boombox._tcp.local` advertisement.
+
+    Read on every call so tests can monkeypatch BOOMBOX_ID / BOOMBOX_NAME.
+    TXT property values must be bytes — zeroconf treats str values as
+    "raw" (no length prefix), which breaks record parsing on the client.
+    """
+    boombox_id = os.environ.get("BOOMBOX_ID", "boombox-default")
+    boombox_name = os.environ.get("BOOMBOX_NAME", "Boombox")
+    hostname = socket.gethostname()
+    return ServiceInfo(
+        type_="_boombox._tcp.local.",
+        name=f"{boombox_id}._boombox._tcp.local.",
+        port=port,
+        properties={
+            "id":      boombox_id.encode(),
+            "name":    boombox_name.encode(),
+            "version": b"1",
+        },
+        server=f"{hostname}.local.",
+    )
 
 
 def _ws_poll_seconds() -> float:
@@ -332,8 +358,19 @@ async def main() -> None:
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", PORT)
         await site.start()
-        log.info("boombox-remote listening on 127.0.0.1:%d", PORT)
-        await asyncio.Event().wait()
+
+        # Advertise on the LAN so remotes can discover us. IPv4-only because
+        # ESP32 firmware typically resolves A records, not AAAA.
+        azc = AsyncZeroconf(ip_version=IPVersion.V4Only)
+        info = build_mdns_service_info(PORT)
+        await azc.async_register_service(info)
+        log.info("boombox-remote on :%d, mDNS as %s", PORT, info.name)
+
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await azc.async_unregister_service(info)
+            await azc.async_close()
 
 
 if __name__ == "__main__":
