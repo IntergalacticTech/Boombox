@@ -1041,7 +1041,7 @@ async def main() -> None:
 
 from aiohttp import web
 
-BUTTONS_API_PORT = 6683
+BUTTONS_API_PORT = 6684
 
 
 async def _http_api(cfg_ref: list, dispatcher_ref: list, learn_state: dict) -> web.AppRunner:
