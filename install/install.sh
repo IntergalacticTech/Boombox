@@ -85,6 +85,14 @@ for grp in gpio audio video render bluetooth plugdev; do
 done
 
 # ---------------------------------------------------------------------------
+# 3b. Remove legacy pre-repo services that conflict with this codebase.
+# ---------------------------------------------------------------------------
+if [[ -x "$SCRIPT_DIR/legacy/remove-legacy-buttons.sh" ]]; then
+  log "removing legacy /usr/local/bin/boombox-* services (idempotent)"
+  "$SCRIPT_DIR/legacy/remove-legacy-buttons.sh"
+fi
+
+# ---------------------------------------------------------------------------
 # 4. DAC overlay (/boot/firmware/usercfg.txt)
 # ---------------------------------------------------------------------------
 BOOT_FW_DIR=/boot/firmware

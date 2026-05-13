@@ -13,3 +13,12 @@
 dtparam=i2s=on
 dtparam=audio=off
 dtoverlay=hifiberry-dacplus
+
+# Reclaim GPIO 7-11 + 14-15 for the boombox-buttons control surface. SPI and
+# UART0 are unused by anything in this build (verified 2026-05-12: lsof on
+# /dev/spidev*, /dev/serial0, /dev/ttyAMA0 is empty; the running serial-getty
+# is on ttyAMA10, the Pi 5 dedicated debug UART, not GPIO 14/15). Re-enable
+# either dtparam below if a future feature needs it, but you'll have to
+# reassign whichever button pin lands on the conflict.
+dtparam=spi=off
+dtparam=uart0=off
