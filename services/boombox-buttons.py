@@ -548,12 +548,18 @@ async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event) -> N
         queue: asyncio.Queue = asyncio.Queue()
 
         def reader():
-            while not stop.is_set():
-                if req.wait_edge_events(timeout=0.5):
-                    for ev in req.read_edge_events():
-                        loop.call_soon_threadsafe(queue.put_nowait, ev)
+            try:
+                while not stop.is_set():
+                    if req.wait_edge_events(timeout=0.5):
+                        for ev in req.read_edge_events():
+                            loop.call_soon_threadsafe(queue.put_nowait, ev)
+            except Exception:
+                # A dead reader is fatal — surface it loudly and tear down the loop so
+                # systemd restarts us rather than silently going dead.
+                log.exception("gpiod reader thread crashed; signalling stop")
+                loop.call_soon_threadsafe(stop.set)
 
-        loop.run_in_executor(None, reader)
+        reader_fut = loop.run_in_executor(None, reader)
 
         async def tick():
             while not stop.is_set():
@@ -634,8 +640,19 @@ async def main() -> None:
         _HANDLERS[("encoder", "ccw")] = _enc_ccw
         _HANDLERS[("encoder_push", "short_press")] = _enc_push
 
+        import signal
         stop = asyncio.Event()
-        await gpio_loop(cfg, dispatcher, stop)
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop.set)
+        try:
+            await gpio_loop(cfg, dispatcher, stop)
+        finally:
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                try:
+                    loop.remove_signal_handler(sig)
+                except (NotImplementedError, ValueError):
+                    pass
 
 
 if __name__ == "__main__":
