@@ -11,3 +11,7 @@ gpiod>=2.1
 # boombox-bt-volume — uses system dbus-python + PyGObject (apt-installed,
 # not pip; they need GLib/D-Bus headers that won't build cleanly in a venv).
 # The venv is created with --system-site-packages so we can import them.
+
+# Dev/test (installed in the venv even on the Pi so /opt/boombox can self-test).
+pytest>=8.0
+watchdog>=4.0
