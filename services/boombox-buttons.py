@@ -526,13 +526,24 @@ class Display:
         self._on: bool = True
 
     async def _detect_output(self) -> str | None:
+        """Return the cached Wayland output name; query wlr-randr on first call.
+
+        We pick the first non-indented line of wlr-randr's output, which is the
+        connected output's name. Assumes one panel (the kiosk's DSI-1 in this
+        build). If multiple outputs are connected, the kiosk should still be on
+        the first; multi-output is out of scope.
+        """
         if self._output:
             return self._output
         proc = await asyncio.create_subprocess_exec(
             "wlr-randr",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
-        out, _ = await proc.communicate()
+        out, err = await proc.communicate()
+        if proc.returncode != 0:
+            log.warning("wlr-randr failed (%s): %s",
+                        proc.returncode, err.decode(errors="replace").strip())
+            return None
         for line in out.decode().splitlines():
             if line and not line.startswith(" "):
                 self._output = line.split()[0]
@@ -544,22 +555,33 @@ class Display:
         if not out:
             return
         new = "off" if self._on else "on"
-        await asyncio.create_subprocess_exec(
+        proc = await asyncio.create_subprocess_exec(
             "wlr-randr", "--output", out, "--" + new,
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            log.warning("wlr-randr --%s failed (%s): %s", new, proc.returncode,
+                        err.decode(errors="replace").strip())
+            return
         self._on = not self._on
 
     async def wake(self) -> None:
-        if self._on:
-            return
         out = await self._detect_output()
         if not out:
             return
-        await asyncio.create_subprocess_exec(
+        # Always send --on. If the display is already on, wlr-randr is a no-op;
+        # if our cached _on state is stale (external tooling toggled the panel),
+        # this still does the right thing.
+        proc = await asyncio.create_subprocess_exec(
             "wlr-randr", "--output", out, "--on",
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            log.warning("wlr-randr --on failed (%s): %s", proc.returncode,
+                        err.decode(errors="replace").strip())
+            return
         self._on = True
 
 
@@ -582,10 +604,17 @@ async def shutdown_sequence(mopidy: MopidyRpc, state: StateApi, kiosk: KioskClie
     try:
         await mopidy.call("core.playback.pause")
         await state.control("pause")
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("shutdown: pause failed (continuing to poweroff): %s", e)
     log.info("shutdown: systemctl poweroff")
-    await asyncio.create_subprocess_exec("systemctl", "poweroff")
+    proc = await asyncio.create_subprocess_exec(
+        "sudo", "-n", "systemctl", "poweroff",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("systemctl poweroff failed (%s): %s",
+                  proc.returncode, (err or out).decode(errors="replace").strip())
 
 
 # ---------- GPIO event loop -----------------------------------------------
