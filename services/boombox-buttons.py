@@ -849,12 +849,22 @@ ENCODER_DEBOUNCE_MS = 1
 TICK_INTERVAL_S = 0.05  # 20Hz; resolves long-press windows precisely enough
 
 
-async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event) -> None:
+async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event,
+                    learn_state: dict | None = None) -> None:
     """Single-pass GPIO loop. Re-call to rebuild after config hot-reload.
-    Returns when `stop` is set."""
+    Returns when `stop` is set.
+
+    `learn_state` is a shared dict (mutated by the HTTP API's /learn handler):
+    when in learn mode it holds {"action": "<name>", "until": <t_ms>,
+    "result": None|<pin>}. While `t_ms < until` and `action` is set, the next
+    falling-edge button press is captured into `result` instead of dispatched.
+    """
     import gpiod
     from datetime import timedelta
     from gpiod.line import Direction, Bias, Edge
+
+    if learn_state is None:
+        learn_state = {"action": None, "until": 0, "result": None}
 
     pins = enabled_pins(cfg)
     if not pins:
@@ -947,6 +957,9 @@ async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event) -> N
                         await dispatcher.dispatch("encoder_push", "short_press")
                 else:
                     edge = "down" if ev.event_type == gpiod.EdgeEvent.Type.FALLING_EDGE else "up"
+                    if edge == "down" and learn_state.get("action") and t_ms < learn_state.get("until", 0):
+                        learn_state["result"] = ev.line_offset
+                        continue   # don't dispatch, just capture
                     for evt in classifiers[action].feed(t_ms, edge):
                         await dispatcher.dispatch(action, evt[0])
         finally:
@@ -1009,14 +1022,82 @@ async def main() -> None:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, stop.set)
+        cfg_ref = [cfg]
+        dispatcher_ref = [dispatcher]
+        learn_state: dict = {"action": None, "until": 0, "result": None}
+        api_runner = await _http_api(cfg_ref, dispatcher_ref, learn_state)
         try:
-            await gpio_loop(cfg, dispatcher, stop)
+            await gpio_loop(cfg, dispatcher, stop, learn_state=learn_state)
         finally:
+            await api_runner.cleanup()
             for sig in (signal.SIGTERM, signal.SIGINT):
                 try:
                     loop.remove_signal_handler(sig)
                 except (NotImplementedError, ValueError):
                     pass
+
+
+# ---------- Settings HTTP API ---------------------------------------------
+
+from aiohttp import web
+
+BUTTONS_API_PORT = 6683
+
+
+async def _http_api(cfg_ref: list, dispatcher_ref: list, learn_state: dict) -> web.AppRunner:
+    """cfg_ref and dispatcher_ref are single-element lists so the handlers
+    can mutate them when the config hot-reloads.
+
+    learn_state is a dict shared with the GPIO loop; when in learn mode it
+    is {"action": "<name>", "until": <t_ms>, "result": None|<pin>}.
+    """
+    async def get_config(_req):
+        return web.json_response(cfg_ref[0])
+
+    async def post_config(req):
+        body = await req.json()
+        CONFIG_PATH.write_text(json.dumps(body, indent=2))
+        return web.json_response({"ok": True})
+
+    async def post_learn(req):
+        body = await req.json()
+        action = body.get("action")
+        if not action:
+            return web.json_response({"ok": False, "error": "action required"}, status=400)
+        loop = asyncio.get_running_loop()
+        learn_state["action"] = action
+        learn_state["until"] = int(loop.time() * 1000) + 5000
+        learn_state["result"] = None
+        # Poll for up to 5s for a captured pin.
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            if learn_state.get("result") is not None:
+                pin = learn_state["result"]
+                learn_state["action"] = None
+                return web.json_response({"ok": True, "action": action, "pin": pin})
+        learn_state["action"] = None
+        return web.json_response({"ok": False, "error": "no press detected"}, status=408)
+
+    async def post_test(req):
+        body = await req.json()
+        action = body.get("action")
+        event = body.get("event", "short_press")
+        if not action or dispatcher_ref[0] is None:
+            return web.json_response({"ok": False, "error": "action required"}, status=400)
+        await dispatcher_ref[0].dispatch(action, event)
+        return web.json_response({"ok": True})
+
+    app = web.Application()
+    app.router.add_get("/config", get_config)
+    app.router.add_post("/config", post_config)
+    app.router.add_post("/learn", post_learn)
+    app.router.add_post("/test", post_test)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", BUTTONS_API_PORT)
+    await site.start()
+    log.info("buttons HTTP API listening on 127.0.0.1:%d", BUTTONS_API_PORT)
+    return runner
 
 
 if __name__ == "__main__":
