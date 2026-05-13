@@ -17,7 +17,9 @@ import json
 import logging
 import os
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Awaitable, Callable
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("boombox-buttons")
@@ -207,6 +209,113 @@ class EncoderDecoder:
         while self._accum <= -4:
             self._accum += 4
             yield ("ccw",)
+
+
+# ---------- Dispatcher ----------------------------------------------------
+
+@dataclass
+class Dispatcher:
+    """Routes (action, event) pairs to their target. Holds references to
+    the four backend clients; each action handler picks the right one.
+
+    `disabled` is a set of action names that should be silently dropped —
+    populated from the config's enabled flag at startup and on hot-reload.
+    """
+    mopidy: object | None
+    state:  object | None
+    kiosk:  object | None
+    recorder: object | None
+    display: object | None
+    sleep: object | None
+    disabled: set[str] | None = None
+
+    async def dispatch(self, action: str, event: str = "short_press") -> None:
+        if self.disabled and action in self.disabled:
+            return
+        handler = _HANDLERS.get((action, event))
+        if handler is None:
+            log.debug("no handler for (%s, %s)", action, event)
+            return
+        try:
+            await handler(self)
+        except Exception as exc:
+            log.warning("handler %s/%s raised: %s", action, event, exc)
+
+
+# Action handlers register themselves below. We separate (short_press) from
+# (long_press / long_hold / long_release) so the table is explicit.
+_HANDLERS: dict[tuple[str, str], Callable[[Dispatcher], Awaitable[None]]] = {}
+
+
+def _handler(action: str, event: str = "short_press"):
+    def deco(fn):
+        _HANDLERS[(action, event)] = fn
+        return fn
+    return deco
+
+
+# Transport — short presses
+@_handler("play_pause")
+async def _h_play_pause(d: Dispatcher):
+    source = await d.state.current_source() if d.state else "mopidy"
+    if source in (None, "mopidy"):
+        if d.mopidy is None:
+            return
+        state = (await d.mopidy.call("core.playback.get_state")).get("result")
+        await d.mopidy.call("core.playback.pause" if state == "playing" else "core.playback.play")
+    else:
+        await d.state.control("play-pause")
+
+
+@_handler("stop")
+async def _h_stop(d: Dispatcher):
+    if d.mopidy:
+        await d.mopidy.call("core.playback.stop")
+
+
+@_handler("previous")
+async def _h_previous(d: Dispatcher):
+    source = await d.state.current_source() if d.state else "mopidy"
+    if source in (None, "mopidy"):
+        if d.mopidy:
+            await d.mopidy.call("core.playback.previous")
+    else:
+        await d.state.control("previous")
+
+
+@_handler("next")
+async def _h_next(d: Dispatcher):
+    source = await d.state.current_source() if d.state else "mopidy"
+    if source in (None, "mopidy"):
+        if d.mopidy:
+            await d.mopidy.call("core.playback.next")
+    else:
+        await d.state.control("next")
+
+
+@_handler("shuffle")
+async def _h_shuffle(d: Dispatcher):
+    if d.mopidy is None:
+        return
+    cur = (await d.mopidy.call("core.tracklist.get_random")).get("result")
+    await d.mopidy.call("core.tracklist.set_random", {"value": not cur})
+
+
+@_handler("repeat")
+async def _h_repeat(d: Dispatcher):
+    if d.mopidy is None:
+        return
+    repeat = (await d.mopidy.call("core.tracklist.get_repeat")).get("result")
+    single = (await d.mopidy.call("core.tracklist.get_single")).get("result")
+    # Cycle off -> all -> one -> off
+    if not repeat and not single:
+        await d.mopidy.call("core.tracklist.set_repeat", {"value": True})
+        await d.mopidy.call("core.tracklist.set_single", {"value": False})
+    elif repeat and not single:
+        await d.mopidy.call("core.tracklist.set_single", {"value": True})
+    else:
+        await d.mopidy.call("core.tracklist.set_repeat", {"value": False})
+        await d.mopidy.call("core.tracklist.set_single", {"value": False})
 
 
 # ---------- Service entry point -------------------------------------------

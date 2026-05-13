@@ -2,3 +2,4 @@
 testpaths = ["services/tests"]
 python_files = ["test_*.py"]
 addopts = "-q"
+asyncio_mode = "auto"
