@@ -318,11 +318,177 @@ async def _h_repeat(d: Dispatcher):
         await d.mopidy.call("core.tracklist.set_single", {"value": False})
 
 
+# ---------- Backend clients -----------------------------------------------
+
+import aiohttp
+
+MOPIDY_RPC = "http://127.0.0.1:6680/mopidy/rpc"
+STATE_BASE = "http://127.0.0.1:6681"
+KIOSK_DEBUG = "http://127.0.0.1:9222"
+
+
+class MopidyRpc:
+    def __init__(self, session: aiohttp.ClientSession):
+        self._sess = session
+        self._id = 0
+
+    async def call(self, method: str, params: dict | None = None) -> dict:
+        self._id += 1
+        body = {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params or {}}
+        try:
+            async with self._sess.post(MOPIDY_RPC, json=body,
+                                       timeout=aiohttp.ClientTimeout(total=2)) as r:
+                if r.status != 200:
+                    return {}
+                return await r.json(content_type=None)
+        except Exception as e:
+            log.warning("mopidy.%s failed: %s", method, e)
+            return {}
+
+
+class StateApi:
+    """Thin client for the boombox-state aggregator at :6681.
+
+    `current_source()` returns the lowercase friendly source name
+    ('mopidy', 'airplay', 'spotify', 'bluetooth') or None when nothing is
+    playing.
+    """
+
+    def __init__(self, session: aiohttp.ClientSession):
+        self._sess = session
+
+    async def current_source(self) -> str | None:
+        try:
+            async with self._sess.get(f"{STATE_BASE}/state",
+                                      timeout=aiohttp.ClientTimeout(total=1)) as r:
+                if r.status != 200:
+                    return None
+                body = await r.json()
+        except Exception:
+            return None
+        label = (body.get("label") or "").lower()
+        return label or None
+
+    async def control(self, action: str) -> None:
+        try:
+            await self._sess.post(f"{STATE_BASE}/control/{action}",
+                                   timeout=aiohttp.ClientTimeout(total=2))
+        except Exception as e:
+            log.warning("state.control(%s) failed: %s", action, e)
+
+    async def volume_get(self) -> tuple[float, bool] | None:
+        try:
+            async with self._sess.get(f"{STATE_BASE}/volume",
+                                      timeout=aiohttp.ClientTimeout(total=1)) as r:
+                body = await r.json()
+                if not body.get("ok"):
+                    return None
+                return float(body["volume"]), bool(body.get("muted"))
+        except Exception:
+            return None
+
+    async def volume_set(self, volume: float) -> None:
+        try:
+            await self._sess.post(f"{STATE_BASE}/volume", json={"volume": volume},
+                                  timeout=aiohttp.ClientTimeout(total=1))
+        except Exception as e:
+            log.warning("state.volume_set failed: %s", e)
+
+    async def mute_toggle(self) -> None:
+        try:
+            await self._sess.post(f"{STATE_BASE}/volume/mute",
+                                  timeout=aiohttp.ClientTimeout(total=1))
+        except Exception as e:
+            log.warning("state.mute_toggle failed: %s", e)
+
+    async def karaoke_state(self) -> bool:
+        try:
+            async with self._sess.get(f"{STATE_BASE}/karaoke",
+                                      timeout=aiohttp.ClientTimeout(total=1)) as r:
+                body = await r.json()
+                return bool(body.get("on"))
+        except Exception:
+            return False
+
+    async def karaoke_toggle(self) -> None:
+        on = await self.karaoke_state()
+        path = "/karaoke/off" if on else "/karaoke/on"
+        try:
+            await self._sess.post(f"{STATE_BASE}{path}",
+                                  timeout=aiohttp.ClientTimeout(total=2))
+        except Exception as e:
+            log.warning("state.karaoke_toggle failed: %s", e)
+
+    async def bluetooth_pair(self) -> None:
+        try:
+            await self._sess.post(f"{STATE_BASE}/bluetooth/pair",
+                                  timeout=aiohttp.ClientTimeout(total=5))
+        except Exception as e:
+            log.warning("state.bluetooth_pair failed: %s", e)
+
+
+class KioskClient:
+    """DevTools client for the Chromium kiosk on :9222. Drives navigation
+    and runs JS in the kiosk tab. Used for source overlays, swap-to-Jellyfin,
+    QR code, sleep OSD, etc."""
+
+    def __init__(self, session: aiohttp.ClientSession):
+        self._sess = session
+
+    async def _tab(self) -> dict | None:
+        try:
+            async with self._sess.get(f"{KIOSK_DEBUG}/json",
+                                       timeout=aiohttp.ClientTimeout(total=1)) as r:
+                tabs = await r.json()
+                for t in tabs:
+                    if t.get("type") == "page":
+                        return t
+        except Exception:
+            return None
+        return None
+
+    async def navigate(self, url: str) -> None:
+        tab = await self._tab()
+        if not tab:
+            return
+        ws_url = tab.get("webSocketDebuggerUrl")
+        if not ws_url:
+            return
+        try:
+            import websockets
+            async with websockets.connect(ws_url, open_timeout=2, max_size=2**24) as ws:
+                await ws.send(json.dumps({"id": 1, "method": "Page.navigate",
+                                           "params": {"url": url}}))
+        except Exception as e:
+            log.warning("kiosk.navigate(%s) failed: %s", url, e)
+
+    async def emit(self, event: str, detail: dict | None = None) -> None:
+        """Dispatch a custom DOM event on the kiosk page so the SPA can
+        react (overlay mount/unmount). The SPA listens on
+        window.addEventListener('boombox:<event>')."""
+        tab = await self._tab()
+        if not tab:
+            return
+        ws_url = tab.get("webSocketDebuggerUrl")
+        if not ws_url:
+            return
+        script = (
+            f"window.dispatchEvent(new CustomEvent('boombox:{event}', "
+            f"{{detail: {json.dumps(detail or {})}}}))"
+        )
+        try:
+            import websockets
+            async with websockets.connect(ws_url, open_timeout=2, max_size=2**24) as ws:
+                await ws.send(json.dumps({"id": 2, "method": "Runtime.evaluate",
+                                          "params": {"expression": script}}))
+        except Exception as e:
+            log.warning("kiosk.emit(%s) failed: %s", event, e)
+
+
 # ---------- Service entry point -------------------------------------------
-# Backend clients (Task 7), GPIO event loop (Task 8), action handlers
-# (Tasks 6, 9-12), and HTTP API server (Task 14) land in subsequent commits.
-# Until Task 8 rebuilds main(), running this file as a script is intentionally
-# a no-op.
+# GPIO event loop (Task 8), action handlers (Tasks 9-12), and HTTP API
+# server (Task 14) land in subsequent commits. Until Task 8 rebuilds main(),
+# running this file as a script is intentionally a no-op.
 
 async def main() -> None:
     raise NotImplementedError(
