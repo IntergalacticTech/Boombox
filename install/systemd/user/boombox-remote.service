@@ -1,0 +1,15 @@
+[Unit]
+Description=Boombox wireless-remote HTTP API (REST + WebSocket)
+After=graphical-session.target pipewire.service boombox-state.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-remote.py
+Restart=on-failure
+RestartSec=3
+# Listens on 0.0.0.0:6685 — exposed through nginx /api/remote/ and
+# advertised on the LAN via mDNS (_boombox-remote._tcp).
+
+[Install]
+WantedBy=default.target
