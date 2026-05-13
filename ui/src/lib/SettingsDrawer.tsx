@@ -5,6 +5,7 @@
 // compact row, ~60 px tall. New sections should preserve that height budget.
 
 import { useEffect, useState } from "react";
+import { ButtonsPanel } from "./ButtonsPanel";
 import { setSleepMinutes, useSleepTimer } from "./sleepTimer";
 
 type KaraokeMic = { name: string; label: string };
@@ -545,6 +546,9 @@ export function SettingsDrawer({ onClose }: Props) {
               >Off</button>
             </div>
           </div>
+
+          {/* Physical buttons — GPIO pin map + learn/test */}
+          <ButtonsPanel />
 
           {/* Library rescan */}
           <SettingRow
