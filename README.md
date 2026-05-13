@@ -101,7 +101,7 @@ folder will publish the latest site.
 | `boombox-state`       | 6681 | MPRIS aggregator: non-Mopidy sources at `/api/state`; also `/api/control`, `/api/volume`, `/api/info`, `/api/sinks`, `/api/karaoke`, `/api/lyrics`, `/api/art`, `/api/mopidy/restart` |
 | `boombox-audio`       | 6682 | PipeWire monitor → FFT/VU → WebSocket at `/audio/ws` |
 | `boombox-orchestrator`| —    | Watches PipeWire; pauses other sources when a new one starts |
-| `boombox-buttons`     | —    | GPIO falling-edge → Mopidy transport |
+| `boombox-buttons`     | 6684 | 17 GPIO buttons + rotary encoder; routes to Mopidy / state API / kiosk overlays; `/api/buttons/` config + learn + test |
 | `boombox-resume`      | —    | Snapshots Mopidy state, restores after reboot |
 | `boombox-bt-volume`   | —    | AVRCP absolute-volume → `bluez_input` node |
 | `boombox-kiosk-guard` | —    | DevTools-driven watchdog that keeps Chromium on `http://localhost/` |

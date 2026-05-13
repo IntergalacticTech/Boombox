@@ -119,18 +119,62 @@ for the full rationale.
   (currently it logs at INFO; bump the `logging.basicConfig` if you need
   more detail).
 
-### `boombox-buttons` — GPIO transport
+### `boombox-buttons` — full GPIO control surface
 
-Reads `/dev/gpiochip0` for falling edges on the configured BCM pins,
-fires Mopidy JSON-RPC for each. Pin map defaults to
-`{play_pause: 17, next: 27, previous: 22, volume_up: 23, volume_down: 24}`,
-overridable via `/etc/boombox/buttons.json`.
+**Listens on `127.0.0.1:6684`, proxied as `/api/buttons/` by nginx.**
+
+Reads `/dev/gpiochip0` for falling edges on 17 button pins plus the A/B/push
+lines of one rotary encoder, runs each through a press classifier (short /
+long / hold) and a quadrature decoder, then dispatches to the matching
+handler. Configuration is hot-reloaded from `/etc/boombox/buttons.json` via
+a `watchdog` observer — edits via the Settings panel or `vim` apply
+immediately, no service restart.
+
+**Action inventory (17 buttons + encoder):**
+
+| Action | Routing |
+|--------|---------|
+| `play_pause`, `next`, `previous`, `stop`, `shuffle`, `repeat` | Mopidy JSON-RPC direct (`mopidy:6680/rpc`) |
+| `airplay`, `spotify`, `bluetooth`, `library`, `movies`, `web` | `boombox-state` `/api/control/source` + kiosk DevTools `Page.navigate` |
+| `mic_karaoke` | `boombox-state` `/api/karaoke/{on,off}` toggle |
+| `sleep_timer` | Cycles 15/30/45/60 min; emits `boombox:sleep-timer`; on expiry calls `/api/control/stop` + `boombox:sleep-expired` |
+| `skin_cycle` | Emits `boombox:skin-cycle`; SPA advances skin index |
+| `record` | `parec --device=@DEFAULT_MONITOR@ \| flac` to `~/Music/Recordings/<ts>.flac`; emits `boombox:record` |
+| `web` (long-press) | Emits `boombox:web-qr` (kiosk shows LAN URL + QR overlay) |
+| `power` (2 s hold) | Emits `boombox:shutdown-countdown` then `boombox:shutdown-confirm`; runs `systemctl poweroff` |
+| Encoder rotate | `/api/volume` delta (default ±5 per detent) |
+| Encoder push | `/api/volume/mute` toggle |
+
+**Custom DOM events emitted on the kiosk page** (via DevTools
+`Runtime.evaluate`): `boombox:web-qr`, `boombox:sleep-timer`,
+`boombox:sleep-expired`, `boombox:record`, `boombox:source-overlay`,
+`boombox:skin-cycle`, `boombox:shutdown-countdown`, `boombox:shutdown-confirm`.
+The SPA's overlay components listen on `window.addEventListener('boombox:<event>')`.
+
+**HTTP API** (used by the touchscreen Settings → Buttons panel):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET  /api/buttons/config` | Current config (pins, enables, debounce/hold values) |
+| `POST /api/buttons/config` | Atomic write of new config to `/etc/boombox/buttons.json` |
+| `POST /api/buttons/learn` | "Press a button" capture mode — returns the pin that next went low |
+| `POST /api/buttons/test`  | Fire an action by name without a physical press (verify wiring/handler) |
 
 - **Code:** [`services/boombox-buttons.py`](../services/boombox-buttons.py)
-- **Requires:** user in the `gpio` group (the installer handles this; a
-  reboot is needed after first install).
+- **Config:** `/etc/boombox/buttons.json` (hot-reloaded; template at `install/config/buttons.json`).
+  Set any `pin` to `null` or `enabled: false` to disable an action; the schema
+  carries `long_press_ms`, `power_hold_ms`, and `encoder_step` as the only
+  tuning knobs.
+- **Logs:** `journalctl --user -u boombox-buttons -f`
+- **Requires:** user in the `gpio` group (installer handles; reboot after
+  first install). Linux gpiod via the `gpiod` python binding.
 - **Wiring:** each button shorts its pin to GND when pressed; the SoC's
-  internal pull-up holds it high otherwise.
+  internal pull-up holds it high otherwise. Encoder uses standard
+  quadrature A/B with a push switch on a third pin.
+- **GPIO budget:** the full surface needs 20 pins. The installer disables
+  SPI (`/boot/firmware/usercfg.txt`) and UART0 (no console-on-serial)
+  to free up GPIO 14/15 and the SPI block for buttons. If you re-enable
+  SPI on a fork, remap or disable the actions on those pins.
 
 ### `boombox-resume` — playback resume across reboots
 

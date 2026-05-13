@@ -7,8 +7,8 @@ rotary encoder with push. Every action is independently disable-able via
 /etc/boombox/buttons.json. Pin assignments are user-editable via that file
 or via the Settings drawer's Buttons panel (which writes the file).
 
-Listens on aiohttp 127.0.0.1:6683 for /config, /learn, /test endpoints used
-by the Settings panel.
+Listens on aiohttp 127.0.0.1:6684 for /config, /learn, /test endpoints used
+by the Settings panel (fronted as /api/buttons/ via nginx).
 """
 from __future__ import annotations
 

@@ -12,22 +12,23 @@ repo organises itself in your head.
                       │   Raspberry Pi 5 + HiFiBerry  │
                       └──────────────┬───────────────┘
                                      │
-   ┌─────────────┐     ┌─────────────┴────────────┐     ┌──────────────┐
-   │   Touch UI  │◀────│  nginx localhost:80      │────▶│  /var/www/   │
-   │  (Chromium) │     │  ┌────────────────────┐  │     │  boombox/    │
-   │  kiosk mode │     │  │ / → SPA            │  │     │  (Vite dist) │
-   └──────┬──────┘     │  │ /mopidy/  → :6680  │  │     └──────────────┘
-          │            │  │ /api/     → :6681  │  │
-   GPIO   │            │  │ /audio/ws → :6682  │  │
-   buttons│            │  └────────────────────┘  │
-          │            │  LAN :8090 → Basic auth  │
-          │            └──────────────────────────┘
-          ▼                       │       │       │
-   ┌──────────────┐               ▼       ▼       ▼
+   ┌─────────────┐     ┌──────────────┴────────────┐     ┌──────────────┐
+   │   Touch UI  │◀────│  nginx localhost:80       │────▶│  /var/www/   │
+   │  (Chromium) │     │  ┌─────────────────────┐  │     │  boombox/    │
+   │  kiosk mode │     │  │ / → SPA             │  │     │  (Vite dist) │
+   └──────┬──────┘     │  │ /mopidy/      :6680 │  │     └──────────────┘
+          │            │  │ /api/         :6681 │  │
+   GPIO   │            │  │ /audio/ws     :6682 │  │
+   buttons│            │  │ /api/buttons/ :6684 │  │
+          │            │  └─────────────────────┘  │
+          │            │  LAN :8090 → Basic auth   │
+          │            └───────────────────────────┘
+          ▼                       │       │      │ │
+   ┌──────────────┐               ▼       ▼      │ ▼
    │   Mopidy     │       ┌───────────┐ ┌──────────┐ ┌─────────────┐
    │   :6680      │◀──────│  boombox- │ │ boombox- │ │  boombox-   │
    │   (music)    │       │  state    │ │  audio   │ │  buttons    │
-   └──────┬───────┘       │  :6681    │ │  :6682   │ │  (GPIO)     │
+   └──────┬───────┘       │  :6681    │ │  :6682   │ │  :6684+GPIO │
           │               └─────┬─────┘ └─────┬────┘ └──────┬──────┘
           │  alsasink           │             │             │
           ▼                     │  playerctl  │  parec      │ HTTP/RPC
@@ -62,7 +63,7 @@ repo organises itself in your head.
 | `boombox-state` | user | 6681 | MPRIS aggregator + `/api/*` helpers |
 | `boombox-audio` | user | 6682 | PipeWire monitor → FFT/VU → `/audio/ws` WebSocket |
 | `boombox-orchestrator` | user | — | Watches PipeWire; pauses other sources when a new one starts |
-| `boombox-buttons` | user | — | GPIO falling-edge → Mopidy RPC |
+| `boombox-buttons` | user | 6684 | 17 buttons + encoder over `/dev/gpiochip0`; HTTP `/api/buttons/` for the Settings panel (config / learn / test); hot-reloads `/etc/boombox/buttons.json` |
 | `boombox-resume` | user | — | Snapshots Mopidy state, restores after reboot |
 | `boombox-bt-volume` | user | — | AVRCP absolute-volume → `bluez_input` node volume |
 | `boombox-kiosk-guard` | user | — | DevTools watchdog that keeps Chromium pinned to `http://localhost/` |

@@ -371,6 +371,11 @@ sudo systemctl enable smbd
 sudo mkdir -p /etc/boombox
 if [[ ! -f /etc/boombox/buttons.json ]]; then
   sudo install -m 0644 "$SCRIPT_DIR/config/buttons.json" /etc/boombox/buttons.json
+elif ! sudo grep -q '"power"' /etc/boombox/buttons.json; then
+  # Old 5-action schema detected; back up and replace with the full one.
+  log "upgrading buttons.json schema (backup at /etc/boombox/buttons.json.pre-fullbuttons)"
+  sudo cp /etc/boombox/buttons.json /etc/boombox/buttons.json.pre-fullbuttons
+  sudo install -m 0644 "$SCRIPT_DIR/config/buttons.json" /etc/boombox/buttons.json
 fi
 
 # ---------------------------------------------------------------------------
