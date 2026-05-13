@@ -17,9 +17,7 @@ import json
 import logging
 import os
 from copy import deepcopy
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Iterable
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("boombox-buttons")
@@ -69,8 +67,13 @@ def default_config() -> dict:
 def _merge(base: dict, override: dict) -> dict:
     out = deepcopy(base)
     for k, v in override.items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _merge(out[k], v)
+        base_v = out.get(k)
+        if isinstance(v, dict) and isinstance(base_v, dict):
+            out[k] = _merge(base_v, v)
+        elif v is None and isinstance(base_v, dict):
+            # Reject `None` override of a default dict (e.g. {"pins": null}).
+            # The default stays; the load_config caller would otherwise crash.
+            continue
         else:
             out[k] = v
     return out
@@ -107,136 +110,27 @@ def enabled_pins(cfg: dict) -> dict[str, int]:
     return out
 
 
-def pin_conflicts(cfg: dict) -> list[tuple[str, str, int]]:
-    """Return a list of (action_a, action_b, pin) triples that collide."""
+def pin_conflicts(cfg: dict) -> list[tuple[int, list[str]]]:
+    """Return (pin, [action_names_in_alpha_order]) for every pin used by more
+    than one enabled action. Empty list = no conflicts.
+    """
     by_pin: dict[int, list[str]] = {}
     for name, pin in enabled_pins(cfg).items():
         by_pin.setdefault(pin, []).append(name)
-    conflicts: list[tuple[str, str, int]] = []
-    for pin, names in by_pin.items():
-        if len(names) > 1:
-            names.sort()
-            for i in range(len(names)):
-                for j in range(i + 1, len(names)):
-                    conflicts.append((names[i], names[j], pin))
-    return conflicts
+    return [(p, sorted(ns)) for p, ns in sorted(by_pin.items()) if len(ns) > 1]
 
 
-# ---------- Mopidy RPC helpers --------------------------------------------
-
-class MopidyRpc:
-    def __init__(self, session: aiohttp.ClientSession):
-        self._sess = session
-        self._id = 0
-
-    async def call(self, method: str, params: dict | None = None) -> dict | None:
-        self._id += 1
-        body = {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params or {}}
-        try:
-            async with self._sess.post(MOPIDY_RPC, json=body, timeout=aiohttp.ClientTimeout(total=2)) as r:
-                if r.status != 200:
-                    log.warning("rpc %s → HTTP %s", method, r.status)
-                    return None
-                return await r.json(content_type=None)
-        except Exception as e:
-            log.warning("rpc %s failed: %s", method, e)
-            return None
-
-
-async def play_pause(rpc: MopidyRpc) -> None:
-    res = await rpc.call("core.playback.get_state")
-    state = (res or {}).get("result")
-    if state == "playing":
-        await rpc.call("core.playback.pause")
-    else:
-        await rpc.call("core.playback.play")
-
-
-async def next_track(rpc: MopidyRpc) -> None:
-    await rpc.call("core.playback.next")
-
-
-async def previous_track(rpc: MopidyRpc) -> None:
-    await rpc.call("core.playback.previous")
-
-
-async def volume_up(rpc: MopidyRpc) -> None:
-    res = await rpc.call("core.mixer.get_volume")
-    cur = (res or {}).get("result") or 0
-    await rpc.call("core.mixer.set_volume", {"volume": min(100, cur + VOLUME_STEP)})
-
-
-async def volume_down(rpc: MopidyRpc) -> None:
-    res = await rpc.call("core.mixer.get_volume")
-    cur = (res or {}).get("result") or 0
-    await rpc.call("core.mixer.set_volume", {"volume": max(0, cur - VOLUME_STEP)})
-
-
-ACTIONS: dict[str, Callable[[MopidyRpc], Awaitable[None]]] = {
-    "play_pause": play_pause,
-    "next":       next_track,
-    "previous":   previous_track,
-    "volume_up":  volume_up,
-    "volume_down": volume_down,
-}
-
-
-# ---------- GPIO event loop ------------------------------------------------
-
-async def watch_pins(pin_map: dict[str, int | None], rpc: MopidyRpc) -> None:
-    pins = [(action, pin) for action, pin in pin_map.items() if pin is not None]
-    if not pins:
-        log.info("no GPIO pins configured — sleeping; reload the service after editing the pin map")
-        # Sleep forever rather than exiting; systemd would just restart us.
-        await asyncio.Event().wait()
-        return
-
-    # Build line config: each pin pulls up + listens for falling edges, with
-    # hardware debounce so we don't repeat-fire on contact bounce.
-    config = {
-        pin: gpiod.LineSettings(
-            direction=Direction.INPUT,
-            bias=Bias.PULL_UP,
-            edge_detection=Edge.FALLING,
-            debounce_period=DEBOUNCE_MS / 1000,
-        )
-        for _, pin in pins
-    }
-    by_pin = {pin: action for action, pin in pins}
-
-    log.info("watching pins: %s", ", ".join(f"{a}=BCM{p}" for a, p in pins))
-
-    with gpiod.request_lines(GPIO_CHIP, consumer="boombox-buttons", config=config) as req:
-        loop = asyncio.get_running_loop()
-        # gpiod's blocking read in a background thread; events feed an asyncio queue.
-        queue: asyncio.Queue[gpiod.EdgeEvent] = asyncio.Queue()
-
-        def reader() -> None:
-            while True:
-                # wait_edge_events blocks; read each batch when available.
-                if req.wait_edge_events():
-                    for ev in req.read_edge_events():
-                        loop.call_soon_threadsafe(queue.put_nowait, ev)
-
-        loop.run_in_executor(None, reader)
-
-        while True:
-            ev = await queue.get()
-            action = by_pin.get(ev.line_offset)
-            if not action:
-                continue
-            handler = ACTIONS.get(action)
-            if handler is None:
-                continue
-            log.info("button %s pressed (BCM%s)", action, ev.line_offset)
-            asyncio.create_task(handler(rpc))
-
+# ---------- Service entry point -------------------------------------------
+# Backend clients (Task 7), GPIO event loop (Task 8), action handlers
+# (Tasks 6, 9-12), and HTTP API server (Task 14) land in subsequent commits.
+# Until Task 8 rebuilds main(), running this file as a script is intentionally
+# a no-op.
 
 async def main() -> None:
-    pin_map = load_pin_map()
-    async with aiohttp.ClientSession() as session:
-        rpc = MopidyRpc(session)
-        await watch_pins(pin_map, rpc)
+    raise NotImplementedError(
+        "boombox-buttons main() is rebuilt in Task 8 of "
+        "docs/superpowers/plans/2026-05-12-gpio-buttons.md"
+    )
 
 
 if __name__ == "__main__":

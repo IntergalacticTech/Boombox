@@ -44,8 +44,20 @@ def test_load_missing_file_returns_defaults(tmp_path: Path):
 def test_load_malformed_file_returns_defaults(tmp_path: Path, caplog):
     f = tmp_path / "buttons.json"
     f.write_text("{ not json")
-    cfg = buttons.load_config(f)
+    import logging
+    with caplog.at_level(logging.WARNING):
+        cfg = buttons.load_config(f)
     assert cfg == buttons.default_config()
+    assert any("could not read" in r.message for r in caplog.records)
+
+
+def test_load_rejects_null_override_of_dict_section(tmp_path: Path):
+    """User typo `{"pins": null}` must not clobber the default pins dict."""
+    f = tmp_path / "buttons.json"
+    f.write_text(json.dumps({"pins": None}))
+    cfg = buttons.load_config(f)
+    assert isinstance(cfg["pins"], dict)
+    assert "play_pause" in cfg["pins"]
 
 
 def test_enabled_pins_filters_correctly():
@@ -66,4 +78,9 @@ def test_pin_conflict_detected():
     cfg["pins"]["play_pause"]["pin"] = 99
     cfg["pins"]["stop"]["pin"] = 99
     conflicts = buttons.pin_conflicts(cfg)
-    assert ("play_pause", "stop", 99) in conflicts or ("stop", "play_pause", 99) in conflicts
+    assert (99, ["play_pause", "stop"]) in conflicts
+
+
+def test_pin_conflicts_empty_for_default_config():
+    """The spec's default pin map must be internally consistent."""
+    assert buttons.pin_conflicts(buttons.default_config()) == []
