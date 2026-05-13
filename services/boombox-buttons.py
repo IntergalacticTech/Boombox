@@ -379,6 +379,80 @@ async def _h_record(d: Dispatcher):
             await d.kiosk.emit("record", {"on": True, "path": path})
 
 
+# Source switch handlers
+@_handler("library", "short_press")
+async def _h_library(d: Dispatcher):
+    if d.kiosk:
+        await d.kiosk.navigate("http://localhost/")
+
+
+@_handler("airplay", "short_press")
+async def _h_airplay(d: Dispatcher):
+    if d.kiosk:
+        await d.kiosk.emit("source-overlay", {"source": "airplay"})
+
+
+@_handler("spotify", "short_press")
+async def _h_spotify(d: Dispatcher):
+    if d.kiosk:
+        await d.kiosk.emit("source-overlay", {"source": "spotify"})
+
+
+@_handler("bluetooth", "short_press")
+async def _h_bluetooth(d: Dispatcher):
+    if d.state:
+        await d.state.bluetooth_pair()
+    if d.kiosk:
+        await d.kiosk.emit("source-overlay", {"source": "bluetooth"})
+
+
+@_handler("movies", "short_press")
+async def _h_movies(d: Dispatcher):
+    """Toggle between SPA and Jellyfin. The kiosk-guard service is already
+    aware of Jellyfin via the SourceSwitcher SPA logic; we just navigate."""
+    if d.mopidy:
+        await d.mopidy.call("core.playback.pause")
+    if d.kiosk:
+        await d.kiosk.navigate("http://localhost:8096/web/index.html#/home")
+
+
+@_handler("web", "short_press")
+async def _h_web(d: Dispatcher):
+    """Toggle the LAN web access state + show a QR overlay. The SPA owns
+    the toggle bookkeeping; we just emit and let it call /upload/enable
+    or /upload/disable."""
+    if d.kiosk:
+        await d.kiosk.emit("web-qr", {})
+
+
+@_handler("skin_cycle", "short_press")
+async def _h_skin(d: Dispatcher):
+    if d.kiosk:
+        await d.kiosk.emit("skin-cycle", {})
+
+
+# Microphone / karaoke
+@_handler("mic_karaoke", "short_press")
+async def _h_mic(d: Dispatcher):
+    if d.state:
+        await d.state.karaoke_toggle()
+
+
+# Previous/Next long-press scrub. While held, each long_hold tick seeks 5s.
+async def _scrub(d: Dispatcher, delta_ms: int) -> None:
+    if d.mopidy is None:
+        return
+    res = await d.mopidy.call("core.playback.get_time_position")
+    cur = (res or {}).get("result") or 0
+    await d.mopidy.call("core.playback.seek", {"time_position": max(0, cur + delta_ms)})
+
+
+_HANDLERS[("previous", "long_press")] = lambda d: _scrub(d, -5000)
+_HANDLERS[("previous", "long_hold")]  = lambda d: _scrub(d, -5000)
+_HANDLERS[("next",     "long_press")] = lambda d: _scrub(d, +5000)
+_HANDLERS[("next",     "long_hold")]  = lambda d: _scrub(d, +5000)
+
+
 # ---------- Backend clients -----------------------------------------------
 
 import aiohttp
