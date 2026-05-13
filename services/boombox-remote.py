@@ -32,6 +32,15 @@ PORT = int(os.environ.get("BOOMBOX_REMOTE_PORT", "6685"))
 DEFAULT_PEERS = Path.home() / ".config" / "boombox-remote" / "peers.json"
 
 
+def _ws_poll_seconds() -> float:
+    """Poll interval for the WS state-diff loop.
+
+    Read on every call so tests can monkeypatch BOOMBOX_REMOTE_WS_POLL_MS
+    without forcing a module reimport.
+    """
+    return int(os.environ.get("BOOMBOX_REMOTE_WS_POLL_MS", "250")) / 1000
+
+
 def _load_peers() -> dict[str, dict]:
     """Read peers.json. Returns {} if the file is missing or malformed.
 
@@ -50,7 +59,14 @@ def _load_peers() -> dict[str, dict]:
 
 @web.middleware
 async def require_auth(request: web.Request, handler):
-    """Bearer-token middleware. 401 on missing or unknown token."""
+    """Bearer-token middleware. 401 on missing or unknown token.
+
+    The WebSocket path /api/remote/ws bypasses this middleware because it
+    authenticates via query string token before the handshake completes —
+    aiohttp's WebSocketResponse can't return a JSON 401 (only a close code).
+    """
+    if request.path == "/api/remote/ws":
+        return await handler(request)
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return web.json_response({"ok": False, "error": "missing_token"},
@@ -140,6 +156,7 @@ def create_app(aggregator: "StateAggregator | None" = None,
     app["dispatcher"] = dispatcher
     app.router.add_get("/api/remote/state", _get_state)
     app.router.add_post("/api/remote/command", _post_command)
+    app.router.add_get("/api/remote/ws", _ws_handler)
     return app
 
 
@@ -187,6 +204,51 @@ async def _post_command(request: web.Request) -> web.Response:
                                  source=f"remote:{label}")
     status = 200 if result.get("ok") else 502
     return web.json_response(result, status=status)
+
+
+async def _ws_handler(request: web.Request) -> web.WebSocketResponse:
+    """Push consolidated state to a remote on connect and on every change.
+
+    Auth happens here (not in the middleware) because aiohttp WS clients
+    typically can't set Authorization headers on the handshake. We accept
+    ?token=... and use custom close codes (4401/4503) to surface errors.
+    """
+    token = request.query.get("token", "")
+    peers = _load_peers()
+    if token not in peers:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.close(code=4401, message=b"bad_token")
+        return ws
+
+    agg = request.app.get("aggregator")
+    if agg is None:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.close(code=4503, message=b"aggregator_unavailable")
+        return ws
+
+    ws = web.WebSocketResponse(heartbeat=30)
+    await ws.prepare(request)
+    poll_s = _ws_poll_seconds()
+    last_payload: str | None = None
+    try:
+        while not ws.closed:
+            try:
+                data = await agg.consolidated_state()
+            except Exception as exc:
+                log.warning("ws aggregator error: %s", exc)
+                await asyncio.sleep(poll_s)
+                continue
+            payload = json.dumps({"ok": True, "data": data},
+                                  sort_keys=True, default=str)
+            if payload != last_payload:
+                await ws.send_str(payload)
+                last_payload = payload
+            await asyncio.sleep(poll_s)
+    except asyncio.CancelledError:
+        pass
+    return ws
 
 
 async def main() -> None:
