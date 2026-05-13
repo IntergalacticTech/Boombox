@@ -21,6 +21,7 @@ from pathlib import Path
 import aiohttp as aiohttp_client_lib
 from aiohttp import web
 
+import actions
 import clients
 
 logging.basicConfig(level=logging.INFO,
@@ -127,15 +128,18 @@ class StateAggregator:
         }
 
 
-def create_app(aggregator: "StateAggregator | None" = None) -> web.Application:
+def create_app(aggregator: "StateAggregator | None" = None,
+               dispatcher: "actions.Dispatcher | None" = None) -> web.Application:
     """Build the aiohttp Application. Used by tests and main().
 
-    Pass an `aggregator` (real `StateAggregator` in production, a stub in
-    tests). When `aggregator` is None, /api/remote/state returns 503.
+    Pass `aggregator` for state reads and `dispatcher` for command writes.
+    When either is None, the corresponding endpoint returns 503.
     """
     app = web.Application(middlewares=[require_auth])
     app["aggregator"] = aggregator
+    app["dispatcher"] = dispatcher
     app.router.add_get("/api/remote/state", _get_state)
+    app.router.add_post("/api/remote/command", _post_command)
     return app
 
 
@@ -153,6 +157,38 @@ async def _get_state(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "data": data})
 
 
+async def _post_command(request: web.Request) -> web.Response:
+    """Dispatch a remote command through actions.fire().
+
+    Accepts `{"action": "<name>", "value": <optional>}`. Returns the
+    result dict from actions.fire(); status is 200 on ok, 502 on
+    handler failure, 400 on malformed body, 503 when dispatcher unset.
+    """
+    dispatcher = request.app.get("dispatcher")
+    if dispatcher is None:
+        return web.json_response(
+            {"ok": False, "error": "dispatcher_unavailable"}, status=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response(
+            {"ok": False, "error": "invalid_json"}, status=400)
+
+    action = body.get("action") if isinstance(body, dict) else None
+    if not action or not isinstance(action, str):
+        return web.json_response(
+            {"ok": False, "error": "missing_action"}, status=400)
+
+    value = body.get("value")
+    label = request["peer"].get("label", "unknown")
+
+    result = await actions.fire(dispatcher, action, value,
+                                 source=f"remote:{label}")
+    status = 200 if result.get("ok") else 502
+    return web.json_response(result, status=status)
+
+
 async def main() -> None:
     timeout = aiohttp_client_lib.ClientTimeout(total=2)
     async with aiohttp_client_lib.ClientSession(timeout=timeout) as session:
@@ -161,7 +197,16 @@ async def main() -> None:
             boombox_id=os.environ.get("BOOMBOX_ID", "boombox-default"),
             boombox_name=os.environ.get("BOOMBOX_NAME", "Boombox"),
         )
-        app = create_app(aggregator=agg)
+        dispatcher = actions.Dispatcher(
+            mopidy=clients.MopidyRpc(session),
+            state=clients.StateApi(session),
+            kiosk=None,        # populated when KioskClient is wired in
+            recorder=None,     # populated alongside boombox-buttons
+            display=None,
+            sleep=None,
+            disabled=set(),
+        )
+        app = create_app(aggregator=agg, dispatcher=dispatcher)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", PORT)
