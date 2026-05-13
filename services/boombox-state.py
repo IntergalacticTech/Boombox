@@ -243,6 +243,17 @@ async def volume_set(request: web.Request) -> web.Response:
     return web.json_response({"ok": rc == 0, "volume": vol})
 
 
+async def volume_mute_toggle(_request: web.Request) -> web.Response:
+    """POST /volume/mute toggles the default sink's mute state."""
+    rc, out = await run("wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle")
+    if rc != 0:
+        return web.json_response({"ok": False, "error": out}, status=502)
+    # Re-read to surface the resulting state.
+    rc, out = await run("wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@")
+    muted = "MUTED" in out if rc == 0 else None
+    return web.json_response({"ok": True, "muted": muted})
+
+
 async def bluetooth_pair(_request: web.Request) -> web.Response:
     """Put the BT controller into discoverable+pairable mode for 60 s.
 
@@ -958,6 +969,7 @@ def make_app() -> web.Application:
     app.router.add_post("/control/{action}", control_handler)
     app.router.add_get("/volume", volume_get)
     app.router.add_post("/volume", volume_set)
+    app.router.add_post("/volume/mute", volume_mute_toggle)
     app.router.add_post("/bluetooth/pair", bluetooth_pair)
     app.router.add_get("/karaoke", karaoke_state)
     app.router.add_post("/karaoke/on", karaoke_on)
