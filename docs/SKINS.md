@@ -183,6 +183,41 @@ And from elsewhere in `ui/src/lib/`:
 
 ---
 
+## The overlay layer (don't reimplement)
+
+`ui/src/overlays/OverlayRoot.tsx` mounts globally **above** the active skin
+and handles five pieces of UI that should look the same regardless of the
+skin you're running:
+
+| Overlay | Fires on | What it shows |
+|---------|----------|---------------|
+| `SleepOsd` | `boombox:sleep-timer` / `boombox:sleep-expired` | Pill toast top-center with current sleep duration; auto-hides 2 s after the last update |
+| `RecordIndicator` | `boombox:record` | Pulsing red `REC ●` dot top-right while recording |
+| `QrOverlay` | `boombox:web-qr` | Full-screen QR + LAN URL + PIN for the upload portal |
+| `SourceInstructionOverlay` | `boombox:source-overlay` | Full-screen pairing copy for AirPlay / Spotify / Bluetooth |
+| `ShutdownOverlay` | `boombox:shutdown-countdown` / `boombox:shutdown-confirm` | 2 s "release to cancel" countdown for the power button |
+
+The events are dispatched by `boombox-buttons` via Chromium DevTools; the
+overlay components listen on `window.addEventListener('boombox:<event>')`.
+
+**Skin rules:**
+
+1. **Don't reimplement these.** A skin that draws its own sleep pill or REC
+   dot will double up with the overlay layer. Lean on the global overlays.
+2. **Don't draw anything that competes with z-index 9997+** unless you mean
+   to (ShutdownOverlay uses 10000 so an in-progress power-off can't be
+   hidden by a skin's modal).
+3. **Source-switching, pairing, and QR are not the skin's job.** The skin
+   only renders Now-Playing + chrome (source / queue / picker / settings
+   buttons via `ChromeApi`). The overlays handle the transient stuff.
+
+If you need a new overlay (e.g. a "USB drive mounted" toast that should
+work across skins), add it to `ui/src/overlays/` alongside the others and
+register the `boombox:<event>` it listens for — don't bury it inside one
+skin.
+
+---
+
 ## Step-by-step: build "retro80"
 
 ### 1. Add the id to the union

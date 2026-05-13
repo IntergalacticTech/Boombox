@@ -76,11 +76,10 @@ cd ui && npm run build
 ../pi ssh "sudo rsync -a --delete /tmp/boombox-dist/ /var/www/boombox/ && \
           sudo chown -R www-data:www-data /var/www/boombox"
 ../pi reload      # soft reload — usually enough
-# Hard reload (bypasses the SPA's service-worker cache) needs DevTools:
-../pi ssh "curl -s http://localhost:9222/json | jq -r '.[0].id' | \
-          xargs -I% curl -s 'http://localhost:9222/json/protocol' >/dev/null"
-# …or just call Page.reload via the WebSocket; in practice the easiest
-# hammer is `./pi restart-kiosk`.
+# Hard reload (bypasses the SPA's service-worker cache):
+../pi restart-kiosk
+# Or, from inside DevTools at http://localhost:9222, call Page.reload
+# with {ignoreCache: true}.
 ```
 
 `boombox-update` on the Pi does both steps (rsync as root, restart kiosk)

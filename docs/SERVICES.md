@@ -135,13 +135,13 @@ immediately, no service restart.
 | Action | Routing |
 |--------|---------|
 | `play_pause`, `next`, `previous`, `stop`, `shuffle`, `repeat` | Mopidy JSON-RPC direct (`mopidy:6680/rpc`) |
-| `airplay`, `spotify`, `bluetooth`, `library`, `movies`, `web` | `boombox-state` `/api/control/source` + kiosk DevTools `Page.navigate` |
+| `airplay`, `spotify`, `bluetooth`, `library`, `movies` | `boombox-state` `/api/control/source` + kiosk DevTools `Page.navigate` |
+| `web` | Emits `boombox:web-qr` (kiosk shows LAN URL + QR overlay) |
 | `mic_karaoke` | `boombox-state` `/api/karaoke/{on,off}` toggle |
-| `sleep_timer` | Cycles 15/30/45/60 min; emits `boombox:sleep-timer`; on expiry calls `/api/control/stop` + `boombox:sleep-expired` |
+| `sleep_timer` | Cycles 15/30/60 min on rapid presses; emits `boombox:sleep-timer`; on expiry pauses Mopidy, sleeps the display, emits `boombox:sleep-expired`. Long-press cancels. |
 | `skin_cycle` | Emits `boombox:skin-cycle`; SPA advances skin index |
 | `record` | `parec --device=@DEFAULT_MONITOR@ \| flac` to `~/Music/Recordings/<ts>.flac`; emits `boombox:record` |
-| `web` (long-press) | Emits `boombox:web-qr` (kiosk shows LAN URL + QR overlay) |
-| `power` (2 s hold) | Emits `boombox:shutdown-countdown` then `boombox:shutdown-confirm`; runs `systemctl poweroff` |
+| `power` | Short: backlight toggle (`wlr-randr`). Long (≥ 2 s): emits `boombox:shutdown-countdown` then `boombox:shutdown-confirm`; runs `sudo systemctl poweroff` |
 | Encoder rotate | `/api/volume` delta (default ±5 per detent) |
 | Encoder push | `/api/volume/mute` toggle |
 
