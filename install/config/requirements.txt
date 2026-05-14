@@ -8,6 +8,9 @@ numpy>=1.26
 # boombox-buttons
 gpiod>=2.1
 
+# services/boombox-updater — PEP 440 version compare
+packaging>=24.0
+
 # boombox-bt-volume — uses system dbus-python + PyGObject (apt-installed,
 # not pip; they need GLib/D-Bus headers that won't build cleanly in a venv).
 # The venv is created with --system-site-packages so we can import them.
