@@ -16,8 +16,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [[ "${REPO_DIR}" != "/opt/boombox" ]]; then
-  echo "warning: repo is at ${REPO_DIR}, not the expected /opt/boombox." >&2
+# BOOMBOX_ROOT is the physical /opt/boombox dir — the parent of releases/,
+# the shared venv, state/, and the `current` symlink. install.sh may run
+# from a flat checkout (first install) OR from inside the migrated layout
+# (releases/<ref>/install/, reached via the `current` symlink). Resolve the
+# real install dir through any symlink, then strip the known layout suffix
+# so BOOMBOX_ROOT is correct no matter how we were invoked.
+REAL_SCRIPT_DIR="$(cd "$SCRIPT_DIR" && pwd -P)"
+case "$REAL_SCRIPT_DIR" in
+  */releases/*/install) BOOMBOX_ROOT="${REAL_SCRIPT_DIR%/releases/*/install}" ;;
+  */install)            BOOMBOX_ROOT="${REAL_SCRIPT_DIR%/install}" ;;
+  *)                    BOOMBOX_ROOT="$REPO_DIR" ;;
+esac
+
+if [[ "${BOOMBOX_ROOT}" != "/opt/boombox" ]]; then
+  echo "warning: boombox root is at ${BOOMBOX_ROOT}, not the expected /opt/boombox." >&2
   echo "         installer paths in systemd units assume /opt/boombox; adjust" >&2
   echo "         install/systemd/user/*.service or relocate the checkout." >&2
 fi
@@ -37,21 +50,23 @@ MUSIC_DIR="${BOOMBOX_MUSIC_DIR:-/home/${BOOMBOX_USER}/Music}"
 # ---------------------------------------------------------------------------
 # Layout helpers — releases/<ref>/, current symlink
 # ---------------------------------------------------------------------------
-RELEASES_DIR="$REPO_DIR/releases"
-CURRENT_LINK="$REPO_DIR/current"
-PREVIOUS_LINK="$REPO_DIR/previous"
-SHARED_VENV="$REPO_DIR/.venv"
-STATE_DIR="$REPO_DIR/state"
+RELEASES_DIR="$BOOMBOX_ROOT/releases"
+CURRENT_LINK="$BOOMBOX_ROOT/current"
+PREVIOUS_LINK="$BOOMBOX_ROOT/previous"
+SHARED_VENV="$BOOMBOX_ROOT/.venv"
+STATE_DIR="$BOOMBOX_ROOT/state"
 
-# True when /opt/boombox is a flat git checkout (legacy layout).
+# True when BOOMBOX_ROOT is still a flat git checkout (pre-migration layout).
+# After migration the .git dir lives under releases/<ref>/, so BOOMBOX_ROOT/.git
+# no longer exists and this correctly returns false — no recursive migration.
 is_legacy_layout() {
-  [[ -d "$REPO_DIR/.git" ]] && [[ ! -L "$CURRENT_LINK" ]]
+  [[ -d "$BOOMBOX_ROOT/.git" ]] && [[ ! -L "$CURRENT_LINK" ]]
 }
 
 migrate_legacy_layout() {
   log "migrating legacy /opt/boombox layout → releases/<sha>/ + current symlink"
   local sha base
-  sha="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
+  sha="$(git -C "$BOOMBOX_ROOT" rev-parse --short HEAD)"
   local target="$RELEASES_DIR/legacy-$sha"
   mkdir -p "$RELEASES_DIR" "$STATE_DIR"
   if [[ ! -d "$target" ]]; then
@@ -59,7 +74,7 @@ migrate_legacy_layout() {
     # Skip the venv: it's about to live one level up.
     mkdir "$target"
     shopt -s dotglob nullglob
-    for entry in "$REPO_DIR"/*; do
+    for entry in "$BOOMBOX_ROOT"/*; do
       base="$(basename "$entry")"
       case "$base" in
         .venv|releases|current|previous|state) continue ;;
@@ -304,7 +319,7 @@ log "building UI in $ACTIVE_REPO/ui"
 # and ensure every parent dir up to it is world-traversable. No chgrp/sudo
 # needed — the install user owns /opt/boombox.
 chmod -R a+rX "$ACTIVE_REPO/ui/dist"
-chmod o+x "$REPO_DIR" "$RELEASES_DIR" "$ACTIVE_REPO" "$ACTIVE_REPO/ui"
+chmod o+x "$BOOMBOX_ROOT" "$RELEASES_DIR" "$ACTIVE_REPO" "$ACTIVE_REPO/ui"
 # Tear down the legacy doc root if it's still around.
 if [[ -d /var/www/boombox && ! -L /var/www/boombox ]]; then
   log "removing legacy /var/www/boombox (nginx now serves from current/ui/dist)"
