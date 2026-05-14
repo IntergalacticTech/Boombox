@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { ButtonsPanel } from "./ButtonsPanel";
+import { UpdatesPanel } from "./UpdatesPanel";
 import { setSleepMinutes, useSleepTimer } from "./sleepTimer";
 
 type KaraokeMic = { name: string; label: string };
@@ -549,6 +550,9 @@ export function SettingsDrawer({ onClose }: Props) {
 
           {/* Physical buttons — GPIO pin map + learn/test */}
           <ButtonsPanel />
+
+          {/* Software updates — channel, window, install, rollback */}
+          <UpdatesPanel />
 
           {/* Library rescan */}
           <SettingRow
