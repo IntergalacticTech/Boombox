@@ -50,7 +50,7 @@ is_legacy_layout() {
 
 migrate_legacy_layout() {
   log "migrating legacy /opt/boombox layout → releases/<sha>/ + current symlink"
-  local sha
+  local sha base
   sha="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
   local target="$RELEASES_DIR/legacy-$sha"
   mkdir -p "$RELEASES_DIR" "$STATE_DIR"
@@ -115,7 +115,12 @@ fi
 # legacy tree, but now lives at $CURRENT_LINK/install/install.sh after the
 # move. Re-exec ourselves from the new location once.
 ACTIVE_INSTALL="$CURRENT_LINK/install/install.sh"
-if [[ "$BASH_SOURCE" != "$ACTIVE_INSTALL" && -x "$ACTIVE_INSTALL" ]]; then
+# $SCRIPT_DIR was resolved to an absolute path at the top of this file,
+# before migration moved anything — so this comparison is reliable
+# regardless of how install.sh was invoked (absolute or relative path).
+THIS_INSTALL="$SCRIPT_DIR/install.sh"
+if [[ "$THIS_INSTALL" != "$ACTIVE_INSTALL" ]]; then
+  [[ -x "$ACTIVE_INSTALL" ]] || fail "post-migration installer missing at $ACTIVE_INSTALL"
   exec "$ACTIVE_INSTALL" "$@"
 fi
 
@@ -294,9 +299,12 @@ log "building UI in $ACTIVE_REPO/ui"
   npm install --no-audit --no-fund
   npm run build
 )
-# nginx user (www-data) must be able to read the built SPA.
-sudo chgrp -R www-data "$ACTIVE_REPO/ui/dist"
-sudo chmod -R g+rX "$ACTIVE_REPO/ui/dist"
+# nginx (www-data) serves the SPA straight from the release tree. The bundle
+# is non-sensitive (it ships to browsers anyway), so make it world-readable
+# and ensure every parent dir up to it is world-traversable. No chgrp/sudo
+# needed — the install user owns /opt/boombox.
+chmod -R a+rX "$ACTIVE_REPO/ui/dist"
+chmod o+x "$REPO_DIR" "$RELEASES_DIR" "$ACTIVE_REPO" "$ACTIVE_REPO/ui"
 # Tear down the legacy doc root if it's still around.
 if [[ -d /var/www/boombox && ! -L /var/www/boombox ]]; then
   log "removing legacy /var/www/boombox (nginx now serves from current/ui/dist)"

@@ -66,6 +66,11 @@ case "$cmd" in
       npm install --no-audit --no-fund
       npm run build
     )
+    # nginx (www-data) will serve the SPA straight from this release tree
+    # once `swap` points `current` here — make the bundle world-readable and
+    # the release dir + ui/ world-traversable.
+    chmod -R a+rX "$RELEASES/$ref/ui/dist"
+    chmod o+x "$ROOT" "$RELEASES" "$RELEASES/$ref" "$RELEASES/$ref/ui"
     ;;
 
   preflight)
