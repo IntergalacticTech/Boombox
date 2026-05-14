@@ -9,7 +9,13 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const POLL_INTERVAL_MS = 4000;
+// Polled often enough to feel responsive when an external surface (BLE
+// remote, GPIO encoder) drives the volume — we want the kiosk pill to
+// flash within ~half a second of an off-screen change.
+const POLL_INTERVAL_MS = 500;
+// Volume changes smaller than this between polls are treated as noise
+// (no pill flash); avoids constant flicker from tiny system adjustments.
+const REMOTE_FLASH_THRESHOLD = 0.005;
 const RIGHT_GUTTER_WIDTH_PX = 64;
 // Top and bottom of the right edge belong to skin chrome (settings gear,
 // queue badge, source pill, etc.). Reserving these bands stops the volume
@@ -48,13 +54,26 @@ export function VolumeGesture() {
   const [showing, setShowing] = useState(false);
   const fadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragging = useRef(false);
+  const lastSeen = useRef<number | null>(null);
+  // showPill writes to a ref guarded by setShowing closures, so we expose a
+  // stable handle the poller can call without re-binding the effect.
+  const showPillRef = useRef<() => void>(() => {});
 
-  // Initial fetch + low-frequency reconcile.
+  // Initial fetch + reconcile. Also detects off-screen volume changes
+  // (BLE remote, encoder, system change) so the pill flashes briefly to
+  // give the user visual confirmation that the volume moved.
   useEffect(() => {
     let stopped = false;
     const tick = async () => {
       const v = await getVolume();
-      if (!stopped && v && !dragging.current) setVol(v.value);
+      if (stopped || !v) return;
+      if (dragging.current) return;
+      const prev = lastSeen.current;
+      lastSeen.current = v.value;
+      setVol(v.value);
+      if (prev !== null && Math.abs(v.value - prev) > REMOTE_FLASH_THRESHOLD) {
+        showPillRef.current();
+      }
     };
     tick();
     const id = setInterval(tick, POLL_INTERVAL_MS);
@@ -66,6 +85,7 @@ export function VolumeGesture() {
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
     fadeTimer.current = setTimeout(() => setShowing(false), PILL_FADE_MS);
   };
+  showPillRef.current = showPill;
 
   const yToVolume = (clientY: number) => {
     // Top of the gutter = max volume, bottom = 0. Range capped at 1.0 even

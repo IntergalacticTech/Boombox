@@ -10,14 +10,27 @@ class FakeMopidy:
         self.calls: list[tuple[str, dict]] = []
     async def call(self, method, params=None):
         self.calls.append((method, params or {}))
-        return {"result": "playing" if method == "core.playback.get_state" else None}
+        if method == "core.playback.get_state":
+            return {"result": "playing"}
+        if method == "core.tracklist.get_length":
+            return {"result": 1}
+        return {"result": None}
 
 
 class FakeStateApi:
-    def __init__(self, source="mopidy"):
+    def __init__(self, source="mopidy", status="playing"):
         self.source = source
+        self.status = status
         self.calls: list[tuple[str, dict]] = []
     async def current_source(self):
+        return self.source
+    async def active_external(self):
+        # Mirrors StateApi.active_external: only returns non-Mopidy labels
+        # when the player is actually playing or paused.
+        if self.source in (None, "mopidy"):
+            return None
+        if self.status not in ("playing", "paused"):
+            return None
         return self.source
     async def control(self, action):
         self.calls.append(("control", {"action": action}))

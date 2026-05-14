@@ -48,6 +48,9 @@ function App() {
   const [skinPickerOpen, setSkinPickerOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Per-drawer-session dismissal of the floating NowPlayingBar. Resets
+  // to true any time a drawer opens, so the player is back next time.
+  const [npbDismissed, setNpbDismissed] = useState(false);
 
   // Queue length poll for the chrome badge.
   const [queueCount, setQueueCount] = useState(0);
@@ -114,10 +117,10 @@ function App() {
     sourceLive: sourceId !== "idle" && sourceId !== "library",
     queueCount,
     skinName: skin.name,
-    onOpenSource: () => setSourceOpen(true),
-    onOpenQueue: () => setQueueOpen(true),
-    onOpenSkinPicker: () => setSkinPickerOpen(true),
-    onOpenSettings: () => setSettingsOpen(true),
+    onOpenSource: () => { setNpbDismissed(false); setSourceOpen(true); },
+    onOpenQueue: () => { setNpbDismissed(false); setQueueOpen(true); },
+    onOpenSkinPicker: () => { setNpbDismissed(false); setSkinPickerOpen(true); },
+    onOpenSettings: () => { setNpbDismissed(false); setSettingsOpen(true); },
   };
 
   return (
@@ -146,14 +149,16 @@ function App() {
           ext={ext}
           mopidyPlaying={m.state === "playing"}
           onClose={() => setSourceOpen(false)}
-          onOpenLibrary={() => { setLibraryOpen(true); setSourceOpen(false); }}
+          onOpenLibrary={() => { setNpbDismissed(false); setLibraryOpen(true); setSourceOpen(false); }}
         />
       )}
       {queueOpen && <QueueDrawer onClose={() => setQueueOpen(false)} />}
       {libraryOpen && <LibraryDrawer onClose={() => setLibraryOpen(false)} />}
       {skinPickerOpen && <SkinPickerDrawer activeId={skinId} onClose={() => setSkinPickerOpen(false)} />}
       {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)} />}
-      {(sourceOpen || queueOpen || libraryOpen || skinPickerOpen || settingsOpen) && <NowPlayingBar />}
+      {(sourceOpen || queueOpen || libraryOpen || skinPickerOpen || settingsOpen) && !npbDismissed && (
+        <NowPlayingBar onDismiss={() => setNpbDismissed(true)} />
+      )}
     </>
   );
 }

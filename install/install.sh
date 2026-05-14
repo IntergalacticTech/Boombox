@@ -298,6 +298,7 @@ USER_UNITS=(
   boombox-audio
   boombox-orchestrator
   boombox-buttons
+  boombox-remote
   boombox-resume
   boombox-bt-volume
   boombox-kiosk
@@ -317,6 +318,18 @@ sudo install -m 0644 "$SCRIPT_DIR/systemd/system/boombox-usb-mount@.service" \
   /etc/systemd/system/boombox-usb-mount@.service
 sudo install -m 0644 "$SCRIPT_DIR/udev/99-boombox-usb.rules" \
   /etc/udev/rules.d/99-boombox-usb.rules
+
+# System-side auto-flash for CYD wireless remotes: any CH340 USB-to-serial
+# plugged in is checked against /opt/boombox/firmware/cyd/firmware.bin and
+# re-flashed if it differs. The staged binary is populated by `pi-flash`.
+log "installing CYD auto-flash (script + system unit + udev rule)"
+sudo install -m 0755 "$SCRIPT_DIR/bin/cyd-autoflash" /usr/local/bin/cyd-autoflash
+sudo install -m 0644 "$SCRIPT_DIR/systemd/system/cyd-autoflash@.service" \
+  /etc/systemd/system/cyd-autoflash@.service
+sudo install -m 0644 "$SCRIPT_DIR/udev/99-cyd-autoflash.rules" \
+  /etc/udev/rules.d/99-cyd-autoflash.rules
+sudo install -d -o root -g root -m 755 /opt/boombox/firmware/cyd
+
 sudo systemctl daemon-reload
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=block --action=change || true

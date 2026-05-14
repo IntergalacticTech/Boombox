@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Auto-flash a CYD plugged into a Pi USB port if its firmware differs from
+# the staged image at /opt/boombox/firmware/cyd/firmware.bin.
+#
+# Wired to udev: any CH340 (VID 1a86 PID 7523) appearing as /dev/ttyUSB* is
+# routed here via cyd-autoflash@<dev>.service. Idempotent — verify-flash
+# returns 0 when the device already matches, so re-plug events are cheap.
+
+set -euo pipefail
+
+PORT="${1:?usage: cyd-autoflash /dev/ttyUSBn}"
+FW=/opt/boombox/firmware/cyd/firmware.bin
+ESPTOOL=/opt/boombox/.venv/bin/esptool
+LOCK=/var/run/cyd-autoflash.lock
+
+log() { echo "$(date +%H:%M:%S) [$(basename "$PORT")] $*"; }
+
+[ -e "$PORT" ] || { log "no device at $PORT"; exit 0; }
+[ -f "$FW" ]   || { log "no firmware image at $FW — run pi-flash first"; exit 0; }
+[ -x "$ESPTOOL" ] || { log "esptool not at $ESPTOOL"; exit 1; }
+
+# Serialise across concurrent triggers (esptool can't share a serial port).
+exec 9>"$LOCK"
+flock 9
+
+# Give udev/CH340 a moment to settle before grabbing the port.
+sleep 2
+
+if "$ESPTOOL" --chip esp32 --port "$PORT" --baud 921600 \
+    verify-flash 0x10000 "$FW" >/dev/null 2>&1; then
+  log "firmware already current — no flash needed"
+  exit 0
+fi
+
+log "firmware differs — flashing $(stat -c %s "$FW") bytes…"
+if "$ESPTOOL" --chip esp32 --port "$PORT" --baud 921600 \
+    write-flash 0x10000 "$FW" 2>&1 | tail -20; then
+  log "flash OK; device reset"
+else
+  log "flash FAILED (exit $?)"
+  exit 1
+fi
