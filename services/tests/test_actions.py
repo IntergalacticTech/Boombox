@@ -139,4 +139,4 @@ async def test_source_action_unknown_value_returns_error():
     d = actions.Dispatcher(mopidy=None, state=None, kiosk=None,
                            recorder=None, display=None, sleep=None)
     result = await actions.fire(d, "source", "nonsense", source="test")
-    assert result["ok"] is False
+    assert result == {"ok": False, "error": "handler_raised"}
