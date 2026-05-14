@@ -141,7 +141,10 @@ async def require_auth(request: web.Request, handler):
     is open to the LAN so the CYD can redeem the PIN.
     """
     if request.path in ("/api/remote/ws", "/api/remote/pair/start",
-                          "/api/remote/pair"):
+                          "/api/remote/pair", "/api/remote/admin/status",
+                          "/api/remote/admin/enable",
+                          "/api/remote/admin/disable",
+                          "/api/remote/admin/unpair"):
         return await handler(request)
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -255,6 +258,10 @@ def create_app(aggregator: "StateAggregator | None" = None,
     app.router.add_get("/api/remote/art/{hash}.jpg", _get_art)
     app.router.add_post("/api/remote/pair/start", _post_pair_start)
     app.router.add_post("/api/remote/pair", _post_pair)
+    app.router.add_get("/api/remote/admin/status", _get_admin_status)
+    app.router.add_post("/api/remote/admin/enable", _post_admin_enable)
+    app.router.add_post("/api/remote/admin/disable", _post_admin_disable)
+    app.router.add_post("/api/remote/admin/unpair", _post_admin_unpair)
     return app
 
 
@@ -416,6 +423,67 @@ async def _post_pair_start(request: web.Request) -> web.Response:
         "pin": pin,
         "expires_at": _PAIR_STATE["expires_at"],
     })
+
+
+def _is_localhost(request: web.Request) -> bool:
+    return request.remote in ("127.0.0.1", "::1", "localhost")
+
+
+async def _get_admin_status(request: web.Request) -> web.Response:
+    """Report the enable flag + paired peers. Localhost-only (the kiosk)."""
+    if not _is_localhost(request):
+        return web.json_response({"ok": False, "error": "forbidden"},
+                                 status=403)
+    peers = _load_peers()
+    return web.json_response({
+        "ok": True,
+        "enabled": remote_access.is_enabled(),
+        "peers": [{"label": p.get("label", "remote"),
+                   "paired_at": p.get("paired_at", 0)}
+                  for p in peers.values()],
+    })
+
+
+async def _post_admin_enable(request: web.Request) -> web.Response:
+    if not _is_localhost(request):
+        return web.json_response({"ok": False, "error": "forbidden"},
+                                 status=403)
+    remote_access.set_enabled(True)
+    log.info("remote access enabled")
+    return web.json_response({"ok": True, "enabled": True})
+
+
+async def _post_admin_disable(request: web.Request) -> web.Response:
+    if not _is_localhost(request):
+        return web.json_response({"ok": False, "error": "forbidden"},
+                                 status=403)
+    remote_access.set_enabled(False)
+    log.info("remote access disabled")
+    return web.json_response({"ok": True, "enabled": False})
+
+
+async def _post_admin_unpair(request: web.Request) -> web.Response:
+    """Remove one peer by token. Authorization is otherwise durable — this
+    is the only way a peer loses access."""
+    if not _is_localhost(request):
+        return web.json_response({"ok": False, "error": "forbidden"},
+                                 status=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid_json"},
+                                 status=400)
+    token = body.get("token") if isinstance(body, dict) else None
+    if not token or not isinstance(token, str):
+        return web.json_response({"ok": False, "error": "missing_token"},
+                                 status=400)
+    peers = _load_peers()
+    peers.pop(token, None)
+    path = Path(os.environ.get("BOOMBOX_REMOTE_PEERS", str(DEFAULT_PEERS)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(peers, indent=2))
+    log.info("unpaired one remote")
+    return web.json_response({"ok": True})
 
 
 async def _post_pair(request: web.Request) -> web.Response:
