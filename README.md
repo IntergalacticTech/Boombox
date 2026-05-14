@@ -67,7 +67,7 @@ Manual control from a shell:
 ```bash
 boombox-update            # check + install latest now
 boombox-update status     # current channel, installed/available versions
-boombox-update install v0.4.2
+boombox-update install v0.5.0
 boombox-update rollback   # flip back to the previous release
 ```
 
@@ -89,7 +89,7 @@ and log tailing.
 ```bash
 ./pi status               # services + now-playing summary
 ./pi shot                 # Wayland screenshot pulled to ./screenshots/
-./pi deploy ui/dist /var/www/boombox/
+./pi deploy ui/dist/ /opt/boombox/current/ui/dist/   # push a UI build
 ./pi reload               # reload the kiosk tab
 ./pi guard pause          # let agents drive the kiosk without the watchdog fighting
 ./pi logs mopidy
@@ -144,9 +144,8 @@ system services.
 
 - [x] Working code on the Pi
 - [x] Repo layout + installer scripts for RPi OS
-- [x] Self-update from `main`
 - [ ] Pre-built SD-card image (dietpi or custom yocto base)
-- [x] Versioned releases (signed update channel deferred to a later milestone)
+- [x] Versioned releases + scheduled A/B auto-update (signed update channel deferred to a later milestone)
 - [ ] Battery / power-management integration
 - [ ] Optional hotspot mode for Wi-Fi-less environments
 

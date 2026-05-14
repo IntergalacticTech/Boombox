@@ -194,11 +194,13 @@ failure flip `current` back to `previous` and restart.
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET  /api/update/config` | Current channel, install window, auto-update enable |
-| `POST /api/update/config` | Update channel / window / auto toggle |
 | `GET  /api/update/status` | Installed + available versions, last attempt result |
+| `GET  /api/update/config` | Current channel, install window, auto-update enable |
+| `PUT  /api/update/config` | Update channel / window / auto toggle |
+| `POST /api/update/check` | Force a poll now (refresh available version) |
 | `POST /api/update/install` | Install latest (or a named ref) now |
 | `POST /api/update/rollback` | Flip `current` back to `previous` |
+| `GET  /api/update/log` | Tail the most recent install attempt's log |
 
 - **Code:** [`services/boombox-updater.py`](../services/boombox-updater.py)
 - **Config:** `/etc/boombox/updater.json` (channel, window, auto-update flag)

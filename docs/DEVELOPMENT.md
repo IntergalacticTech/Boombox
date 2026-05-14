@@ -70,11 +70,10 @@ When you're happy, push to the Pi:
 
 ```bash
 cd ui && npm run build
-# /var/www/boombox is owned by www-data, so a plain `./pi deploy` rsync
-# fails. Stage to /tmp then sudo-rsync into place:
-../pi deploy ui/dist/ /tmp/boombox-dist/
-../pi ssh "sudo rsync -a --delete /tmp/boombox-dist/ /var/www/boombox/ && \
-          sudo chown -R www-data:www-data /var/www/boombox"
+# nginx serves the SPA straight from the active release's build directory,
+# /opt/boombox/current/ui/dist/. /opt/boombox is owned by the install user,
+# so a plain `./pi deploy` rsync works — no sudo, no staging dance:
+../pi deploy ui/dist/ /opt/boombox/current/ui/dist/
 ../pi reload      # soft reload — usually enough
 # Hard reload (bypasses the SPA's service-worker cache):
 ../pi restart-kiosk
@@ -82,9 +81,10 @@ cd ui && npm run build
 # with {ignoreCache: true}.
 ```
 
-`boombox-update` on the Pi does both steps (rsync as root, restart kiosk)
-in one shot if your change is committed and pushed — prefer it for anything
-beyond a quick spot-check.
+This drops a build straight into the live release tree — handy for a quick
+spot-check, but the next `boombox-update` will replace `current` with a fresh
+release checkout and your hand-deployed `dist/` goes with it. For anything you
+want to keep, commit and push, then let `boombox-update` install it properly.
 
 ### Editing a Python service
 
@@ -183,10 +183,16 @@ If something has drifted past the point of `boombox-update`:
 
 ### Trying out a feature branch
 
+`boombox-update install` takes any git ref — a tag, a branch name, or a sha —
+so installing a feature branch is just:
+
 ```bash
-./pi ssh "cd /opt/boombox && git fetch && git checkout my-feature-branch && \
-          /opt/boombox/install/update.sh --force"
+./pi ssh "boombox-update install my-feature-branch"
 ```
+
+It clones that ref into a fresh `releases/<ref>/`, builds it, and swaps
+`current` to it (with `previous` left pointing at where you were). To get back,
+`./pi ssh "boombox-update rollback"`.
 
 ### Resetting the Mopidy library scan
 
@@ -219,9 +225,10 @@ curl 127.0.0.1:6682/health
   artifact.
 - **Python services target Python 3.11+** (RPi OS Bookworm/Trixie ship
   3.11 / 3.12). Don't reach for typing features newer than that.
-- **Configs live in `install/config/` as templates.** If you change one,
-  also bump `update.sh` if a special restart is required after the new
-  config lands.
+- **Configs live in `install/config/` as templates.** `install.sh` installs
+  them; a release install reruns the installer and then restarts the
+  `boombox-*` units and reloads nginx, so a changed template takes effect on
+  the next update.
 - **systemd units in `install/systemd/user/`** assume `/opt/boombox`. If
   you check out elsewhere, you're on your own for unit paths.
 - **No secret values in the repo.** Spotify / Last.fm / etc. credentials
@@ -236,8 +243,8 @@ curl 127.0.0.1:6682/health
 |---------|--------------|-----|
 | `./pi reload` says "no devtools page found" | Kiosk Chromium isn't running, or wasn't launched with `--remote-debugging-port=9222` | `./pi restart-kiosk` |
 | `./pi reload` ran but the SPA still shows old code | `./pi reload` is a soft reload — the service worker can hand back cached JS. Run `location.reload(true)` from DevTools or `./pi restart-kiosk` to force-fetch. | DevTools or restart |
-| `./pi deploy ui/dist /var/www/boombox/` fails with `permission denied` | `/var/www/boombox` is `www-data`-owned; plain rsync over SSH runs as you. | Stage to `/tmp/boombox-dist/` then `./pi ssh "sudo rsync -a --delete /tmp/boombox-dist/ /var/www/boombox/ && sudo chown -R www-data:www-data /var/www/boombox"` |
+| `./pi deploy ui/dist/ /opt/boombox/current/ui/dist/` fails with `no such file or directory` | `/opt/boombox/current` is a symlink to the active release; it only exists once `install.sh` has run | `./pi ssh "ls -l /opt/boombox/current"` to confirm the layout migrated |
 | `./pi shot` prints nothing | `grim` not installed, or you're not in the Wayland session | `./pi ssh "which grim"` |
 | Vite dev server loads but Mopidy is offline | `vite.config.ts` proxy points at the wrong IP | Update `target:` to your Pi |
-| `boombox-update` says "local changes present" | Someone edited a file directly on the Pi | `./pi ssh "cd /opt/boombox && git status"`, decide if you want to keep, then `boombox-update --force` |
+| Hand-deployed UI build vanished after an update | `boombox-update` installs a fresh `releases/<ref>/` checkout and re-points `current` — anything you rsync'd into the old `current/ui/dist/` is left behind on the previous release | Commit + push your change, then `boombox-update install <ref>` so it lands in a real release |
 | Visualizer bars stay flat | `parec` lost the default sink | `./pi ssh "systemctl --user restart boombox-audio"` |
