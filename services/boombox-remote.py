@@ -32,6 +32,7 @@ from zeroconf.asyncio import AsyncZeroconf
 import actions
 import clients
 import remote_access
+import remote_files
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
@@ -262,6 +263,7 @@ def create_app(aggregator: "StateAggregator | None" = None,
     app.router.add_post("/api/remote/admin/enable", _post_admin_enable)
     app.router.add_post("/api/remote/admin/disable", _post_admin_disable)
     app.router.add_post("/api/remote/admin/unpair", _post_admin_unpair)
+    remote_files.add_routes(app)
     return app
 
 
