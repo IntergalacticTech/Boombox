@@ -73,3 +73,41 @@ async def test_state_200_when_enabled(aiohttp_client, tmp_path, monkeypatch):
                             headers={"Authorization": "Bearer t"})
     # 503 (no aggregator wired) is fine — the point is it's NOT 403.
     assert resp.status != 403
+
+
+@pytest.fixture
+def toggleable_app(tmp_path, monkeypatch):
+    """An app whose remote_enabled flag starts ON but can be toggled at
+    runtime via remote_access.set_enabled (which re-reads BOOMBOX_REMOTE_STATE
+    on every call). The peers.json token 't' stays fixed throughout."""
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"enabled": True}))
+    monkeypatch.setenv("BOOMBOX_REMOTE_STATE", str(state))
+    peers = tmp_path / "peers.json"
+    peers.write_text(json.dumps({"t": {"label": "x", "paired_at": 0}}))
+    monkeypatch.setenv("BOOMBOX_REMOTE_PEERS", str(peers))
+    import boombox_remote
+    return boombox_remote.create_app()
+
+
+@pytest.mark.asyncio
+async def test_token_durable_across_off_on_toggle(toggleable_app, aiohttp_client):
+    # Spec requirement: a paired token still authenticates after the
+    # remote_enabled flag is toggled off → on. peers.json is never rewritten;
+    # only the access flag round-trips.
+    import remote_access
+    client = await aiohttp_client(toggleable_app)
+
+    # Flag OFF: the gate fires regardless of the (still-valid) token.
+    remote_access.set_enabled(False)
+    resp = await client.get("/api/remote/state",
+                            headers={"Authorization": "Bearer t"})
+    assert resp.status == 403
+
+    # Flag back ON: the same token must still authenticate. Not 401 (token
+    # still known) and not 403 (gate open again). 503 (no aggregator) is fine.
+    remote_access.set_enabled(True)
+    resp = await client.get("/api/remote/state",
+                            headers={"Authorization": "Bearer t"})
+    assert resp.status != 401
+    assert resp.status != 403

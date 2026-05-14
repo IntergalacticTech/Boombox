@@ -85,6 +85,18 @@ async def test_command_rejects_unknown_action(video_app, aiohttp_client):
 
 
 @pytest.mark.asyncio
+async def test_video_routes_require_token(video_app, aiohttp_client):
+    # Routes must be registered first (video_app returns a bare app), then
+    # a request with no Authorization header → require_auth middleware 401s
+    # before the handler. Proves the video surface isn't exposed unauthed.
+    import jellyfin_client
+    jellyfin_client.add_routes(video_app, FakeJellyfin())
+    client = await aiohttp_client(video_app)
+    resp = await client.get("/api/remote/video/state")
+    assert resp.status == 401
+
+
+@pytest.mark.asyncio
 async def test_command_returns_502_when_jellyfin_fails(video_app, aiohttp_client):
     import jellyfin_client
     fake = FakeJellyfin(command_result={"ok": False, "error": "no_session"})

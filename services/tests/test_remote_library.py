@@ -114,6 +114,16 @@ async def test_create_playlist_failure_returns_502(library_app, aiohttp_client):
 
 
 @pytest.mark.asyncio
+async def test_library_routes_require_token(library_app, aiohttp_client):
+    # No Authorization header → require_auth middleware 401s before the
+    # route handler runs. Proves the library surface isn't exposed unauthed.
+    app, _ = library_app
+    client = await aiohttp_client(app)
+    resp = await client.get("/api/remote/library/search?q=x")
+    assert resp.status == 401
+
+
+@pytest.mark.asyncio
 async def test_queue_replaces_and_plays(library_app, aiohttp_client):
     app, fake = library_app
     client = await aiohttp_client(app)
