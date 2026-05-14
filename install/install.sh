@@ -365,18 +365,6 @@ log "installing user systemd units"
 mkdir -p "$HOME/.config/systemd/user"
 install -m 0644 "$ACTIVE_SCRIPT_DIR/systemd/user/"*.service "$HOME/.config/systemd/user/"
 
-# Sweep any legacy chromium-kiosk autostart entries — they predate the
-# boombox-kiosk.service and otherwise launch a second, unmanaged kiosk
-# Chromium at session start, fighting with our systemd-managed one.
-for f in "$HOME/.config/autostart/chromium-kiosk.desktop" \
-         "$HOME/.config/autostart/chromium-kiosk.desktop.bak" \
-         "$HOME/.config/autostart/unclutter.desktop"; do
-  if [[ -e "$f" ]]; then
-    log "removing legacy autostart: $f"
-    rm -f "$f"
-  fi
-done
-
 systemctl --user daemon-reload
 
 USER_UNITS=(
@@ -449,15 +437,17 @@ mkdir -p "$HOME/.config/labwc"
 install -m 0644 "$ACTIVE_SCRIPT_DIR/config/labwc-rc.xml" "$HOME/.config/labwc/rc.xml"
 install -m 0644 "$ACTIVE_SCRIPT_DIR/config/labwc-autostart" "$HOME/.config/labwc/autostart"
 
-# Pi OS's rpd-labwc session sources /etc/xdg/labwc/autostart explicitly
-# (not the labwc lookup path), so the user override above isn't enough
-# to keep wf-panel-pi / pcmanfm-pi off the screen. Replace it system-
-# wide. We keep a .pi-os.orig copy in case anyone needs the desktop
-# session back.
-if [[ -f /etc/xdg/labwc/autostart && ! -f /etc/xdg/labwc/autostart.pi-os.orig ]]; then
-  sudo cp /etc/xdg/labwc/autostart /etc/xdg/labwc/autostart.pi-os.orig
-fi
-sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/labwc-autostart" /etc/xdg/labwc/autostart
+# Graphical-session bootstrap is OS-specific: RPi OS already has a desktop
+# session to tweak; DietPi has none and needs one created from scratch.
+# detect_os picks the right install/session/<os>.sh, each of which defines
+# setup_graphical_session().
+source "$ACTIVE_SCRIPT_DIR/session/detect-os.sh"
+BOOMBOX_DETECTED_OS="$(detect_os)"
+log "graphical session bootstrap: $BOOMBOX_DETECTED_OS"
+SESSION_SCRIPT="$ACTIVE_SCRIPT_DIR/session/$BOOMBOX_DETECTED_OS.sh"
+[[ -f "$SESSION_SCRIPT" ]] || fail "no session bootstrap for OS '$BOOMBOX_DETECTED_OS' ($SESSION_SCRIPT)"
+source "$SESSION_SCRIPT"
+setup_graphical_session
 
 log "enabling system services"
 sudo systemctl enable mopidy
