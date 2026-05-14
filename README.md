@@ -55,15 +55,31 @@ and keeps the kiosk pinned to its UI.
 The installer is idempotent: re-running it picks up changes to configs,
 systemd units, and the UI build.
 
-## Self-update on the Pi
+## Updates
+
+Devices auto-check GitHub for new releases hourly and (by default) install
+new **stable** releases inside a nightly window of 03:00–04:00, skipping if
+music is playing. Toggle channel, window, and auto-on/off in
+**Settings → Updates** on the touchscreen or LAN web page.
+
+Manual control from a shell:
 
 ```bash
-boombox-update
+boombox-update            # check + install latest now
+boombox-update status     # current channel, installed/available versions
+boombox-update install v0.4.2
+boombox-update rollback   # flip back to the previous release
 ```
 
-Pulls `main`, reinstalls anything that drifted (deps, configs, units),
-rebuilds the SPA, and restarts the affected services. Roughly 60 seconds on
-a Pi 5 once dependencies are cached.
+Updates are A/B-installed under `/opt/boombox/releases/<ref>/` with the
+`current` symlink swapped atomically. A failed install (build error, a
+service that won't come back up) auto-reverts to the previous good release.
+
+To disable auto-updates entirely: `systemctl --user disable --now
+boombox-updater.service`. `boombox-update` still works with the service
+disabled — it falls back to a direct `apply-release.sh` run, though that
+**direct fallback path does not auto-rollback** a bad release, so prefer
+keeping the service enabled.
 
 ## Dev loop from a Mac
 
@@ -129,7 +145,7 @@ system services.
 - [x] Repo layout + installer scripts for RPi OS
 - [x] Self-update from `main`
 - [ ] Pre-built SD-card image (dietpi or custom yocto base)
-- [ ] Versioned releases + signed update channel
+- [x] Versioned releases (signed update channel deferred to a later milestone)
 - [ ] Battery / power-management integration
 - [ ] Optional hotspot mode for Wi-Fi-less environments
 
