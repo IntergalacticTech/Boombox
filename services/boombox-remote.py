@@ -564,6 +564,9 @@ async def main() -> None:
         # need the live session.
         import remote_library
         remote_library.add_routes(app, clients.MopidyRpc(session))
+        import jellyfin_client
+        jellyfin_client.add_routes(
+            app, jellyfin_client.JellyfinClient(session))
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", PORT)
