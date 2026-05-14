@@ -108,37 +108,40 @@ def test_build_failure_cleans_up_release_dir() -> None:
 
 
 def test_smoke_failure_reverts() -> None:
-    steps = FakeSteps(verify=StepResult.FAIL, previous=None)
+    # Machine + Installer start consistent: current=v0.4.0, previous=v0.3.9.
+    steps = FakeSteps(verify=StepResult.FAIL, current="v0.4.0", previous="v0.3.9")
     inst = Installer(steps=steps, current_ref="v0.4.0", previous_ref="v0.3.9")
     out = inst.install("v0.4.1")
     assert out.result == AttemptResult.ROLLED_BACK
-    assert steps.current == "v0.3.9"          # revert flipped back
+    # do_swap set previous=v0.4.0, current=v0.4.1; do_revert flips current
+    # back to the release that was running before this install (v0.4.0).
+    assert steps.current == "v0.4.0"
     assert "revert" in steps.log
     assert "revert_verify" in steps.log
 
 
 def test_two_bad_releases_in_a_row_lands_on_last_known_good() -> None:
-    """First bad install rolls back to v0.3.9 but does NOT advance previous.
-    A subsequent bad install rolls back again — to v0.3.9 (the still-good
-    previous), not to the just-rolled-back v0.4.1."""
-    # First install attempt: v0.4.1 fails verify, rolls back.
+    """Because do_swap always re-captures the current (good) release into
+    `previous` before pointing `current` at the new release, a do_revert
+    after a bad swap always lands back on the release that was running
+    before this install. Two bad installs in a row therefore both land on
+    the good release — even though after the first rollback `previous`
+    points at the bad v0.4.1."""
+    # First bad install: current=v0.4.0 (good), previous=v0.3.9.
     s1 = FakeSteps(verify=StepResult.FAIL, current="v0.4.0", previous="v0.3.9")
-    Installer(steps=s1, current_ref="v0.4.0", previous_ref="v0.3.9").install("v0.4.1")
-    assert s1.current == "v0.3.9"
-    assert s1.previous == "v0.4.0"  # revert moved current back; previous unchanged from the swap
-    # NOTE: the spec says "previous is only advanced on success". The swap
-    # itself temporarily set previous=v0.4.0; revert flips current back but
-    # leaves the swap-set previous in place. The next install's previous is
-    # whatever it reads from disk — i.e. the symlink target — which we test
-    # in the integration test (Task 12). Here we only assert the in-memory
-    # last_attempt result.
+    out1 = Installer(steps=s1, current_ref="v0.4.0",
+                     previous_ref="v0.3.9").install("v0.4.1")
+    assert out1.result == AttemptResult.ROLLED_BACK
+    assert s1.current == "v0.4.0"   # back on the good release
 
-    # Second install attempt v0.4.2 also fails verify; passed previous_ref is
-    # the still-good v0.3.9 (caller is expected to read symlink, not trust
-    # the FakeSteps memory).
-    s2 = FakeSteps(verify=StepResult.FAIL, current="v0.3.9", previous=None)
-    out = Installer(steps=s2, current_ref="v0.3.9", previous_ref="v0.3.9").install("v0.4.2")
-    assert out.result == AttemptResult.ROLLED_BACK
+    # Second bad install. On real disk, `previous` now points at the bad
+    # v0.4.1 — but do_swap re-captures the good v0.4.0 before the revert,
+    # so the second rollback still lands on v0.4.0.
+    s2 = FakeSteps(verify=StepResult.FAIL, current="v0.4.0", previous="v0.4.1")
+    out2 = Installer(steps=s2, current_ref="v0.4.0",
+                     previous_ref="v0.4.1").install("v0.4.2")
+    assert out2.result == AttemptResult.ROLLED_BACK
+    assert s2.current == "v0.4.0"   # STILL on the good release
 
 
 def test_revert_failure_marks_broken() -> None:

@@ -90,20 +90,10 @@ class Installer:
         return InstallOutcome(AttemptResult.OK)
 
     def _attempt_revert(self, why: str) -> InstallOutcome:
-        # Nothing to fall back to — leave the (broken) install in place and
-        # report the smoke failure rather than a rollback.
         if self._previous is None:
             return InstallOutcome(AttemptResult.SMOKE_FAILED, why)
-
-        # Roll the release symlink back. do_revert() unwinds the just-applied
-        # swap; do_swap() then re-points current at the last known-good
-        # release so we land on `previous`, not on the failed swap target.
         if self._steps.do_revert() != StepResult.OK:
             return InstallOutcome(AttemptResult.BROKEN, f"{why}; revert failed")
-        if self._steps.do_swap(self._previous) != StepResult.OK:
-            return InstallOutcome(AttemptResult.BROKEN, f"{why}; revert failed")
-
-        # Confirm the rolled-back release actually comes up healthy.
         if self._steps.do_revert_verify() != StepResult.OK:
             return InstallOutcome(AttemptResult.BROKEN, f"{why}; revert verify failed")
         return InstallOutcome(AttemptResult.ROLLED_BACK, why)
