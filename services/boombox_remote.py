@@ -21,5 +21,6 @@ _mod = importlib.util.module_from_spec(_spec)
 sys.modules["boombox_remote_impl"] = _mod
 _spec.loader.exec_module(_mod)
 
-create_app   = _mod.create_app
-require_auth = _mod.require_auth
+create_app             = _mod.create_app
+require_auth           = _mod.require_auth
+require_remote_enabled = _mod.require_remote_enabled

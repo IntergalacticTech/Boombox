@@ -193,7 +193,7 @@ skin you're running:
 |---------|----------|---------------|
 | `SleepOsd` | `boombox:sleep-timer` / `boombox:sleep-expired` | Pill toast top-center with current sleep duration; auto-hides 2 s after the last update |
 | `RecordIndicator` | `boombox:record` | Pulsing red `REC ●` dot top-right while recording |
-| `QrOverlay` | `boombox:web-qr` | Full-screen QR + LAN URL + PIN for the upload portal |
+| `QrOverlay` | `boombox:web-qr` | Full-screen QR encoding the LAN remote URL (`http://<host>:8090/remote/`), with a "pair with the PIN from Settings" hint — no credentials in the overlay itself |
 | `SourceInstructionOverlay` | `boombox:source-overlay` | Full-screen pairing copy for AirPlay / Spotify / Bluetooth |
 | `ShutdownOverlay` | `boombox:shutdown-countdown` / `boombox:shutdown-confirm` | 2 s "release to cancel" countdown for the power button |
 

@@ -96,3 +96,47 @@ async def test_fire_mute_toggles_via_state_api():
     result = await actions.fire(d, "mute")
     assert result == {"ok": True}
     assert calls == ["toggle"]
+
+
+@pytest.mark.asyncio
+async def test_source_action_routes_to_movies(monkeypatch):
+    import actions
+    calls = []
+
+    async def fake_movies(d):
+        calls.append("movies")
+
+    monkeypatch.setitem(actions._HANDLERS, ("movies", "short_press"),
+                        fake_movies)
+    d = actions.Dispatcher(mopidy=None, state=None, kiosk=None,
+                           recorder=None, display=None, sleep=None)
+    result = await actions.fire(d, "source", "movies", source="test")
+    assert result == {"ok": True}
+    assert calls == ["movies"]
+
+
+@pytest.mark.asyncio
+async def test_source_action_aliases_library_to_mopidy(monkeypatch):
+    import actions
+    calls = []
+
+    async def fake_library(d):
+        calls.append("library")
+
+    monkeypatch.setitem(actions._HANDLERS, ("library", "short_press"),
+                        fake_library)
+    d = actions.Dispatcher(mopidy=None, state=None, kiosk=None,
+                           recorder=None, display=None, sleep=None)
+    # both "library" and "mopidy" must route to the library handler
+    await actions.fire(d, "source", "mopidy", source="test")
+    await actions.fire(d, "source", "library", source="test")
+    assert calls == ["library", "library"]
+
+
+@pytest.mark.asyncio
+async def test_source_action_unknown_value_returns_error():
+    import actions
+    d = actions.Dispatcher(mopidy=None, state=None, kiosk=None,
+                           recorder=None, display=None, sleep=None)
+    result = await actions.fire(d, "source", "nonsense", source="test")
+    assert result == {"ok": False, "error": "handler_raised"}

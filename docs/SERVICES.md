@@ -85,10 +85,9 @@ exposes:
 | `GET  /api/lyrics?artist=&title=` | UI: lyrics drawer |
 | `GET  /api/art?artist=&album=&track=` | UI: album-art lookup with cache |
 | `POST /api/mopidy/restart` | UI: settings → restart mopidy |
-| `GET/POST /api/theme` | Upload/remote page: match active skin palette |
-| `GET/POST /api/upload/*` | UI: toggle PIN-gated LAN remote/upload service |
+| `GET/POST /api/theme` | Remote API + kiosk: match active skin palette |
 | `GET /api/usb/devices`, `POST /api/usb/copy` | UI: USB device list and pull-to-library copy |
-| `POST /api/library/scan` | UI/upload service: trigger Mopidy local scan |
+| `POST /api/library/scan` | UI / `boombox-remote` file API: trigger Mopidy local scan |
 
 - **Code:** [`services/boombox-state.py`](../services/boombox-state.py)
 - **Logs:** `journalctl --user -u boombox-state -f`
@@ -276,48 +275,79 @@ on boombox-state, which signals wvkbd.
   `-L` values (portrait / landscape px). Reload with
   `systemctl --user daemon-reload && systemctl --user restart boombox-osk`.
 
-### `boombox-uploader` — LAN remote + file drop (off by default)
+### `boombox-remote` — the consolidated phone + wireless-remote API
 
-Toggled from the touchscreen Settings drawer. When on, hosts a PIN-gated
-remote-control, playlist, upload, and download page at `/upload/` (proxied to
-`127.0.0.1:6683`). PIN is regenerated on every start and cleared on stop.
-The LAN nginx port requires the static web password first; the uploader PIN is
-still a short-lived session gate for the remote/upload page itself.
+**Listens on `127.0.0.1:6685`, proxied as `/api/remote/` by nginx
+(`auth_basic off`). Boot-enabled.**
 
-- **Code:** [`services/boombox-uploader.py`](../services/boombox-uploader.py)
-- **Unit:** `install/systemd/user/boombox-uploader.service` —
-  intentionally not `--enable`d; toggled via `systemctl --user
-  start|stop` from `boombox-state`.
-- **Wire-format details:** see [ACCESS.md](./ACCESS.md).
-
-### `boombox-remote` — wireless-remote HTTP API
-
-**Listens on `127.0.0.1:6685`, proxied as `/api/remote/` by nginx.**
-
-The HTTP/WS API for ESP32-based wireless remotes (and any other HTTP
-client on the LAN). Exposes a consolidated state payload, a command
-endpoint, a push-on-change WebSocket, and resized album art. Commands
-flow through the shared `actions.fire()` dispatcher, so GPIO buttons and
-wireless remotes share one code path.
+The single phone-facing backend: the HTTP/WS API for the CYD hardware
+remote, the forthcoming phone web app (Phase 2 — not built yet), and any
+other HTTP client on the LAN. It exposes consolidated state, a command
+endpoint, a push-on-change WebSocket, resized album art, a file surface
+(browse / download / upload / delete), a library/playlist/queue surface
+over Mopidy, and a Jellyfin video-transport proxy. Commands flow through
+the shared `actions.fire()` dispatcher, so GPIO buttons and remotes share
+one code path. A BLE peripheral runs alongside the HTTP server as the
+primary transport for the CYD hardware remote.
 
 | Endpoint | Used by |
 |----------|---------|
-| `GET  /api/remote/state` | Remote: consolidated state JSON |
-| `POST /api/remote/command` | Remote: `{action, value?}` → `actions.fire()` |
-| `GET  /api/remote/ws` | Remote: WebSocket, pushes state on change (~250 ms poll) |
-| `GET  /api/remote/art/{hash}.jpg` | Remote: current track art, on-the-fly resized to 240×240 (ETag + 304) |
+| `GET  /api/remote/state` | Consolidated state JSON (also carries `skin` + `theme`) |
+| `POST /api/remote/command` | `{action, value?}` → `actions.fire()` |
+| `GET  /api/remote/ws` | WebSocket, pushes state on change (~250 ms poll) |
+| `GET  /api/remote/art/{hash}.jpg` | Current track art, on-the-fly resized to 240×240 (ETag + 304) |
+| `POST /api/remote/pair/start` | **localhost-only:** mint an ephemeral 6-digit pairing PIN |
+| `POST /api/remote/pair` | Redeem a PIN → durable 32-byte-hex bearer token |
+| `GET  /api/remote/admin/status` | **localhost-only:** `{ok, enabled, peers:[{label, paired_at}]}` |
+| `POST /api/remote/admin/enable` / `disable` | **localhost-only:** flip the `remote_enabled` flag |
+| `POST /api/remote/admin/unpair` | **localhost-only:** `{token}` removes one paired peer |
+| `GET  /api/remote/files/browse?path=` | Bearer: directory listing under `~/Music/` |
+| `GET  /api/remote/files/download/{path}` | Bearer: stream a library file |
+| `POST /api/remote/files/upload` | Bearer: multipart upload — audio → `~/Music/uploads/`, video → `~/Videos/uploads/` |
+| `POST /api/remote/files/delete` | Bearer: delete a local library file |
+| `GET  /api/remote/library/search?q=` | Bearer: Mopidy library search |
+| `GET  /api/remote/playlists`, `POST /api/remote/playlists` | Bearer: list / create M3U playlists |
+| `GET  /api/remote/playlists/{uri}/items` | Bearer: track URIs in a playlist |
+| `POST /api/remote/queue` | Bearer: replace the tracklist and (optionally) play |
+| `GET  /api/remote/video/state`, `POST /api/remote/video/command` | Bearer: Jellyfin video-transport proxy |
 
-All endpoints require `Authorization: Bearer <token>` except the WS
-endpoint, which accepts the token in the query string (`?token=...`).
-Tokens live in `~/.config/boombox-remote/peers.json`:
+**The `remote_enabled` flag.** The phone-facing surface is gated by a
+single on/off flag, **default off**, persisted in
+`~/.config/boombox-remote/state.json` (`{"enabled": bool}`). The
+touchscreen Settings drawer's "Phone remote" panel toggles it via the
+`/api/remote/admin/enable` / `/disable` endpoints. While it's off, every
+phone-facing route returns `403 {"error": "remote_disabled"}` and the WS
+closes with code `4403`. The flag does **not** gate the BLE peripheral,
+the already-paired CYD hardware remote, or the `/api/remote/admin/*`
+routes — those stay reachable so the touchscreen can turn the function
+back on. It's a privacy gate against arbitrary phones on the Wi-Fi, not a
+master kill switch for paired hardware.
+
+**Auth.** Bearer token — `Authorization: Bearer <token>`, or `?token=`
+on the WebSocket (aiohttp WS clients can't set headers on the handshake).
+Tokens live in `~/.config/boombox-remote/peers.json` and are **durable
+across reboots** — the only way a peer loses access is
+`/api/remote/admin/unpair`. The `/api/remote/admin/*` routes are
+localhost-only (an in-handler peer-IP check) rather than token-gated.
 
 ```json
 {
-  "<32-byte-hex-token>": {"label": "my-remote", "paired_at": 0}
+  "<32-byte-hex-token>": {"label": "my-remote", "paired_at": 1731600000}
 }
 ```
 
-Until pairing UI ships (Phase 2), add a bootstrap token by hand to test:
+(`paired_at` is a Unix timestamp; `0` marks a hand-added bootstrap token.)
+
+**Pairing.** A real PIN-pairing flow exists. The kiosk (localhost) calls
+`POST /api/remote/pair/start` to mint an ephemeral 6-digit PIN (default
+120 s TTL, single-use, held only as a SHA-256 hash in memory). A client
+redeems it with `POST /api/remote/pair {pin, label}` and gets back a
+durable bearer token, which is persisted to `peers.json`. The PIN can
+rotate or expire freely; the token persists. For headless testing you
+can still hand-add a token to `peers.json` directly — it's no longer the
+only way in. Run the `python3` block on the Pi (it writes the Pi's
+`~/.config`); the `curl` can run from anywhere on the LAN, since
+`/api/remote/` has `auth_basic off` and needs no Basic-auth credential:
 
 ```bash
 mkdir -p ~/.config/boombox-remote
@@ -329,20 +359,35 @@ pathlib.Path.home().joinpath('.config/boombox-remote/peers.json').write_text(
     json.dumps({t: {'label': 'bootstrap', 'paired_at': 0}}))
 print(t)
 "
+# remote must be enabled first (touchscreen, or POST /api/remote/admin/enable)
 curl -H "Authorization: Bearer $TOKEN" \
-    http://boombox.local:6685/api/remote/state
+    http://<pi-ip>:8090/api/remote/state
 ```
 
 mDNS: advertised as `_boombox._tcp.local` with TXT records `id`, `name`,
-`version`. Discover with `dns-sd -B _boombox._tcp` (macOS) or
-`avahi-browse -r _boombox._tcp` (Linux).
+`version`, and `path` (`/api/remote/`); the advertised port is the nginx
+LAN port (`BOOMBOX_LAN_PORT`, default 8090). Discover with
+`dns-sd -B _boombox._tcp` (macOS) or `avahi-browse -r _boombox._tcp`
+(Linux).
+
+For the full access model — the enable toggle, pairing, and the endpoint
+reference — see [ACCESS.md](./ACCESS.md).
 
 - **Code:** [`services/boombox-remote.py`](../services/boombox-remote.py)
+  (HTTP/WS + pairing/admin), [`services/remote_access.py`](../services/remote_access.py)
+  (the `remote_enabled` flag), [`services/remote_files.py`](../services/remote_files.py)
+  (file surface), [`services/remote_library.py`](../services/remote_library.py)
+  (library/playlist/queue), [`services/jellyfin_client.py`](../services/jellyfin_client.py)
+  (video proxy).
 - **Logs:** `journalctl --user -u boombox-remote -f`
 - **Env knobs:** `BOOMBOX_REMOTE_PORT` (default `6685`),
   `BOOMBOX_REMOTE_PEERS` (default `~/.config/boombox-remote/peers.json`),
+  `BOOMBOX_REMOTE_STATE` (the `remote_enabled` flag file, default
+  `~/.config/boombox-remote/state.json`),
   `BOOMBOX_REMOTE_ART_CACHE` (default `~/.cache/boombox-remote/art/`),
-  `BOOMBOX_REMOTE_WS_POLL_MS` (default `250`).
+  `BOOMBOX_REMOTE_WS_POLL_MS` (default `250`),
+  `BOOMBOX_REMOTE_PAIR_TTL_S` (default `120`),
+  `BOOMBOX_REMOTE_BLE` (default `1`; set `0` to disable the BLE peripheral).
 
 ### `boombox-usb-mount@.service` — USB auto-mount (system template)
 

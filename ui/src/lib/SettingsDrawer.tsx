@@ -33,16 +33,10 @@ type SystemInfo = {
 type Sink = { name: string; label: string; default: boolean; state: string };
 type SinksState = { ok: boolean; default: string | null; sinks: Sink[] };
 
-type UploadStatus = {
+type RemoteStatus = {
+  ok?: boolean;
   enabled: boolean;
-  pin: string;
-  url: string;
-  ip: string;
-  web_port?: string;
-  web_user?: string;
-  web_password?: string;
-  smb_user?: string;
-  smb_url?: string;
+  peers: { label: string; paired_at: number }[];
 };
 type UsbDevice = {
   id: string;
@@ -64,8 +58,8 @@ export function SettingsDrawer({ onClose }: Props) {
   const [karaokePending, setKaraokePending] = useState(false);
   const [sinkPending, setSinkPending] = useState<string | null>(null);
   const [restartState, setRestartState] = useState<"idle" | "running" | "done" | "error">("idle");
-  const [upload, setUpload] = useState<UploadStatus | null>(null);
-  const [uploadPending, setUploadPending] = useState(false);
+  const [remote, setRemote] = useState<RemoteStatus | null>(null);
+  const [remotePending, setRemotePending] = useState(false);
   const [usb, setUsb] = useState<UsbList | null>(null);
   const [usbBusy, setUsbBusy] = useState<string | null>(null);   // `${id}:${direction}` while a copy runs
   const [usbResult, setUsbResult] = useState<string | null>(null);
@@ -90,10 +84,10 @@ export function SettingsDrawer({ onClose }: Props) {
       if (r.ok) setSinks(await r.json());
     } catch { /* ignore */ }
   };
-  const refreshUpload = async () => {
+  const refreshRemote = async () => {
     try {
-      const r = await fetch("/api/upload/status");
-      if (r.ok) setUpload(await r.json());
+      const r = await fetch("/api/remote/admin/status");
+      if (r.ok) setRemote(await r.json());
     } catch { /* ignore */ }
   };
   const refreshUsb = async () => {
@@ -106,11 +100,11 @@ export function SettingsDrawer({ onClose }: Props) {
   useEffect(() => {
     refreshKaraoke();
     refreshSinks();
-    refreshUpload();
+    refreshRemote();
     refreshUsb();
     fetch("/api/info").then(r => r.ok ? r.json() : null).then(setInfo).catch(() => {});
     const id = setInterval(() => {
-      refreshKaraoke(); refreshSinks(); refreshUpload(); refreshUsb();
+      refreshKaraoke(); refreshSinks(); refreshRemote(); refreshUsb();
     }, 4000);
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -165,15 +159,17 @@ export function SettingsDrawer({ onClose }: Props) {
     setTimeout(() => setScanState("idle"), 4000);
   };
 
-  const toggleUpload = async () => {
-    if (!upload) return;
-    setUploadPending(true);
+  const toggleRemote = async () => {
+    if (!remote) return;
+    setRemotePending(true);
     try {
-      const url = upload.enabled ? "/api/upload/disable" : "/api/upload/enable";
+      const url = remote.enabled
+        ? "/api/remote/admin/disable"
+        : "/api/remote/admin/enable";
       const r = await fetch(url, { method: "POST" });
-      if (r.ok) setUpload(await r.json());
+      if (r.ok) await refreshRemote();
     } finally {
-      setUploadPending(false);
+      setRemotePending(false);
     }
   };
 
@@ -352,67 +348,49 @@ export function SettingsDrawer({ onClose }: Props) {
             </div>
           </div>
 
-          {/* Remote mode */}
+          {/* Phone remote */}
           <div style={{
             padding: "14px 16px",
             borderBottom: "1px solid rgba(255,255,255,0.06)",
           }}>
             <div style={{display: "flex", alignItems: "center", gap: 14, minHeight: 48}}>
               <div style={{flex: 1, minWidth: 0}}>
-                <div style={{fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em"}}>Remote mode</div>
+                <div style={{fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em"}}>Phone remote</div>
                 <div style={{fontSize: 13, color: "rgba(255,255,255,0.65)", marginTop: 2}}>
-                  {upload == null
+                  {remote == null
                     ? "loading…"
-                    : upload.enabled
-                      ? "broadcasting on the LAN — remote control and file drop are live"
-                      : "off — turn on to expose the phone-friendly remote"}
+                    : remote.enabled
+                      ? `on — ${remote.peers.length} device${remote.peers.length === 1 ? "" : "s"} paired`
+                      : "off — turn on to let phones pair and control the boombox"}
                 </div>
               </div>
               <button
-                onClick={toggleUpload}
-                disabled={upload == null || uploadPending}
+                onClick={toggleRemote}
+                disabled={remote == null || remotePending}
                 style={{
-                  ...primaryButton(upload?.enabled ? "#ff7a35" : "#7afcb0"),
-                  opacity: (upload == null || uploadPending) ? 0.5 : 1,
+                  ...primaryButton(remote?.enabled ? "#ff7a35" : "#7afcb0"),
+                  opacity: (remote == null || remotePending) ? 0.5 : 1,
                 }}
-              >{upload?.enabled ? "TURN OFF" : "TURN ON"}</button>
+              >{remote?.enabled ? "TURN OFF" : "TURN ON"}</button>
             </div>
-            {upload?.enabled && (
-              <div style={{
-                marginTop: 12, padding: "14px 16px",
-                background: "linear-gradient(135deg, rgba(122,252,176,0.12), rgba(91,231,255,0.10))",
-                border: "1px solid rgba(122,252,176,0.30)",
-                borderRadius: 10,
-                display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap",
-              }}>
-                <div style={{flex: 1, minWidth: 240}}>
-                  <div style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 11, letterSpacing: "0.18em", color: "#7afcb0",
-                  }}>OPEN ON YOUR PHONE</div>
-                  <div style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 22, fontWeight: 700, marginTop: 4, wordBreak: "break-all",
-                  }}>{upload.url || "(no LAN IP yet)"}</div>
-                  <div style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 12, color: "rgba(255,255,255,0.68)", marginTop: 6,
-                    wordBreak: "break-all",
-                  }}>
-                    WEB {upload.web_user || "boombox"} / {upload.web_password || "—"}
-                    {upload.smb_url ? ` · SMB ${upload.smb_url}` : ""}
+            {remote?.enabled && (
+              <div style={{marginTop: 12, display: "flex", flexDirection: "column", gap: 8}}>
+                {remote.peers.length === 0 && (
+                  <div style={{fontSize: 13, color: "rgba(255,255,255,0.5)"}}>
+                    no devices paired yet — tap “Pair…” below
                   </div>
-                </div>
-                <div>
-                  <div style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 11, letterSpacing: "0.18em", color: "#7afcb0", textAlign: "center",
-                  }}>PAGE PIN</div>
-                  <div style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 36, fontWeight: 700, letterSpacing: "0.20em", textAlign: "center",
-                  }}>{upload.pin || "—"}</div>
-                </div>
+                )}
+                {remote.peers.map(p => (
+                  <div key={p.label + p.paired_at} style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: "8px 12px",
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: 10,
+                  }}>
+                    <div style={{flex: 1, fontWeight: 600}}>{p.label}</div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

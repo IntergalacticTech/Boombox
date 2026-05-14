@@ -1,7 +1,8 @@
-# Access — web remote, network share, and USB drives
+# Access — LAN remote, network share, and USB drives
 
-How guests control the boombox from a larger screen, get music *onto* the
-boombox, and how a plugged-in USB stick joins the library automatically.
+How guests control the boombox from a phone or larger screen, get music
+*onto* the boombox, and how a plugged-in USB stick joins the library
+automatically.
 
 ---
 
@@ -23,88 +24,166 @@ The installer generates one static remote credential and stores it in:
 sudo cat /etc/boombox/web-auth.env
 ```
 
-The touchscreen Settings drawer also shows this web login while Remote mode is
-enabled. The same password is used for the SMB share.
+The touchscreen Settings drawer shows this web login. The same password is
+used for the SMB share. One exception: the `/api/remote/` path has
+`auth_basic off` in the nginx config — the remote API carries its own bearer
+tokens, so phones go straight to the token handshake instead of hitting the
+Basic-auth modal first.
 
-## Remote / upload mode
+## Remote access — the `boombox-remote` API
 
-The boombox runs a PIN-gated remote/upload web app, **off by default**. You
-toggle it from the touchscreen Settings drawer; while it's on, the touchscreen
-displays the URL, the static web login, and a fresh 4-digit page PIN. Anyone on
-the same Wi-Fi opens the URL on a phone or laptop, passes the web login, then
-types the page PIN.
+`boombox-remote` is the single phone-facing backend. It's a boot-enabled
+user service on `127.0.0.1:6685`, proxied as `/api/remote/` by nginx. It
+serves the CYD hardware remote (over BLE and HTTP), any HTTP client on the
+LAN, and the forthcoming phone web app.
 
-The remote UI can:
+> **What's real today vs. Phase 2.** Phase 1 delivers the consolidated
+> *API*, the enable toggle, and PIN pairing. The installable phone web app
+> (the page you'd open on a phone) is **Phase 2 — not built yet**. The CYD
+> hardware remote already uses this API and is unaffected. The touchscreen's
+> web-QR overlay points at `http://<host>:8090/remote/` in anticipation of
+> Phase 2, but that page is not served yet.
 
-- control Mopidy playback and system volume
-- create M3U playlists from library search results or the current queue
-- play saved playlists
-- upload audio files
-- browse/download/delete local library files
-- browse/download symlinked USB drives
+The remote API can:
+
+- read consolidated player state (source, track, volume, skin, theme) and
+  push it over a WebSocket
+- fire transport + system commands through the shared `actions.fire()`
+  dispatcher
+- serve resized album art
+- browse / download / upload / delete library files
+- search the Mopidy library, create and play M3U playlists, replace the queue
+- proxy Jellyfin video-transport commands
+
+### The `remote_enabled` toggle
+
+The phone-facing surface is gated by a single on/off flag, **off by
+default**, persisted in `~/.config/boombox-remote/state.json`
+(`{"enabled": bool}`). You flip it from the touchscreen Settings drawer's
+**Phone remote** panel.
+
+While it's off, every phone-facing route returns `403 {"error":
+"remote_disabled"}` and the WebSocket closes with code `4403`. The flag is a
+privacy gate against arbitrary phones on the Wi-Fi — it does **not** gate the
+BLE peripheral, the already-paired CYD hardware remote, or the
+`/api/remote/admin/*` routes, so the touchscreen can always turn the function
+back on.
 
 ```
-       Touchscreen                         Phone / laptop on the LAN
+       Touchscreen                          Phone / CYD remote on the LAN
    ┌──────────────────┐                ┌────────────────────────┐
-   │  Settings →      │                │  Boombox · Remote      │
-   │  Remote mode     │  nginx :8090   │  ┌────────────────┐    │
-   │  ┌──────────┐    │ ──────────────▶│  │ drop files here│    │
-   │  │ TURN ON  │    │ auth + /upload │  └────────────────┘    │
-   │  └──────────┘    │                │  Library [filter…]     │
-   │                  │                │   • track-1.flac  ⇣    │
-   │  http://192…/up… │                │   • track-2.mp3   ⇣    │
-   │  PIN  4 8 1 7    │                │                        │
+   │  Settings →      │                │  pair: POST /pair      │
+   │  Phone remote    │  localhost     │   { pin: "481762" }    │
+   │  ┌──────────┐    │ ──────────────▶│        │               │
+   │  │ ENABLE   │    │  admin/enable  │        ▼               │
+   │  └──────────┘    │                │  durable bearer token  │
+   │  pairing PIN     │  admin/status  │        │               │
+   │   4 8 1 7 6 2    │ ◀──────────────│        ▼               │
+   │  (120 s, rotates)│   peers list   │  GET /api/remote/state │
    └──────────────────┘                └────────────────────────┘
 ```
 
 ### What turning it on does
 
-1. The touchscreen calls `POST /api/upload/enable` on `boombox-state`.
-2. `boombox-state` runs `systemctl --user start boombox-uploader.service`.
-3. The uploader generates a fresh 4-digit PIN, writes it to
-   `$XDG_RUNTIME_DIR/boombox-uploader.pin`, and starts listening on
-   `127.0.0.1:6683`.
-4. nginx, which is always running, proxies `/upload/` → `127.0.0.1:6683`
-   from both localhost and the authenticated LAN web port.
-5. The touchscreen polls `/api/upload/status` every 4 s and shows the
-   URL + PIN.
+1. The touchscreen calls `POST /api/remote/admin/enable` on `boombox-remote`
+   (localhost-only route).
+2. `boombox-remote` writes `{"enabled": true}` to
+   `~/.config/boombox-remote/state.json`. The enable-gate middleware now lets
+   phone-facing routes through.
+3. The touchscreen calls `POST /api/remote/pair/start` (also localhost-only)
+   to mint an ephemeral 6-digit PIN and displays it.
+4. A client redeems the PIN with `POST /api/remote/pair {pin, label}` and gets
+   back a durable 32-byte-hex bearer token. The token is persisted to
+   `~/.config/boombox-remote/peers.json`.
+5. The client uses that token (`Authorization: Bearer <token>`, or `?token=`
+   on the WebSocket) for every subsequent request.
+6. The touchscreen polls `GET /api/remote/admin/status` to show the enable
+   state and the list of paired peers.
 
-Turning it **off** stops the unit, clears the PIN file, and removes the
-`/upload` reachability — nginx still serves the path but proxy attempts
-get a 502 because nothing is listening on 6683.
+Turning it **off** writes `{"enabled": false}`; the phone-facing routes start
+returning `403` and open WebSockets are closed. Paired tokens are *not*
+discarded — flip the toggle back on and existing devices work again without
+re-pairing.
 
-The PIN regenerates on every start. There's no way to "remember" a PIN
-across toggle cycles, by design.
+### Pairing — PINs are ephemeral, tokens are durable
 
-### Where uploads go
+The PIN exists only to bootstrap a token. It's a cryptographically random
+6-digit number, held only as a SHA-256 hash in memory, single-use, with a
+default 120-second TTL (`BOOMBOX_REMOTE_PAIR_TTL_S`). It can rotate or expire
+freely.
 
-Files land in `~/Music/uploads/` (the `BOOMBOX_MUSIC_DIR` env var
-overrides). Filename collisions get suffixed (`track.mp3` → `track-1.mp3`,
-`track-2.mp3`, …). Only audio extensions in this allowlist are accepted:
+The **bearer token** is what lasts: it's written to `peers.json` and survives
+reboots. The only way a peer loses access is `POST /api/remote/admin/unpair`
+with that peer's token (a localhost-only route, driven from the touchscreen).
+
+```json
+{
+  "<32-byte-hex-token>": {"label": "kitchen-phone", "paired_at": 1731600000}
+}
+```
+
+(`paired_at` is a Unix timestamp; `0` marks a hand-added bootstrap token.)
+
+For headless testing you can still hand-add a token to `peers.json` directly
+— pairing is the normal path, but it's no longer the only way in. Run the
+`python3` block on the Pi (it writes the Pi's `~/.config`); the `curl` can run
+from anywhere on the LAN, since `/api/remote/` has `auth_basic off` and needs
+no Basic-auth credential:
+
+```bash
+mkdir -p ~/.config/boombox-remote
+TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+python3 -c "
+import json, pathlib
+t = '$TOKEN'
+p = pathlib.Path.home() / '.config/boombox-remote/peers.json'
+p.write_text(json.dumps({t: {'label': 'bootstrap', 'paired_at': 0}}))
+print(t)
+"
+# remote must be enabled first (touchscreen, or POST /api/remote/admin/enable)
+curl -H "Authorization: Bearer $TOKEN" \
+    http://<pi-ip>:8090/api/remote/state
+```
+
+### Uploading files
+
+`POST /api/remote/files/upload` takes a multipart form. Files route by
+extension:
+
+- **audio** → `~/Music/uploads/` (`BOOMBOX_MUSIC_DIR` overrides the root)
+- **video** → `~/Videos/uploads/` (`BOOMBOX_VIDEO_DIR` overrides the root)
+
+Filename collisions get suffixed (`track.mp3` → `track-1.mp3`,
+`track-2.mp3`, …). The accepted extensions:
 
 ```
-.mp3 .m4a .aac .flac .ogg .oga .opus .wav .aiff .alac .wma
+audio: .mp3 .m4a .aac .flac .ogg .oga .opus .wav .aiff .alac .wma
+video: .mp4 .m4v .mkv .mov .avi .webm .wmv .mpg .mpeg .ts .3gp
 ```
 
-Per-file size cap: **1 GB** (configured both in nginx via
-`client_max_body_size 1100M` and in the uploader via `MAX_FILE_BYTES`).
+Per-file size cap: **4 GB** — enforced in the upload handler
+(`remote_files.MAX_FILE_BYTES`) and matched by nginx's `client_max_body_size
+4096M`. nginx is configured with `proxy_request_buffering off` so large
+uploads stream straight through instead of buffering to `/tmp`.
 
-After every successful upload, the uploader fires a best-effort
+After a successful audio upload, the handler fires a best-effort
 `POST /api/library/scan` so Mopidy picks up the new tracks within a few
-seconds.
+seconds. After a video upload it fires a Jellyfin library refresh.
 
-### What the remote page can do
+### What the remote API can do
 
 | Action | How |
 |--------|-----|
-| Authenticate | Type the 4-digit PIN. The page sets a 12-hour cookie; subsequent visits skip the PIN unless the boombox restarts. |
-| Remote control | Play/pause/next/previous/stop, see source/status/queue count, and set system volume. |
-| Create playlists | Search the library, add tracks to a draft, import the current queue, save via Mopidy's bundled M3U playlist backend. |
-| Play playlists | Saved playlists are listed with a one-tap play action. |
-| Upload | Drag-and-drop, or tap "choose files". Uploads stream with a progress bar; failures surface inline. |
-| Browse the library | Filter box at the bottom; lists every audio file under `~/Music/`, including symlinked USB drives. |
-| Download | Each row has a `download` link. Files are streamed via aiohttp's `FileResponse`. |
-| Delete | Local library file rows have a delete button. USB/symlinked files are read-only from the web UI. |
+| Authenticate | Redeem a pairing PIN for a durable bearer token; send it as `Authorization: Bearer <token>` (or `?token=` on the WebSocket). |
+| Read state | `GET /api/remote/state` for a one-shot snapshot, or `GET /api/remote/ws` for push-on-change updates (~250 ms). |
+| Remote control | `POST /api/remote/command {action, value?}` — play/pause/next/previous/stop, source switching, volume, etc., through `actions.fire()`. |
+| Create playlists | `GET /api/remote/library/search?q=` to find tracks, `POST /api/remote/playlists` to save an M3U playlist via Mopidy. |
+| Play playlists | `GET /api/remote/playlists` lists them; `GET /api/remote/playlists/{uri}/items` reads track URIs; `POST /api/remote/queue` loads and plays them. |
+| Upload | `POST /api/remote/files/upload` — audio → `~/Music/uploads/`, video → `~/Videos/uploads/`. |
+| Browse the library | `GET /api/remote/files/browse?path=` lists every audio file under `~/Music/`, including symlinked USB drives. |
+| Download | `GET /api/remote/files/download/{path}` streams a file via aiohttp's `FileResponse`. |
+| Delete | `POST /api/remote/files/delete` removes a local library file. USB/symlinked files are read-only. |
+| Video transport | `GET /api/remote/video/state` and `POST /api/remote/video/command` proxy the local Jellyfin session. |
 
 ### SMB network share
 
@@ -125,30 +204,38 @@ you make large changes and Mopidy has not picked them up yet.
 This is **not** a hardened public-internet service. It is a friction gate
 for a LAN appliance. Specifically:
 
-- **LAN web has a static password.** It keeps casual browsers out of the
-  player UI, but it is still a shared appliance credential.
-- **Remote/upload mode also has a 4-digit page PIN.** A determined attacker on
-  the same LAN could brute-force it; the mitigation is "the toggle is off by
-  default" and the LAN web password sits in front of it.
-- **No HTTPS.** Everything is plaintext on the LAN web port. Don't enable
-  remote/upload mode on a Wi-Fi network you don't trust.
-- **Path-traversal defense:** filenames are sanitized
-  (`safe_filename()`), uploads are pinned to `~/Music/uploads/` via
-  `under_root()`, and downloads validate that the resolved path is
-  inside `MUSIC_ROOT`. Symlink-following downloads do let you grab files
-  from mounted USB drives — that's the point.
-- **Delete is intentionally narrower than download.** The web UI deletes only
-  audio files that resolve inside the local music library. USB/symlinked files
-  are read-only there; use SMB or remount workflows for broader file work.
-- **No quotas.** A guest could fill the SD card. The 1 GB per-file cap is
-  the only limit.
+- **The remote API is off by default.** The `remote_enabled` flag has to be
+  flipped on from the physical touchscreen before any phone-facing route
+  responds — an attacker on the Wi-Fi can't reach the surface at all until a
+  human at the device turns it on.
+- **Bearer tokens, minted by PIN.** A device only gets a token by redeeming a
+  PIN that's displayed on the touchscreen for ~120 seconds. The token is a
+  32-byte random hex string — not brute-forceable — and is revocable via
+  `admin/unpair`. The PIN is stored only as a SHA-256 hash and compared with
+  `hmac.compare_digest`.
+- **Admin routes are localhost-only.** `/api/remote/admin/*` and
+  `/api/remote/pair/start` check the proxied peer IP in-handler and reject
+  anything that isn't loopback, so only the kiosk on the Pi can enable the
+  function, mint PINs, or unpair devices.
+- **No HTTPS.** Everything is plaintext on the LAN web port. Don't enable the
+  remote on a Wi-Fi network you don't trust.
+- **Path-traversal defense:** filenames are sanitized (`safe_filename()`),
+  uploads are pinned to the `uploads/` dirs via `under_root()`, and
+  `safe_compose()` rejects `..` segments and absolute paths. Symlink-following
+  downloads do let you grab files from mounted USB drives — that's the point.
+- **Delete is intentionally narrower than download.** The file API deletes
+  only audio files that resolve inside the local music library. USB/symlinked
+  files are read-only there; use SMB or remount workflows for broader file
+  work.
+- **No quotas.** A guest could fill the SD card. The 4 GB per-file cap is the
+  only limit.
 
 If you ever want to expose this to the internet (don't), wrap it in
 something with rate-limiting and TLS.
 
 ### Remote-first workflow ideas
 
-These fit the laptop/tablet web UI better than the 5" touchscreen:
+These fit the phone/laptop client (Phase 2) better than the 5" touchscreen:
 
 - **Playlist studio:** drag/reorder drafts, edit existing playlists, import
   current queue, duplicate playlists, and bulk-add search results.
@@ -243,20 +330,36 @@ File browsers ignore it; Mopidy doesn't.
 
 ## Endpoints summary
 
-| Endpoint | Method | What |
-|---|---|---|
-| `/api/upload/status` | GET | remote/upload status, URL, page PIN, web login, SMB URL |
-| `/api/upload/enable` | POST | start the uploader unit |
-| `/api/upload/disable` | POST | stop the uploader unit |
-| `/api/usb/devices` | GET | mounted-drive list with disk usage |
-| `/api/usb/copy` | POST | bulk copy in either direction |
-| `/api/library/scan` | POST | trigger a Mopidy local scan |
-| `/upload/` | GET | the remote/upload page (proxied) |
-| `/upload/upload` | POST | multipart upload (PIN-gated) |
-| `/upload/browse?path=` | GET | browsable library JSON (PIN-gated) |
-| `/upload/list` | GET | deprecated alias for root browse (PIN-gated) |
-| `/upload/download/{path}` | GET | file download (PIN-gated) |
-| `/upload/delete` | POST | delete a local library file (PIN-gated) |
+All `/api/remote/*` routes below sit behind nginx (`auth_basic off`) and the
+`boombox-remote` service on `127.0.0.1:6685`. "Bearer" = requires a paired
+bearer token. "localhost" = the in-handler peer-IP check rejects non-loopback
+callers. The `boombox-state` `/api/*` routes are unchanged from before.
+
+| Endpoint | Method | Auth | What |
+|---|---|---|---|
+| `/api/remote/state` | GET | Bearer | Consolidated state JSON (source, track, volume, skin, theme) |
+| `/api/remote/command` | POST | Bearer | `{action, value?}` → `actions.fire()` |
+| `/api/remote/ws` | GET | `?token=` | WebSocket, pushes state on change |
+| `/api/remote/art/{hash}.jpg` | GET | Bearer | Resized album art (240×240, ETag) |
+| `/api/remote/pair/start` | POST | localhost | Mint an ephemeral 6-digit pairing PIN |
+| `/api/remote/pair` | POST | none | Redeem a PIN → durable bearer token |
+| `/api/remote/admin/status` | GET | localhost | `{ok, enabled, peers}` |
+| `/api/remote/admin/enable` | POST | localhost | Set `remote_enabled` on |
+| `/api/remote/admin/disable` | POST | localhost | Set `remote_enabled` off |
+| `/api/remote/admin/unpair` | POST | localhost | `{token}` removes one paired peer |
+| `/api/remote/files/browse?path=` | GET | Bearer | Directory listing under `~/Music/` |
+| `/api/remote/files/download/{path}` | GET | Bearer | Stream a library file |
+| `/api/remote/files/upload` | POST | Bearer | Multipart upload (audio → Music, video → Videos) |
+| `/api/remote/files/delete` | POST | Bearer | Delete a local library file |
+| `/api/remote/library/search?q=` | GET | Bearer | Mopidy library search |
+| `/api/remote/playlists` | GET / POST | Bearer | List / create M3U playlists |
+| `/api/remote/playlists/{uri}/items` | GET | Bearer | Track URIs in a playlist |
+| `/api/remote/queue` | POST | Bearer | Replace the tracklist and (optionally) play |
+| `/api/remote/video/state` | GET | Bearer | Local Jellyfin session state |
+| `/api/remote/video/command` | POST | Bearer | Jellyfin transport command |
+| `/api/usb/devices` | GET | LAN web | Mounted-drive list with disk usage |
+| `/api/usb/copy` | POST | LAN web | Bulk copy in either direction |
+| `/api/library/scan` | POST | LAN web | Trigger a Mopidy local scan |
 
 ---
 
@@ -264,11 +367,15 @@ File browsers ignore it; Mopidy doesn't.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Remote toggle says "TURN ON" but nothing happens after | `boombox-uploader.service` failed to start | `journalctl --user -u boombox-uploader -n 50` — usually a missing dep in the venv |
-| URL field shows "(no LAN IP yet)" | `hostname -I` returned nothing | Wi-Fi not connected; or you're on link-local only |
-| PIN keeps regenerating | Service is restart-looping | Check `systemctl --user status boombox-uploader` |
+| Phone gets `403 {"error": "remote_disabled"}` on every call | `remote_enabled` flag is off | Enable it from the touchscreen Settings → Phone remote, or `curl -X POST http://localhost/api/remote/admin/enable` on the Pi |
+| WebSocket closes immediately with code `4403` | Same — remote disabled | As above |
+| WebSocket closes with code `4401`, or REST returns `401 bad_token` | Token missing or not in `peers.json` | Re-pair, or check `~/.config/boombox-remote/peers.json` |
+| `POST /api/remote/pair` returns `no_active_pin` | PIN expired (120 s TTL) or service restarted mid-pairing | Mint a fresh PIN from the touchscreen and redeem it promptly |
+| `pair/start` or `admin/*` returns `403 forbidden` from the LAN | Those routes are localhost-only | Run them from the Pi itself; they're driven by the kiosk, not phones |
+| Paired device stopped working after a reboot | Tokens *are* durable — check the service is up | `journalctl --user -u boombox-remote -n 50`; confirm `remote_enabled` is still on |
+| Phone uploads get "413 Request Entity Too Large" | nginx `client_max_body_size` mismatch | Default is `4096M`; raise both nginx and `remote_files.MAX_FILE_BYTES` if you need more |
+| Upload succeeds but track/movie never appears | Library scan didn't fire | Audio: `curl -X POST http://127.0.0.1:6681/library/scan`. Video: hit Jellyfin Dashboard → Scan Media Library |
 | USB drive plugged in, nothing happens | udev didn't match (rule not loaded?) | `sudo udevadm control --reload-rules`, then re-plug the drive |
 | Drive mounted but tracks don't appear in Mopidy | Library scan didn't fire | `curl -X POST http://127.0.0.1:6681/library/scan`, then check Mopidy logs |
 | "Pull → library" reports "copy failed" | Filesystem not mounted; or out of space | `df -h /home/$USER/Music`; `dmesg \| tail` for FS errors |
 | `sudo: a password is required` in mopidyctl scan | Sudoers fragment didn't install | `sudo visudo -c` and check `/etc/sudoers.d/boombox` exists with correct username |
-| Phone uploads get "413 Request Entity Too Large" | nginx `client_max_body_size` mismatch | The default is 1100M; raise both nginx and `MAX_FILE_BYTES` if you need more |

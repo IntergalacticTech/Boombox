@@ -7,7 +7,7 @@ Reference docs for working on the boombox.
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | One-screen picture of the whole system; processes, ports, data flow |
 | [SERVICES.md](./SERVICES.md) | Per-service reference: what each daemon does, how to debug it |
 | [SKINS.md](./SKINS.md) | How to create a new touchscreen skin from scratch |
-| [ACCESS.md](./ACCESS.md) | Authenticated LAN web access, remote/upload workflow, SMB share, and USB auto-mount |
+| [ACCESS.md](./ACCESS.md) | Authenticated LAN web access, the `boombox-remote` API + pairing, SMB share, and USB auto-mount |
 | [VIDEO.md](./VIDEO.md) | Jellyfin server: touchscreen WATCH button, native apps, USB videos, return pill |
 | [ONBOARDING.md](./ONBOARDING.md) | New-developer setup: SSH access, `.env`, first dev loop |
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | Dev workflow on a laptop, the `pi` helper, common tasks |

@@ -5,8 +5,8 @@
 
 import { useEffect, useState } from "react";
 import {
-  Channel,
-  UpdaterStatus,
+  type Channel,
+  type UpdaterStatus,
   check,
   fetchLog,
   getStatus,

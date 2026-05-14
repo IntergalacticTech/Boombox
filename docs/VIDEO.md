@@ -43,7 +43,7 @@ the music — that's a deliberate "you decide what plays" stance.
 - **Library path:** `~/Videos` (the desktop user's home — currently
   `/home/jwc/Videos`). Three top-level subfolders are created at install:
   - `~/Videos/` — curated content goes here
-  - `~/Videos/uploads/` — for files dropped via the remote/upload page
+  - `~/Videos/uploads/` — for video files dropped via the `boombox-remote` file API (or copied from the desktop)
   - `~/Videos/.usb/` — auto-populated symlinks to USB drives (see below)
 - **USB drives** that get mounted by the existing
   `boombox-usb-mount@<dev>.service` flow now get **two** symlinks: one
@@ -180,12 +180,15 @@ directly.
 | How | Where it lands |
 |---|---|
 | Copy over SMB | `smb://<pi-ip>/boombox-music/...` — wait, that's the **music** share. The music share doesn't include `~/Videos`. Add a similar share if you want SMB-based video uploads, or use one of the methods below. |
-| Drag-and-drop via the remote page | The existing `/upload` page targets `~/Music/uploads/` today. Videos through this path is a near-term TODO. |
+| Upload via the `boombox-remote` file API | `POST /api/remote/files/upload` accepts video files and lands them in `~/Videos/uploads/`, then fires a Jellyfin library refresh. (Audio files through the same endpoint go to `~/Music/uploads/`.) See [ACCESS.md](./ACCESS.md). |
 | `scp` / `rsync` from a laptop | `rsync -avz ~/Movies/Inception.mkv jwc@<pi-ip>:Videos/Films/` |
 | USB drive | Plug it in. Drive auto-symlinks into `~/Videos/.usb/<label>` and Jellyfin's real-time monitoring picks it up. |
 
-A future iteration will broaden the upload page to accept video MIME types
-and land them in `~/Videos/uploads/`.
+Video upload routes by file extension: the `boombox-remote` file API
+sends recognised video extensions to `~/Videos/uploads/` and audio to
+`~/Music/uploads/`. The phone web-app UI that drives this is Phase 2 —
+the API is live today; the CYD hardware remote and any HTTP client can
+already use it.
 
 ---
 

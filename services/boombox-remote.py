@@ -31,6 +31,8 @@ from zeroconf.asyncio import AsyncZeroconf
 
 import actions
 import clients
+import remote_access
+import remote_files
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
@@ -140,7 +142,10 @@ async def require_auth(request: web.Request, handler):
     is open to the LAN so the CYD can redeem the PIN.
     """
     if request.path in ("/api/remote/ws", "/api/remote/pair/start",
-                          "/api/remote/pair"):
+                          "/api/remote/pair", "/api/remote/admin/status",
+                          "/api/remote/admin/enable",
+                          "/api/remote/admin/disable",
+                          "/api/remote/admin/unpair"):
         return await handler(request)
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -156,13 +161,31 @@ async def require_auth(request: web.Request, handler):
     return await handler(request)
 
 
+@web.middleware
+async def require_remote_enabled(request: web.Request, handler):
+    """403 every phone-facing route when the remote_enabled flag is off.
+
+    Exempt: /api/remote/admin/* (that's how the flag gets turned on; those
+    handlers are localhost-gated) and /api/remote/ws (a WebSocket can't
+    return a JSON 403 — the ws handler checks the flag itself and closes
+    with code 4403).
+    """
+    path = request.path
+    if path == "/api/remote/ws" or path.startswith("/api/remote/admin/"):
+        return await handler(request)
+    if not remote_access.is_enabled():
+        return web.json_response(
+            {"ok": False, "error": "remote_disabled"}, status=403)
+    return await handler(request)
+
+
 class StateAggregator:
     """Reads upstream services and produces the consolidated payload.
 
     Phase 1: pulls from Mopidy (track + state + position) and boombox-state
-    (source, volume, mute, karaoke). In-memory bits (sleep_timer, recording,
-    skin) return None for now; they get wired in Phase 2 when there's a
-    real consumer.
+    (source, volume, mute, karaoke, theme). In-memory bits (sleep_timer,
+    recording) return None for now; they get wired in Phase 2 when there's
+    a real consumer.
     """
 
     def __init__(self, session: aiohttp_client_lib.ClientSession,
@@ -175,15 +198,15 @@ class StateAggregator:
 
     async def consolidated_state(self) -> dict:
         # Pull from upstream services in parallel for snappiness.
-        source, track_info, state_info, position_info, vol_info, karaoke = (
-            await asyncio.gather(
-                self._state.current_source(),
-                self._mopidy.call("core.playback.get_current_track"),
-                self._mopidy.call("core.playback.get_state"),
-                self._mopidy.call("core.playback.get_time_position"),
-                self._state.volume_get(),
-                self._state.karaoke_state(),
-            )
+        (source, track_info, state_info, position_info, vol_info, karaoke,
+         theme_payload) = await asyncio.gather(
+            self._state.current_source(),
+            self._mopidy.call("core.playback.get_current_track"),
+            self._mopidy.call("core.playback.get_state"),
+            self._mopidy.call("core.playback.get_time_position"),
+            self._state.volume_get(),
+            self._state.karaoke_state(),
+            self._fetch_theme(),
         )
 
         track = (track_info or {}).get("result") or {}
@@ -215,8 +238,22 @@ class StateAggregator:
             "sleep_timer_s": None,  # in-memory; Phase 2 wires it
             "recording":     False,
             "mic_on":        karaoke,
-            "skin":          None,
+            "skin":  theme_payload.get("skinId"),
+            "theme": theme_payload.get("theme") or {},
         }
+
+    async def _fetch_theme(self) -> dict:
+        """Pull the active theme from boombox-state. Returns {} on failure —
+        the PWA falls back to its built-in default styling."""
+        try:
+            async with self._sess.get(
+                    "http://127.0.0.1:6681/theme",
+                    timeout=aiohttp_client_lib.ClientTimeout(total=1.5)) as r:
+                if r.status != 200:
+                    return {}
+                return await r.json()
+        except Exception:
+            return {}
 
 
 def create_app(aggregator: "StateAggregator | None" = None,
@@ -226,7 +263,8 @@ def create_app(aggregator: "StateAggregator | None" = None,
     Pass `aggregator` for state reads and `dispatcher` for command writes.
     When either is None, the corresponding endpoint returns 503.
     """
-    app = web.Application(middlewares=[require_auth])
+    app = web.Application(
+        middlewares=[require_remote_enabled, require_auth])
     app["aggregator"] = aggregator
     app["dispatcher"] = dispatcher
     app.router.add_get("/api/remote/state", _get_state)
@@ -235,6 +273,11 @@ def create_app(aggregator: "StateAggregator | None" = None,
     app.router.add_get("/api/remote/art/{hash}.jpg", _get_art)
     app.router.add_post("/api/remote/pair/start", _post_pair_start)
     app.router.add_post("/api/remote/pair", _post_pair)
+    app.router.add_get("/api/remote/admin/status", _get_admin_status)
+    app.router.add_post("/api/remote/admin/enable", _post_admin_enable)
+    app.router.add_post("/api/remote/admin/disable", _post_admin_disable)
+    app.router.add_post("/api/remote/admin/unpair", _post_admin_unpair)
+    remote_files.add_routes(app)
     return app
 
 
@@ -297,6 +340,12 @@ async def _ws_handler(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         await ws.close(code=4401, message=b"bad_token")
+        return ws
+
+    if not remote_access.is_enabled():
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.close(code=4403, message=b"remote_disabled")
         return ws
 
     agg = request.app.get("aggregator")
@@ -372,12 +421,21 @@ async def _get_art(request: web.Request) -> web.Response:
     )
 
 
+def _is_localhost(request: web.Request) -> bool:
+    # nginx proxies /api/remote/ from 127.0.0.1:6685, so request.remote is
+    # always loopback. The :6685 socket is loopback-bound, so the only way
+    # in is via nginx — and nginx overwrites X-Real-IP with $remote_addr,
+    # making it the trustworthy peer identity. Fall back to request.remote
+    # for direct-loopback callers on the Pi (no proxy, no header).
+    peer = request.headers.get("X-Real-IP") or request.remote
+    return peer in ("127.0.0.1", "::1", "localhost")
+
+
 async def _post_pair_start(request: web.Request) -> web.Response:
     """Mint a fresh 6-digit PIN. Localhost-only (kiosk on the Pi)."""
     # Localhost-only — the kiosk runs on the Pi and is the only legit caller.
-    peer_ip = request.remote
-    if peer_ip not in ("127.0.0.1", "::1", "localhost"):
-        log.warning("/pair/start from non-localhost: %s", peer_ip)
+    if not _is_localhost(request):
+        log.warning("/pair/start from non-localhost: %s", request.remote)
         return web.json_response(
             {"ok": False, "error": "forbidden"}, status=403)
 
@@ -390,6 +448,63 @@ async def _post_pair_start(request: web.Request) -> web.Response:
         "pin": pin,
         "expires_at": _PAIR_STATE["expires_at"],
     })
+
+
+async def _get_admin_status(request: web.Request) -> web.Response:
+    """Report the enable flag + paired peers. Localhost-only (the kiosk)."""
+    if not _is_localhost(request):
+        return web.json_response({"ok": False, "error": "forbidden"},
+                                 status=403)
+    peers = _load_peers()
+    return web.json_response({
+        "ok": True,
+        "enabled": remote_access.is_enabled(),
+        "peers": [{"label": p.get("label", "remote"),
+                   "paired_at": p.get("paired_at", 0)}
+                  for p in peers.values()],
+    })
+
+
+async def _post_admin_enable(request: web.Request) -> web.Response:
+    if not _is_localhost(request):
+        return web.json_response({"ok": False, "error": "forbidden"},
+                                 status=403)
+    remote_access.set_enabled(True)
+    log.info("remote access enabled")
+    return web.json_response({"ok": True, "enabled": True})
+
+
+async def _post_admin_disable(request: web.Request) -> web.Response:
+    if not _is_localhost(request):
+        return web.json_response({"ok": False, "error": "forbidden"},
+                                 status=403)
+    remote_access.set_enabled(False)
+    log.info("remote access disabled")
+    return web.json_response({"ok": True, "enabled": False})
+
+
+async def _post_admin_unpair(request: web.Request) -> web.Response:
+    """Remove one peer by token. Authorization is otherwise durable — this
+    is the only way a peer loses access."""
+    if not _is_localhost(request):
+        return web.json_response({"ok": False, "error": "forbidden"},
+                                 status=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid_json"},
+                                 status=400)
+    token = body.get("token") if isinstance(body, dict) else None
+    if not token or not isinstance(token, str):
+        return web.json_response({"ok": False, "error": "missing_token"},
+                                 status=400)
+    peers = _load_peers()
+    peers.pop(token, None)
+    path = Path(os.environ.get("BOOMBOX_REMOTE_PEERS", str(DEFAULT_PEERS)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(peers, indent=2))
+    log.info("unpaired one remote")
+    return web.json_response({"ok": True})
 
 
 async def _post_pair(request: web.Request) -> web.Response:
@@ -459,6 +574,13 @@ async def main() -> None:
             disabled=set(),
         )
         app = create_app(aggregator=agg, dispatcher=dispatcher)
+        # Mopidy-backed routes — wired here, not in create_app, since they
+        # need the live session.
+        import remote_library
+        remote_library.add_routes(app, clients.MopidyRpc(session))
+        import jellyfin_client
+        jellyfin_client.add_routes(
+            app, jellyfin_client.JellyfinClient(session))
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", PORT)
