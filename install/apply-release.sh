@@ -113,7 +113,6 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     # the kiosk browser mid-update is disruptive; restarting boombox-kiosk-guard
     # (which IS in the list) re-pins/reloads the page so the new SPA loads.
     # boombox-updater self-restarts last (Python side, after verify).
-    # boombox-uploader is toggled on-demand, not part of the always-on set.
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk

@@ -620,16 +620,13 @@ async def mopidy_restart(_request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
-# Access (/upload, /usb, /library) — toggle the upload service, list mounted
-# USB drives, copy files to/from them, and trigger a Mopidy library rescan.
+# Access (/usb, /library) — list mounted USB drives, copy files to/from them,
+# and trigger a Mopidy library rescan.
 # ---------------------------------------------------------------------------
 
-UPLOADER_UNIT = "boombox-uploader.service"
 HOME = Path(os.path.expanduser("~"))
 MUSIC_ROOT = Path(os.environ.get("BOOMBOX_MUSIC_DIR", HOME / "Music"))
 USB_LINKS_DIR = MUSIC_ROOT / ".usb"
-RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
-UPLOADER_PIN_FILE = RUNTIME_DIR / "boombox-uploader.pin"
 WEB_AUTH_ENV = Path(os.environ.get("BOOMBOX_WEB_AUTH_ENV", "/etc/boombox/web-auth.env"))
 
 
@@ -664,27 +661,6 @@ def _read_web_auth() -> dict[str, str]:
     return data
 
 
-def _web_url(ip: str, path: str = "/") -> str:
-    auth = _read_web_auth()
-    port = auth.get("port") or "8090"
-    suffix = "" if port == "80" else f":{port}"
-    return f"http://{ip}{suffix}{path}"
-
-
-async def _systemctl_user(*args: str, timeout: float = 5.0) -> tuple[int, str]:
-    return await run("systemctl", "--user", *args, timeout=timeout)
-
-
-async def _read_pin() -> str:
-    """Return the live uploader PIN, or '' if the service isn't running."""
-    try:
-        return UPLOADER_PIN_FILE.read_text().strip()
-    except FileNotFoundError:
-        return ""
-    except OSError:
-        return ""
-
-
 async def _primary_lan_ip() -> str:
     rc, out = await run("hostname", "-I")
     if rc != 0:
@@ -695,46 +671,6 @@ async def _primary_lan_ip() -> str:
         if "." in p and not p.startswith("127."):
             return p
     return parts[0] if parts else ""
-
-
-async def upload_status(_request: web.Request) -> web.Response:
-    rc, _ = await _systemctl_user("is-active", "--quiet", UPLOADER_UNIT)
-    enabled = rc == 0
-    pin = await _read_pin() if enabled else ""
-    ip = await _primary_lan_ip()
-    auth = _read_web_auth()
-    return web.json_response({
-        "enabled": enabled,
-        "pin": pin,
-        "url": _web_url(ip, "/upload/") if ip else "",
-        "ip": ip,
-        "web_port": auth.get("port") or "8090",
-        "web_user": auth.get("user") or "boombox",
-        "web_password": auth.get("password") or "",
-        "smb_user": auth.get("smb_user") or "",
-        "smb_url": f"smb://{ip}/boombox-music" if ip else "",
-    })
-
-
-async def upload_enable(_request: web.Request) -> web.Response:
-    rc, out = await _systemctl_user("start", UPLOADER_UNIT, timeout=10)
-    if rc != 0:
-        return web.json_response({"ok": False, "error": out or "systemctl failed"}, status=502)
-    # Wait briefly for the service to lay down its PIN file.
-    for _ in range(20):
-        if UPLOADER_PIN_FILE.exists():
-            break
-        await asyncio.sleep(0.1)
-    return await upload_status(_request)
-
-
-async def upload_disable(_request: web.Request) -> web.Response:
-    rc, out = await _systemctl_user("stop", UPLOADER_UNIT, timeout=10)
-    if rc != 0:
-        return web.json_response({"ok": False, "error": out or "systemctl failed"}, status=502)
-    # Belt-and-braces: the unit's ExecStopPost should remove the PIN file too.
-    UPLOADER_PIN_FILE.unlink(missing_ok=True)
-    return web.json_response({"enabled": False, "pin": "", "url": "", "ip": ""})
 
 
 async def usb_devices(_request: web.Request) -> web.Response:
@@ -980,10 +916,7 @@ def make_app() -> web.Application:
     app.router.add_get("/art", album_art)
     app.router.add_get("/lyrics", lyrics)
     app.router.add_post("/mopidy/restart", mopidy_restart)
-    # Access (upload + USB)
-    app.router.add_get("/upload/status", upload_status)
-    app.router.add_post("/upload/enable", upload_enable)
-    app.router.add_post("/upload/disable", upload_disable)
+    # Access (USB)
     app.router.add_get("/usb/devices", usb_devices)
     app.router.add_post("/usb/copy", usb_copy)
     app.router.add_post("/library/scan", library_scan)

@@ -396,9 +396,6 @@ for u in "${USER_UNITS[@]}"; do
   systemctl --user enable "$u.service"
 done
 
-# boombox-uploader is intentionally NOT enabled — it's toggled by the
-# touchscreen Settings drawer.
-
 # System-side template + udev rule for USB auto-mount.
 log "installing USB auto-mount (system unit + udev rule)"
 sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/systemd/system/boombox-usb-mount@.service" \
