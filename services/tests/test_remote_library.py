@@ -88,6 +88,32 @@ async def test_create_playlist_round_trip(library_app, aiohttp_client):
 
 
 @pytest.mark.asyncio
+async def test_playlist_items_returns_uris(library_app, aiohttp_client):
+    app, fake = library_app
+    fake.responses["core.playlists.get_items"] = {"result": [
+        {"uri": "local:track:a"}, {"uri": "local:track:b"},
+    ]}
+    client = await aiohttp_client(app)
+    resp = await client.get("/api/remote/playlists/m3u:road.m3u/items",
+                            headers={"Authorization": "Bearer t"})
+    assert resp.status == 200
+    assert (await resp.json())["uris"] == ["local:track:a", "local:track:b"]
+    assert ("core.playlists.get_items", {"uri": "m3u:road.m3u"}) in fake.calls
+
+
+@pytest.mark.asyncio
+async def test_create_playlist_failure_returns_502(library_app, aiohttp_client):
+    # FakeMopidy returns {"result": None} for unconfigured methods, so
+    # core.playlists.create yields no playlist → 502 create_failed.
+    app, _ = library_app
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/remote/playlists",
+                             json={"name": "X", "uris": ["local:track:a"]},
+                             headers={"Authorization": "Bearer t"})
+    assert resp.status == 502
+
+
+@pytest.mark.asyncio
 async def test_queue_replaces_and_plays(library_app, aiohttp_client):
     app, fake = library_app
     client = await aiohttp_client(app)

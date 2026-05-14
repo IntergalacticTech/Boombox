@@ -560,6 +560,8 @@ async def main() -> None:
             disabled=set(),
         )
         app = create_app(aggregator=agg, dispatcher=dispatcher)
+        # Mopidy-backed routes — wired here, not in create_app, since they
+        # need the live session.
         import remote_library
         remote_library.add_routes(app, clients.MopidyRpc(session))
         runner = web.AppRunner(app)

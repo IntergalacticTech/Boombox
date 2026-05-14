@@ -71,11 +71,14 @@ def _make_handlers(mopidy):
         if not saved:
             return web.json_response({"ok": False, "error": "save_failed"},
                                      status=502)
+        # best-effort cache refresh; save already succeeded
         await mopidy.call("core.playlists.refresh", {"uri_scheme": "m3u"})
         return web.json_response({"ok": True, "uri": saved.get("uri"),
                                   "name": saved.get("name")})
 
     async def playlist_items(request: web.Request) -> web.Response:
+        # {uri} matches a single path segment — fine for m3u:/spotify:
+        # colon-delimited URIs; the client URL-encodes the value.
         uri = request.match_info["uri"]
         res = await mopidy.call("core.playlists.get_items", {"uri": uri})
         items = res.get("result") or []
