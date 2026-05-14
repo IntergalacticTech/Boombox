@@ -47,3 +47,6 @@ install/local/
 firmware/.pio/
 firmware/.pioenvs/
 firmware/.piolibdeps/
+
+# Vendored reference download (unpacked zip, not tracked)
+Freenove_ESP32_Display-main/
