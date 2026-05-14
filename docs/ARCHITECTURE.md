@@ -12,14 +12,15 @@ repo organises itself in your head.
                       │   Raspberry Pi 5 + HiFiBerry  │
                       └──────────────┬───────────────┘
                                      │
-   ┌─────────────┐     ┌──────────────┴────────────┐     ┌──────────────┐
-   │   Touch UI  │◀────│  nginx localhost:80       │────▶│  /var/www/   │
-   │  (Chromium) │     │  ┌─────────────────────┐  │     │  boombox/    │
-   │  kiosk mode │     │  │ / → SPA             │  │     │  (Vite dist) │
-   └──────┬──────┘     │  │ /mopidy/      :6680 │  │     └──────────────┘
-          │            │  │ /api/         :6681 │  │
+   ┌─────────────┐     ┌──────────────┴────────────┐     ┌────────────────────┐
+   │   Touch UI  │◀────│  nginx localhost:80       │────▶│ /opt/boombox/      │
+   │  (Chromium) │     │  ┌─────────────────────┐  │     │ current/ui/dist/   │
+   │  kiosk mode │     │  │ / → SPA             │  │     │ (Vite build, the   │
+   └──────┬──────┘     │  │ /mopidy/      :6680 │  │     │  active release)   │
+          │            │  │ /api/         :6681 │  │     └────────────────────┘
    GPIO   │            │  │ /audio/ws     :6682 │  │
    buttons│            │  │ /api/buttons/ :6684 │  │
+          │            │  │ /api/update/  :6686 │  │
           │            │  └─────────────────────┘  │
           │            │  LAN :8090 → Basic auth   │
           │            └───────────────────────────┘
@@ -67,6 +68,7 @@ repo organises itself in your head.
 | `boombox-resume` | user | — | Snapshots Mopidy state, restores after reboot |
 | `boombox-bt-volume` | user | — | AVRCP absolute-volume → `bluez_input` node volume |
 | `boombox-kiosk-guard` | user | — | DevTools watchdog that keeps Chromium pinned to `http://localhost/` |
+| `boombox-updater` | user | 6686 | Polls GitHub Releases; runs scheduled A/B release installs with auto-rollback. See [Updates](#updates). |
 | `boombox-uploader` | user | 6683 | Off by default. Toggled from the touchscreen; serves a PIN-gated remote/upload page at `/upload/`. See [ACCESS.md](./ACCESS.md). |
 | `boombox-usb-mount@<dev>` | system (template) | — | Triggered by udev. Mounts USB drives R/O under `/media/boombox/<id>` and symlinks them into the Mopidy library at `~/Music/.usb/<id>`. |
 
@@ -154,18 +156,22 @@ default sink and a fresh `parec` invocation.
 ## File-system layout on the Pi
 
 ```
-/opt/boombox/                  ← the cloned repo, owned by the desktop user
-├── services/                  ← Python service code (run by user systemd)
-├── ui/                        ← source for the SPA
-├── install/                   ← install.sh, update.sh, configs, units
-├── bin/                       ← boombox-update wrapper
-└── .venv/                     ← Python venv (--system-site-packages)
+/opt/boombox/                  ← release-pointer layout, owned by the desktop user
+├── releases/<ref>/            ← one checkout per installed release (tag or sha)
+│   ├── services/              ← Python service code (run by user systemd)
+│   ├── ui/dist/               ← built SPA — nginx serves the active one directly
+│   ├── install/               ← install.sh, apply-release.sh, configs, units
+│   └── bin/                   ← boombox-update wrapper
+├── current → releases/<ref>   ← symlink to the active release
+├── previous → releases/<ref>  ← symlink to the last-known-good release
+├── .venv/                     ← shared Python venv (--system-site-packages)
+└── state/                     ← updater.json + logs/ (per-install-attempt logs)
 
-/var/www/boombox/              ← built SPA (owned by www-data)
 /etc/nginx/sites-available/boombox
 /etc/mopidy/mopidy.conf
 /etc/asound.conf
 /etc/boombox/buttons.json
+/etc/boombox/updater.json      ← update channel / window / auto toggle
 /boot/firmware/usercfg.txt     ← DAC overlay
 
 ~/.config/systemd/user/boombox-*.service
@@ -173,28 +179,43 @@ default sink and a fresh `parec` invocation.
 /usr/local/bin/boombox-update
 ```
 
+`install.sh` migrates a legacy flat `/opt/boombox` checkout into this layout in
+place on first run (the old tree becomes `releases/legacy-<sha>/`).
+
 ---
 
 ## Updates
 
-`boombox-update` runs `install/update.sh`, which:
+The `boombox-updater` user service (`:6686`) polls GitHub hourly and installs
+new releases A/B style. Two channels: `stable` (latest GitHub Release tag) and
+`edge` (`main` HEAD). When a newer version is available, a scheduler runs the
+install inside the configured nightly window (default 03:00–04:00) — unless
+music is playing, in which case it waits for the next window.
 
-1. Refuses to update if the working tree is dirty (override with `--force`).
-2. `git fetch && git merge --ff-only origin/<branch>`.
-3. Computes the file diff between the old HEAD and the new HEAD.
-4. Reinstalls **only** what changed:
-   - `install/install.sh` changed → rerun the full installer.
-   - `install/config/requirements.txt` changed → `pip install -r`.
-   - Anything in `ui/` → `npm install && npm run build && rsync to /var/www/boombox/`.
-   - Anything in `install/config/` → reinstall nginx site / mopidy.conf / asound.conf, reload services.
-   - Anything in `install/systemd/` → reinstall units, `daemon-reload`.
-   - Anything in `services/` or systemd or requirements → restart the affected user units.
+An install drives `install/apply-release.sh` step by step:
 
-Self-update is offline-safe in the sense that a failed step never leaves the
-SPA half-deployed: rsync is atomic-ish (uses `--delete` only after success),
-and units restart one at a time so a broken one doesn't take the kiosk with
-it. Failed `pip install` is the most likely break — fix the requirements,
-rerun.
+1. **fetch** — clone the ref into a fresh `releases/<ref>/`.
+2. **build** — `pip install -r` into the shared `.venv`, `npm run build` the UI.
+3. **preflight** — sanity-check the new tree (`ui/dist/index.html`, `nginx -t`,
+   `systemd-analyze verify` the units).
+4. **swap** — point `previous` at the old release, then atomically swap the
+   `current` symlink to the new one; sync new systemd units, `daemon-reload`.
+5. **restart** — restart the `boombox-*` user units, reload nginx.
+6. **verify** — smoke-test: all units active, `http://localhost/`, `/api/state`,
+   and `/api/buttons/` answer. On failure the updater **reverts** — flips
+   `current` back to `previous` and restarts — so a bad release never sticks.
+
+Because nginx serves the SPA straight from `current/ui/dist/` and the swap is a
+single atomic symlink move, the UI is never half-deployed. Channel, window, and
+the auto-on/off toggle live in `/etc/boombox/updater.json`; runtime state and
+per-attempt logs live under `/opt/boombox/state/`.
+
+`bin/boombox-update` is a thin client of the `:6686` HTTP API (`status`,
+`check`, `install [REF]`, `rollback`, `config`). If the service is unreachable
+or disabled it falls back to running `apply-release.sh` directly
+(fetch→build→preflight→swap→restart→verify) — note that fallback path has **no
+auto-rollback**. `install/update.sh` is now just a back-compat shim that
+`exec`s `boombox-update`.
 
 ---
 

@@ -1,0 +1,17 @@
+# install/systemd/user/boombox-updater.service
+[Unit]
+Description=Boombox auto-updater (channel poll + scheduled install)
+After=default.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-updater.py
+Restart=on-failure
+RestartSec=5
+# The service writes /opt/boombox/state/* and reads /etc/boombox/updater.json.
+# It shells out to /opt/boombox/current/install/apply-release.sh which uses
+# sudo for nginx reload (granted via /etc/sudoers.d/boombox).
+
+[Install]
+WantedBy=default.target

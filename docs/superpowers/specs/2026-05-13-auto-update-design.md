@@ -39,7 +39,7 @@ main` that runs only when a human SSHes in. We want devices to:
 | Default state      | Auto-update on, channel stable, window 03:00–04:00. |
 | Trust model        | GitHub Releases API + git clone over HTTPS. No signature verification in v1. |
 | Failure mode       | Snapshot-based atomic install (symlink swap). Smoke-test post-install; revert on failure. |
-| Process model      | New `boombox-updater` user systemd service exposing an HTTP API on port 6685. |
+| Process model      | New `boombox-updater` user systemd service exposing an HTTP API on port 6686. |
 | CLI                | `bin/boombox-update` rewritten as thin client of the updater API; falls back to direct script if the service is disabled/unreachable. |
 
 ## Filesystem layout
@@ -132,7 +132,7 @@ single instance. Three concurrent loops.
   *starting*; an install that runs past `window_duration` finishes normally.
 - Otherwise → kick off the install state machine.
 
-### HTTP API (port 6685)
+### HTTP API (port 6686)
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -140,11 +140,11 @@ single instance. Three concurrent loops.
 | GET    | `/api/update/config` | current effective config |
 | PUT    | `/api/update/config` | update auto / channel / window_start / window_duration_min; validated, persisted to `/etc/boombox/updater.json` |
 | POST   | `/api/update/check` | force a poll now; returns the new status |
-| POST   | `/api/update/install` | install latest available immediately. Body: `{ref?: string, force?: bool}`. `force` overrides the music-playing guard. Streams the install log via SSE; also written to `state/logs/`. |
+| POST   | `/api/update/install` | install latest available immediately. Body: `{ref?: string, force?: bool}`. `force` overrides the music-playing guard. Streams the install log via SSE; also written to `state/logs/`. *(implemented as status-polling on GET /api/update/status rather than SSE — simpler, same UX)* |
 | POST   | `/api/update/rollback` | flip `current` ↔ `previous`, restart services, smoke-test |
 | GET    | `/api/update/log?n=200` | tail last N lines of the most recent install log |
 
-nginx adds `/api/update/` → `:6685` to its existing reverse-proxy snippet so
+nginx adds `/api/update/` → `:6686` to its existing reverse-proxy snippet so
 the touchscreen UI and the authenticated `:8090` LAN page share the surface.
 
 ### Config persistence
@@ -234,7 +234,7 @@ Config edits (auto on/off, channel, window) go through `PUT
 The CLI is intentionally read-only for config to keep one source of truth
 for "what does the user want?"
 
-- Implementation: shell wrapper around `curl` to `localhost:6685`.
+- Implementation: shell wrapper around `curl` to `localhost:6686`.
 - `--force` overrides the "music playing" guard (only applies to interactive
   `install` calls; never to scheduled runs).
 - **Fallback path:** if the updater service is disabled or unreachable, the

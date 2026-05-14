@@ -176,6 +176,43 @@ The SPA's overlay components listen on `window.addEventListener('boombox:<event>
   to free up GPIO 14/15 and the SPI block for buttons. If you re-enable
   SPI on a fork, remap or disable the actions on those pins.
 
+### `boombox-updater` — GitHub release poller + scheduled A/B installer
+
+**Listens on `127.0.0.1:6686`, proxied as `/api/update/` by nginx.**
+
+Polls GitHub for new releases hourly (and once on boot): the latest
+published release on the `stable` channel, or `main` HEAD on `edge`. A
+scheduler wakes inside the configured install window (default 03:00–04:00)
+and, if a newer version is available and nothing is playing, runs the
+install. The install state machine drives
+[`install/apply-release.sh`](../install/apply-release.sh): fetch the ref,
+build into `releases/<ref>/`, swap the `current` symlink, smoke-test, and on
+failure flip `current` back to `previous` and restart.
+
+**HTTP API** (used by the touchscreen Settings → Updates panel and the
+`bin/boombox-update` CLI):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET  /api/update/status` | Installed + available versions, last attempt result |
+| `GET  /api/update/config` | Current channel, install window, auto-update enable |
+| `PUT  /api/update/config` | Update channel / window / auto toggle |
+| `POST /api/update/check` | Force a poll now (refresh available version) |
+| `POST /api/update/install` | Install latest (or a named ref) now |
+| `POST /api/update/rollback` | Flip `current` back to `previous` |
+| `GET  /api/update/log` | Tail the most recent install attempt's log |
+
+- **Code:** [`services/boombox-updater.py`](../services/boombox-updater.py)
+- **Config:** `/etc/boombox/updater.json` (channel, window, auto-update flag)
+- **Runtime state:** `/opt/boombox/state/updater.json` (installed/available
+  versions, last attempt) and per-attempt logs under
+  `/opt/boombox/state/logs/`
+- **Logs:** `journalctl --user -u boombox-updater -f`
+- **Disable auto-updates:** `systemctl --user disable --now
+  boombox-updater.service`. `bin/boombox-update` still works with the
+  service disabled — it falls back to running `apply-release.sh` directly
+  (no auto-rollback on that path).
+
 ### `boombox-resume` — playback resume across reboots
 
 Snapshots `{state, current_track_uri, tracklist_uris, position_ms}` to
@@ -346,7 +383,7 @@ journalctl --user -f -u 'boombox-*'
 # Restart the whole user-side stack
 systemctl --user restart boombox-state boombox-audio \
     boombox-orchestrator boombox-buttons boombox-resume \
-    boombox-bt-volume boombox-kiosk-guard
+    boombox-bt-volume boombox-kiosk-guard boombox-updater
 
 # From your laptop
 ./pi status            # one-screen summary
@@ -363,5 +400,5 @@ When something stops working, the first three things to check are:
 
 90% of incidents are "PipeWire restarted and a daemon needs a kick", which
 the auto-restart handles within 3–5 seconds. The other 10% are config
-drift after a manual edit; reinstall from the templates with
-`boombox-update --force`.
+drift after a manual edit; reinstall from the templates by re-running
+`/opt/boombox/current/install/install.sh` (idempotent).

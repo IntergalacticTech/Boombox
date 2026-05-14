@@ -357,11 +357,13 @@ To deploy to the Pi:
 ```bash
 # from repo root
 cd ui && npm run build
-../pi deploy ui/dist/ /var/www/boombox/
+../pi deploy ui/dist/ /opt/boombox/current/ui/dist/
 ../pi reload
 ```
 
-Or just `boombox-update` on the Pi if the skin is committed and pushed.
+That drops the build into the live release tree for a quick look; the next
+`boombox-update` overwrites it with a fresh release checkout. Once the skin is
+committed and pushed, just `boombox-update` on the Pi to land it properly.
 
 ---
 

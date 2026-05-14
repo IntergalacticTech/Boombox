@@ -134,9 +134,12 @@ Ship it:
 
 ```bash
 cd ui && npm run build
-../pi deploy ui/dist/ /var/www/boombox/
+../pi deploy ui/dist/ /opt/boombox/current/ui/dist/
 ../pi reload
 ```
+
+(That's a quick spot-check straight into the live release tree — the next
+`boombox-update` replaces it. Commit + push for anything you want to keep.)
 
 ### Editing a Python service
 
@@ -193,5 +196,5 @@ Files land in `./screenshots/` (gitignored, attach them to PRs as needed).
 | `./pi ssh` says "Permission denied (publickey)" | Your key isn't in `/home/jwc/.ssh/authorized_keys`. Ask the maintainer. |
 | `npm run dev` loads the page but Mopidy is offline | `.env` has the wrong `BOOMBOX_DEV_TARGET` or web password. Try `curl -u "$BOOMBOX_WEB_USER:$BOOMBOX_WEB_PASSWORD" "$BOOMBOX_DEV_TARGET/mopidy/rpc"` and check you can reach nginx. |
 | `./pi reload` says "no devtools page found" | The kiosk Chromium isn't running, or was started without `--remote-debugging-port=9222`. Run `./pi restart-kiosk`. |
-| You changed something on the Pi by hand and `boombox-update` refuses | `boombox-update --force` will hard-reset to `origin/main`. |
+| You hand-deployed a `dist/` to the Pi and it vanished after an update | `boombox-update` installs a fresh `releases/<ref>/` checkout and re-points `current` — hand-deployed files are left on the old release. Commit + push, then `boombox-update install <ref>`. |
 | The page on the kiosk doesn't show your build | You deployed `dist/` but Chromium has a stale hash. `./pi reload` (or just wait — index.html is `no-cache`, JS is hash-named so it refetches on rebuild). |

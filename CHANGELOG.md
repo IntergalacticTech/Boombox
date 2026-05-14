@@ -5,6 +5,35 @@ prefixes in `git log`.
 
 ---
 
+## Unreleased — Auto-update
+
+Devices keep themselves current: a new `boombox-updater` service discovers
+GitHub releases, installs them unattended inside a nightly window with a
+smoke-test + automatic rollback, and exposes the whole thing through a
+Settings → Updates panel and an `/api/update/*` HTTP API.
+
+### Added
+
+- **`boombox-updater`** service: auto-discovers GitHub releases on the
+  `stable` channel (or `main` HEAD on `edge`); installs unattended inside a
+  daily window (default 03:00–04:00); skips if music is playing.
+- **A/B install layout** (`releases/<ref>/` + `current`/`previous` symlinks)
+  with smoke-test + automatic rollback on failure.
+- **Settings → Updates panel** on the touchscreen + LAN web page.
+- **`/api/update/*` HTTP API** on `127.0.0.1:6685`.
+
+### Changed
+
+- **`/opt/boombox` reorganised** to a release-pointer layout. First run of
+  the installer migrates legacy flat checkouts in place.
+- **nginx** now serves the SPA from `/opt/boombox/current/ui/dist/` instead
+  of `/var/www/boombox/`.
+- **`bin/boombox-update`** rewritten as a thin client of `/api/update/*`,
+  with a fallback that runs `apply-release.sh` directly when the service is
+  disabled.
+
+---
+
 ## 2026-05-12 — Physical control surface
 
 Full 17-button + rotary-encoder GPIO surface, hot-reloadable config, kiosk

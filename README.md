@@ -55,15 +55,31 @@ and keeps the kiosk pinned to its UI.
 The installer is idempotent: re-running it picks up changes to configs,
 systemd units, and the UI build.
 
-## Self-update on the Pi
+## Updates
+
+Devices auto-check GitHub for new releases hourly and (by default) install
+new **stable** releases inside a nightly window of 03:00–04:00, skipping if
+music is playing. Toggle channel, window, and auto-on/off in
+**Settings → Updates** on the touchscreen or LAN web page.
+
+Manual control from a shell:
 
 ```bash
-boombox-update
+boombox-update            # check + install latest now
+boombox-update status     # current channel, installed/available versions
+boombox-update install v0.5.0
+boombox-update rollback   # flip back to the previous release
 ```
 
-Pulls `main`, reinstalls anything that drifted (deps, configs, units),
-rebuilds the SPA, and restarts the affected services. Roughly 60 seconds on
-a Pi 5 once dependencies are cached.
+Updates are A/B-installed under `/opt/boombox/releases/<ref>/` with the
+`current` symlink swapped atomically. A failed install (build error, a
+service that won't come back up) auto-reverts to the previous good release.
+
+To disable auto-updates entirely: `systemctl --user disable --now
+boombox-updater.service`. `boombox-update` still works with the service
+disabled — it falls back to a direct `apply-release.sh` run, though that
+**direct fallback path does not auto-rollback** a bad release, so prefer
+keeping the service enabled.
 
 ## Dev loop from a Mac
 
@@ -73,7 +89,7 @@ and log tailing.
 ```bash
 ./pi status               # services + now-playing summary
 ./pi shot                 # Wayland screenshot pulled to ./screenshots/
-./pi deploy ui/dist /var/www/boombox/
+./pi deploy ui/dist/ /opt/boombox/current/ui/dist/   # push a UI build
 ./pi reload               # reload the kiosk tab
 ./pi guard pause          # let agents drive the kiosk without the watchdog fighting
 ./pi logs mopidy
@@ -106,8 +122,9 @@ folder will publish the latest site.
 | `boombox-resume`      | —    | Snapshots Mopidy state, restores after reboot |
 | `boombox-bt-volume`   | —    | AVRCP absolute-volume → `bluez_input` node |
 | `boombox-kiosk-guard` | —    | DevTools-driven watchdog that keeps Chromium on `http://localhost/` |
+| `boombox-updater`     | 6685 | GitHub release poller + scheduled A/B installer; `/api/update/*` config, status, install, rollback |
 
-All seven `boombox-*` services run as **user** systemd units (they need the
+All eight `boombox-*` services run as **user** systemd units (they need the
 desktop session's PipeWire / Wayland / BlueZ). `nginx` and `mopidy` are
 system services.
 
@@ -127,9 +144,8 @@ system services.
 
 - [x] Working code on the Pi
 - [x] Repo layout + installer scripts for RPi OS
-- [x] Self-update from `main`
 - [ ] Pre-built SD-card image (dietpi or custom yocto base)
-- [ ] Versioned releases + signed update channel
+- [x] Versioned releases + scheduled A/B auto-update (signed update channel deferred to a later milestone)
 - [ ] Battery / power-management integration
 - [ ] Optional hotspot mode for Wi-Fi-less environments
 

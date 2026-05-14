@@ -1,6 +1,75 @@
 #!/usr/bin/env bash
-# boombox-update — thin wrapper installed to /usr/local/bin.
-# Delegates to /opt/boombox/install/update.sh so the install path is
-# the single source of truth.
+# boombox-update — thin client of the boombox-updater HTTP API.
+# Falls back to install/apply-release.sh main when the service is disabled
+# or unreachable.
 set -euo pipefail
-exec /opt/boombox/install/update.sh "$@"
+
+API="http://127.0.0.1:6686/api/update"
+ROOT="${BOOMBOX_ROOT:-/opt/boombox}"
+APPLY="$ROOT/current/install/apply-release.sh"
+
+api_up() {
+  curl -fsS --max-time 2 "$API/status" >/dev/null 2>&1
+}
+
+fallback() {
+  local ref="${1:-main}"
+  echo "[update] boombox-updater service unreachable — direct mode" >&2
+  "$APPLY" fetch "$ref" && \
+  "$APPLY" build "$ref" && \
+  "$APPLY" preflight "$ref" && \
+  "$APPLY" swap "$ref" && \
+  "$APPLY" restart && \
+  "$APPLY" verify
+}
+
+usage() {
+  cat <<EOF >&2
+Usage: boombox-update [status|check|install [REF]|rollback|config]
+  (no args)        check + (if available) install latest, follow log
+  status           dump /api/update/status JSON
+  check            force a poll
+  install [REF]    install latest, or a specific tag/sha
+  rollback         flip to previous
+  config           show effective config (read-only — set via UI)
+EOF
+  exit 64
+}
+
+cmd="${1:-default}"
+shift || true
+
+if ! api_up; then
+  case "$cmd" in
+    default|install) fallback "${1:-main}" ;;
+    *) echo "[update] service unreachable; '$cmd' requires the API" >&2; exit 1 ;;
+  esac
+  exit
+fi
+
+case "$cmd" in
+  status)
+    curl -fsS "$API/status" | jq .
+    ;;
+  check)
+    curl -fsS -X POST "$API/check" | jq .
+    ;;
+  config)
+    curl -fsS "$API/config" | jq .
+    ;;
+  rollback)
+    curl -fsS -X POST "$API/rollback" | jq .
+    ;;
+  install)
+    body="{}"
+    [[ -n "${1:-}" ]] && body="$(printf '{"ref":"%s"}' "$1")"
+    curl -fsS -X POST -H 'Content-Type: application/json' -d "$body" "$API/install"
+    ;;
+  default)
+    curl -fsS -X POST "$API/check" >/dev/null
+    curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' "$API/install"
+    ;;
+  *)
+    usage
+    ;;
+esac
