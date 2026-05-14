@@ -128,22 +128,30 @@ class UpdaterRunner:
         async with self._lock:
             log_path = self._store.new_log_path("rollback")
             steps = ShellSteps(log_path=log_path)
-            if steps.do_revert() != StepResult.OK:
-                return AttemptResult.BROKEN
-            if steps.do_revert_verify() != StepResult.OK:
-                return AttemptResult.BROKEN
-            self._store.update(
-                installed_version=self._read_installed_version(),
-                last_attempt=LastAttempt(
-                    ts=time.time(),
-                    ref=self._read_current_ref(),
-                    result=AttemptResult.OK,
-                    error=None,
-                    log_path=str(log_path.relative_to(self._store._dir)),
-                ),
-                state_machine="idle",
-            )
-            return AttemptResult.OK
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, self._run_revert, steps)
+            if result == AttemptResult.OK:
+                self._store.update(
+                    installed_version=self._read_installed_version(),
+                    last_attempt=LastAttempt(
+                        ts=time.time(),
+                        ref=self._read_current_ref(),
+                        result=AttemptResult.OK,
+                        error=None,
+                        log_path=str(log_path.relative_to(self._store._dir)),
+                    ),
+                    state_machine="idle",
+                )
+            return result
+
+    @staticmethod
+    def _run_revert(steps: "ShellSteps") -> AttemptResult:
+        """Blocking — runs in an executor thread."""
+        if steps.do_revert() != StepResult.OK:
+            return AttemptResult.BROKEN
+        if steps.do_revert_verify() != StepResult.OK:
+            return AttemptResult.BROKEN
+        return AttemptResult.OK
 
     async def _do_install(self, ref: Optional[str]) -> AttemptResult:
         state = await self.force_check()
@@ -156,6 +164,7 @@ class UpdaterRunner:
             steps=steps,
             current_ref=self._read_current_ref(),
             previous_ref=self._read_previous_ref(),
+            on_step=lambda step: self._store.update(state_machine=step.value),
         )
         loop = asyncio.get_running_loop()
         outcome = await loop.run_in_executor(None, installer.install, target)
@@ -168,14 +177,21 @@ class UpdaterRunner:
             ),
             state_machine="idle",
         )
-        # On a successful install, prune old releases and self-restart.
+        # On a successful install, prune old releases and self-restart —
+        # both blocking, so run them off the event loop.
         if outcome.result == AttemptResult.OK:
-            subprocess.run([str(APPLY), "prune"], check=False)
-            subprocess.run(
-                ["systemctl", "--user", "reload-or-restart",
-                 "boombox-updater.service"], check=False,
-            )
+            await loop.run_in_executor(None, _prune_and_self_restart)
         return outcome.result
+
+
+def _prune_and_self_restart() -> None:
+    """Blocking — runs in an executor thread. Prunes old release dirs, then
+    asks systemd to restart this very service (picks up a new updater.py)."""
+    subprocess.run([str(APPLY), "prune"], check=False)
+    subprocess.run(
+        ["systemctl", "--user", "reload-or-restart", "boombox-updater.service"],
+        check=False,
+    )
 
 
 async def _playback_active() -> bool:

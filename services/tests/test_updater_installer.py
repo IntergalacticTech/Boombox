@@ -169,3 +169,25 @@ def test_install_step_enum_in_order() -> None:
         InstallStep.SWAPPING, InstallStep.RESTARTING, InstallStep.VERIFYING,
         InstallStep.REVERTING, InstallStep.IDLE,
     ]
+
+
+def test_on_step_callback_receives_progress_sequence() -> None:
+    seen: list[InstallStep] = []
+    steps = FakeSteps()
+    inst = Installer(steps=steps, current_ref="v0.4.0", previous_ref=None,
+                     on_step=seen.append)
+    inst.install("v0.4.1")
+    assert seen == [
+        InstallStep.FETCHING, InstallStep.BUILDING, InstallStep.PREFLIGHT,
+        InstallStep.SWAPPING, InstallStep.RESTARTING, InstallStep.VERIFYING,
+    ]
+
+
+def test_on_step_emits_reverting_on_smoke_failure() -> None:
+    seen: list[InstallStep] = []
+    steps = FakeSteps(verify=StepResult.FAIL, current="v0.4.0", previous="v0.3.9")
+    inst = Installer(steps=steps, current_ref="v0.4.0", previous_ref="v0.3.9",
+                     on_step=seen.append)
+    inst.install("v0.4.1")
+    assert InstallStep.REVERTING in seen
+    assert seen.index(InstallStep.REVERTING) > seen.index(InstallStep.VERIFYING)

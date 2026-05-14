@@ -9,6 +9,7 @@ from __future__ import annotations
 import enum
 import json
 import os
+import threading
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -90,37 +91,41 @@ class StateStore:
         self._dir = state_dir
         self._file = state_dir / "updater.json"
         self._logs = state_dir / "logs"
+        self._lock = threading.RLock()
 
     def load(self) -> State:
         """Load state, returning EMPTY_STATE on missing/corrupt/unreadable
         files. Catches OSError broadly (covers FileNotFoundError,
         PermissionError, broken symlinks) so a read failure can never
         crash the service."""
-        try:
-            raw = json.loads(self._file.read_text())
-        except (OSError, json.JSONDecodeError):
-            return EMPTY_STATE
-        try:
-            return _deserialize(raw)
-        except (KeyError, ValueError, TypeError):
-            return EMPTY_STATE
+        with self._lock:
+            try:
+                raw = json.loads(self._file.read_text())
+            except (OSError, json.JSONDecodeError):
+                return EMPTY_STATE
+            try:
+                return _deserialize(raw)
+            except (KeyError, ValueError, TypeError):
+                return EMPTY_STATE
 
     def save(self, state: State) -> None:
         """Atomically write state (.tmp + rename, fsync)."""
-        self._dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._file.with_suffix(".json.tmp")
-        payload = json.dumps(_serialize(state), indent=2, sort_keys=True) + "\n"
-        with tmp.open("w") as fh:
-            fh.write(payload)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, self._file)
+        with self._lock:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            tmp = self._file.with_suffix(".json.tmp")
+            payload = json.dumps(_serialize(state), indent=2, sort_keys=True) + "\n"
+            with tmp.open("w") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self._file)
 
     def update(self, **fields) -> State:
         """Merge fields into the persisted state and return the new value."""
-        new = replace(self.load(), **fields)
-        self.save(new)
-        return new
+        with self._lock:
+            new = replace(self.load(), **fields)
+            self.save(new)
+            return new
 
     def new_log_path(self, ref: str) -> Path:
         """Return a fresh (non-existent) per-attempt log path under logs/.
