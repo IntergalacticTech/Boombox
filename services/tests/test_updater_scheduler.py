@@ -54,6 +54,26 @@ def test_window_wraps_midnight() -> None:
     assert out.install is True
 
 
+def test_wrap_window_boundaries() -> None:
+    # Window 23:00 -> 02:00 (180 min), spanning midnight.
+    # Inclusive start (23:00), exclusive end (02:00), and points just
+    # outside on each side.
+    c = cfg(window_start="23:00", window_duration_min=180)
+
+    def decide(hh: int, mm: int):
+        return should_attempt_install(
+            now=at(hh, mm), config=c,
+            installed_version="v0.4.1", available_version="v0.4.2",
+            playback_status="paused",
+        )
+
+    assert decide(22, 59).install is False   # just before start
+    assert decide(23, 0).install is True     # inclusive start
+    assert decide(1, 59).install is True     # inside, after midnight
+    assert decide(2, 0).install is False     # exclusive end
+    assert decide(2, 1).install is False     # just after end
+
+
 def test_auto_disabled_skips() -> None:
     out = should_attempt_install(
         now=at(3, 15), config=cfg(auto=False),
