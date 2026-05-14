@@ -25,6 +25,9 @@ PI_TTY="${PI_TTY:-/dev/ttyUSB0}"
 PI_ESPTOOL="${PI_ESPTOOL:-/opt/boombox/.venv/bin/esptool}"
 ENV_NAME="${ENV_NAME:-cyd-2432s028r}"
 REMOTE_DIR="${REMOTE_DIR:-/tmp/cyd-firmware}"
+# Stable on-Pi staging path that the udev-triggered cyd-autoflash service
+# reads on any new CYD plug-in. Always kept in sync with the latest build.
+PI_FW_STAGE="${PI_FW_STAGE:-/opt/boombox/firmware/cyd}"
 
 BUILD=1
 FLASH_ALL=0
@@ -71,6 +74,18 @@ else
 fi
 
 echo "[pi-flash] done."
+
+# Publish the latest image to the stable staging path so the udev-triggered
+# autoflash picks it up on the next plug-in of any CYD.
+echo "[pi-flash] staging firmware at $PI_HOST:$PI_FW_STAGE/"
+ssh "$PI_HOST" "sudo install -d -o root -g root -m 755 $PI_FW_STAGE"
+rsync -az --rsync-path="sudo rsync" "$BUILD_DIR/firmware.bin" \
+    "$PI_HOST:$PI_FW_STAGE/firmware.bin"
+if [[ $FLASH_ALL -eq 1 ]]; then
+    rsync -az --rsync-path="sudo rsync" \
+        "$BUILD_DIR/bootloader.bin" "$BUILD_DIR/partitions.bin" \
+        "$PI_HOST:$PI_FW_STAGE/"
+fi
 
 if [[ $MONITOR -eq 1 ]]; then
   echo "[pi-flash] tailing serial (Ctrl-C to exit)…"
