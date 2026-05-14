@@ -69,7 +69,7 @@ repo organises itself in your head.
 | `boombox-bt-volume` | user | — | AVRCP absolute-volume → `bluez_input` node volume |
 | `boombox-kiosk-guard` | user | — | DevTools watchdog that keeps Chromium pinned to `http://localhost/` |
 | `boombox-updater` | user | 6686 | Polls GitHub Releases; runs scheduled A/B release installs with auto-rollback. See [Updates](#updates). |
-| `boombox-uploader` | user | 6683 | Off by default. Toggled from the touchscreen; serves a PIN-gated remote/upload page at `/upload/`. See [ACCESS.md](./ACCESS.md). |
+| `boombox-remote` | user | 6685 | Boot-enabled. The consolidated phone + wireless-remote API (`/api/remote/`): state, commands, WebSocket, album art, file/library/queue/video surfaces, PIN pairing. Gated by a `remote_enabled` toggle, off by default. See [ACCESS.md](./ACCESS.md). |
 | `boombox-usb-mount@<dev>` | system (template) | — | Triggered by udev. Mounts USB drives R/O under `/media/boombox/<id>` and symlinks them into the Mopidy library at `~/Music/.usb/<id>`. |
 
 **System vs user.** `nginx`, `mopidy`, `smbd`, `shairport-sync`, `bluetoothd`,

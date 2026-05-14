@@ -113,7 +113,7 @@ wired up correctly.
 - **[DEVELOPMENT.md](./DEVELOPMENT.md)** — daily commands, `./pi` reference, troubleshooting.
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** — what the boombox actually is.
 - **[SERVICES.md](./SERVICES.md)** — per-daemon reference for the seven `boombox-*` services.
-- **[ACCESS.md](./ACCESS.md)** — the web-remote / upload mode + USB story.
+- **[ACCESS.md](./ACCESS.md)** — LAN web access, the `boombox-remote` API + pairing, USB story.
 - **[SKINS.md](./SKINS.md)** — how to add a new touchscreen skin.
 
 ## The shortest possible dev loop
@@ -176,7 +176,7 @@ Files land in `./screenshots/` (gitignored, attach them to PRs as needed).
 - Branch from `main` (no protected-branch enforcement yet — just don't
   force-push or rewrite history on `main`).
 - PRs against `IntergalacticTech/Boombox`.
-- Commit message style: imperative, scoped (`feat(uploader): ...`,
+- Commit message style: imperative, scoped (`feat(remote): ...`,
   `fix(udev): ...`). See `git log --oneline` for examples.
 - Keep commits small enough that a revert wouldn't hurt.
 
