@@ -262,6 +262,30 @@ async def _h_skin(d: Dispatcher):
         await d.kiosk.emit("skin-cycle", {})
 
 
+# Source switch — value-parameterized umbrella over the per-source handlers.
+# The CYD firmware and the PWA send {"action": "source", "value": "<name>"};
+# this routes to the existing single-source handlers so there is one code
+# path. "library" and "mopidy" are aliases for the same handler.
+_SOURCE_ALIASES = {
+    "mopidy": "library",
+    "library": "library",
+    "airplay": "airplay",
+    "spotify": "spotify",
+    "bluetooth": "bluetooth",
+    "movies": "movies",
+}
+
+
+@_handler("source")
+async def _h_source(d: Dispatcher, value=None):
+    target = _SOURCE_ALIASES.get(str(value).lower()) if value else None
+    if target is None:
+        raise ValueError(f"unknown source: {value!r}")
+    handler = _HANDLERS.get((target, "short_press"))
+    if handler is not None:
+        await handler(d)
+
+
 # Microphone / karaoke
 @_handler("mic_karaoke", "short_press")
 async def _h_mic(d: Dispatcher):
