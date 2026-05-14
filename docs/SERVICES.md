@@ -336,6 +336,8 @@ localhost-only (an in-handler peer-IP check) rather than token-gated.
 }
 ```
 
+(`paired_at` is a Unix timestamp; `0` marks a hand-added bootstrap token.)
+
 **Pairing.** A real PIN-pairing flow exists. The kiosk (localhost) calls
 `POST /api/remote/pair/start` to mint an ephemeral 6-digit PIN (default
 120 s TTL, single-use, held only as a SHA-256 hash in memory). A client
@@ -343,7 +345,9 @@ redeems it with `POST /api/remote/pair {pin, label}` and gets back a
 durable bearer token, which is persisted to `peers.json`. The PIN can
 rotate or expire freely; the token persists. For headless testing you
 can still hand-add a token to `peers.json` directly — it's no longer the
-only way in:
+only way in. Run the `python3` block on the Pi (it writes the Pi's
+`~/.config`); the `curl` can run from anywhere on the LAN, since
+`/api/remote/` has `auth_basic off` and needs no Basic-auth credential:
 
 ```bash
 mkdir -p ~/.config/boombox-remote
@@ -355,8 +359,9 @@ pathlib.Path.home().joinpath('.config/boombox-remote/peers.json').write_text(
     json.dumps({t: {'label': 'bootstrap', 'paired_at': 0}}))
 print(t)
 "
+# remote must be enabled first (touchscreen, or POST /api/remote/admin/enable)
 curl -H "Authorization: Bearer $TOKEN" \
-    http://localhost/api/remote/state   # remote must be enabled first
+    http://<pi-ip>:8090/api/remote/state
 ```
 
 mDNS: advertised as `_boombox._tcp.local` with TXT records `id`, `name`,

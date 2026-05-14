@@ -122,8 +122,13 @@ with that peer's token (a localhost-only route, driven from the touchscreen).
 }
 ```
 
+(`paired_at` is a Unix timestamp; `0` marks a hand-added bootstrap token.)
+
 For headless testing you can still hand-add a token to `peers.json` directly
-— pairing is the normal path, but it's no longer the only way in:
+— pairing is the normal path, but it's no longer the only way in. Run the
+`python3` block on the Pi (it writes the Pi's `~/.config`); the `curl` can run
+from anywhere on the LAN, since `/api/remote/` has `auth_basic off` and needs
+no Basic-auth credential:
 
 ```bash
 mkdir -p ~/.config/boombox-remote
@@ -136,7 +141,8 @@ p.write_text(json.dumps({t: {'label': 'bootstrap', 'paired_at': 0}}))
 print(t)
 "
 # remote must be enabled first (touchscreen, or POST /api/remote/admin/enable)
-curl -H "Authorization: Bearer $TOKEN" http://localhost/api/remote/state
+curl -H "Authorization: Bearer $TOKEN" \
+    http://<pi-ip>:8090/api/remote/state
 ```
 
 ### Uploading files
