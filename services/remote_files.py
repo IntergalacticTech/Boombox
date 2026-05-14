@@ -38,11 +38,9 @@ VIDEO_EXTS = {
 }
 ALLOWED_EXTS = AUDIO_EXTS | VIDEO_EXTS
 MAX_FILE_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB cap per file (movies)
-# NOTE: boombox-remote.py's create_app MUST also pass this as
-# client_max_size=MAX_FILE_BYTES + 1024 on its web.Application — aiohttp's
-# default request body limit is 1 MiB, which 413s every real media file
-# before this in-handler check ever runs. Size enforcement is split across
-# two files; keep both halves in sync.
+# Enforced in-handler during the streaming upload loop (see upload()).
+# request.multipart() does NOT consult aiohttp's client_max_size, so the
+# size limit lives here, not on the web.Application.
 SCAN_TRIGGER_URL = "http://127.0.0.1:6681/library/scan"
 JELLYFIN_KEY_FILE = Path(os.environ.get(
     "BOOMBOX_JELLYFIN_KEY", "/etc/boombox/jellyfin-api-key"))

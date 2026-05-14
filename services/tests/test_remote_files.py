@@ -99,15 +99,19 @@ async def test_upload_rejects_unsupported_type(files_app, aiohttp_client):
 
 
 @pytest.mark.asyncio
-async def test_upload_accepts_file_over_1mib(files_app, aiohttp_client):
-    # Regression guard: aiohttp's default client_max_size is 1 MiB; without
-    # the explicit client_max_size on the app, a real media file 413s.
+async def test_upload_rejects_file_over_cap(files_app, aiohttp_client,
+                                            monkeypatch):
+    # The real size gate is the in-handler MAX_FILE_BYTES check, enforced
+    # while streaming. Lower the cap and confirm an over-cap upload is
+    # rejected 413 AND the partial file is cleaned up off disk.
+    import remote_files
+    monkeypatch.setattr(remote_files, "MAX_FILE_BYTES", 1024)
     app, music = files_app
     client = await aiohttp_client(app)
-    big = b"\0" * (1024 * 1024 + 512 * 1024)  # 1.5 MiB
     data = aiohttp.FormData()
-    data.add_field("file", big, filename="big.mp3", content_type="audio/mpeg")
+    data.add_field("file", b"\0" * 4096, filename="toobig.mp3",
+                   content_type="audio/mpeg")
     resp = await client.post("/api/remote/files/upload", data=data,
                              headers={"Authorization": "Bearer t"})
-    assert resp.status == 200
-    assert (music / "uploads" / "big.mp3").stat().st_size == len(big)
+    assert resp.status == 413
+    assert not (music / "uploads" / "toobig.mp3").exists()
