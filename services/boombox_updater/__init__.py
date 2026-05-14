@@ -19,7 +19,7 @@ def _read_version() -> str:
     for candidate in (_INSTALLED_VERSION_FILE, _DEV_VERSION_FILE):
         try:
             return candidate.read_text().strip()
-        except FileNotFoundError:
+        except OSError:
             continue
     return "unknown"
 
