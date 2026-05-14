@@ -24,6 +24,13 @@ def test_malformed_file_reads_as_disabled(tmp_path, monkeypatch):
     assert remote_access.is_enabled() is False
 
 
+def test_non_dict_json_reads_as_disabled(tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    state.write_text("[]")
+    monkeypatch.setenv("BOOMBOX_REMOTE_STATE", str(state))
+    assert remote_access.is_enabled() is False
+
+
 def test_set_enabled_creates_parent_dir(tmp_path, monkeypatch):
     state = tmp_path / "nested" / "dir" / "state.json"
     monkeypatch.setenv("BOOMBOX_REMOTE_STATE", str(state))

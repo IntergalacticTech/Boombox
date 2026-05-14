@@ -23,10 +23,13 @@ def _state_path() -> Path:
 
 def is_enabled() -> bool:
     """True when remote access is on. A missing or malformed file reads as
-    off — the conservative default."""
+    off — the conservative default. This includes valid JSON that isn't an
+    object (e.g. a bare list or number)."""
     try:
         data = json.loads(_state_path().read_text())
     except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
         return False
     return bool(data.get("enabled", False))
 
