@@ -14,7 +14,7 @@ import aiohttp
 
 from . import __version__
 
-log = logging.getLogger("boombox-updater.poller")
+log = logging.getLogger("boombox-updater")
 
 DEFAULT_GITHUB_BASE = "https://api.github.com"
 SHORT_SHA_LEN = 7
@@ -61,9 +61,7 @@ class GitHubPoller:
         if not sha:
             return None
         published = (
-            data.get("commit", {})
-                .get("committer", {})
-                .get("date", "")
+            ((data.get("commit") or {}).get("committer") or {}).get("date") or ""
         )
         return PollResult(version=sha[:SHORT_SHA_LEN], published_at=published)
 

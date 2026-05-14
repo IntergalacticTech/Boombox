@@ -1,34 +1,44 @@
 """Tests for boombox_updater.poller — GitHub Releases / commits client."""
 from __future__ import annotations
 
-import asyncio
+import inspect
 from contextlib import asynccontextmanager
+from typing import Awaitable, Callable, Union
 
 import pytest
 from aiohttp import web
 
 from boombox_updater.poller import GitHubPoller, PollResult
 
+Handler = Union[web.Response, Callable[[web.Request], Awaitable[web.Response]]]
+
 
 @asynccontextmanager
-async def fake_github(handlers: dict[str, web.Response]):
-    """Spin up an aiohttp server on a random port serving fixed responses."""
+async def fake_github(handlers: dict[str, Handler]):
+    """Spin up an aiohttp server on a random port serving fixed responses.
+
+    Each value in `handlers` is either a prebuilt `web.Response` or a
+    coroutine `(request) -> Response` for tests that need to inspect the
+    incoming request.
+    """
     app = web.Application()
 
     async def handler(request: web.Request) -> web.Response:
-        key = request.path
-        if key in handlers:
-            return handlers[key]
-        return web.Response(status=404)
+        entry = handlers.get(request.path)
+        if entry is None:
+            return web.Response(status=404)
+        if inspect.iscoroutinefunction(entry):
+            return await entry(request)
+        return entry
 
     app.router.add_route("GET", "/{tail:.*}", handler)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
-    port = site._server.sockets[0].getsockname()[1]
+    host, port = runner.addresses[0][:2]
     try:
-        yield f"http://127.0.0.1:{port}"
+        yield f"http://{host}:{port}"
     finally:
         await runner.cleanup()
 
@@ -77,21 +87,38 @@ async def test_poll_uses_user_agent_and_accept_headers() -> None:
         seen["accept"] = request.headers.get("Accept", "")
         return web.json_response({"tag_name": "v0.4.2", "published_at": ""})
 
-    app = web.Application()
-    app.router.add_route("GET", "/{tail:.*}", capture)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = site._server.sockets[0].getsockname()[1]
-    try:
-        poller = GitHubPoller(
-            base_url=f"http://127.0.0.1:{port}",
-            repo="IntergalacticTech/Boombox",
-        )
+    handlers = {"/repos/IntergalacticTech/Boombox/releases/latest": capture}
+    async with fake_github(handlers) as base:
+        poller = GitHubPoller(base_url=base, repo="IntergalacticTech/Boombox")
         await poller.poll_stable()
-    finally:
-        await runner.cleanup()
 
     assert seen["ua"].startswith("boombox-updater/")
     assert seen["accept"] == "application/vnd.github+json"
+
+
+@pytest.mark.asyncio
+async def test_poll_stable_missing_tag_returns_none() -> None:
+    """A 200 with no tag_name (e.g. a draft release with no tag) is treated
+    the same as a 404 — nothing to install."""
+    handlers = {
+        "/repos/IntergalacticTech/Boombox/releases/latest": web.json_response(
+            {"published_at": "2026-05-13T01:23:45Z"}
+        ),
+    }
+    async with fake_github(handlers) as base:
+        poller = GitHubPoller(base_url=base, repo="IntergalacticTech/Boombox")
+        result = await poller.poll_stable()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_poll_edge_missing_sha_returns_none() -> None:
+    handlers = {
+        "/repos/IntergalacticTech/Boombox/commits/main": web.json_response(
+            {"commit": {"committer": {"date": "2026-05-13T02:34:56Z"}}}
+        ),
+    }
+    async with fake_github(handlers) as base:
+        poller = GitHubPoller(base_url=base, repo="IntergalacticTech/Boombox")
+        result = await poller.poll_edge()
+    assert result is None
