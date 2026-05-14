@@ -560,6 +560,8 @@ async def main() -> None:
             disabled=set(),
         )
         app = create_app(aggregator=agg, dispatcher=dispatcher)
+        import remote_library
+        remote_library.add_routes(app, clients.MopidyRpc(session))
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", PORT)
