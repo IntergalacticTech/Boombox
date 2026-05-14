@@ -198,15 +198,15 @@ class StateAggregator:
 
     async def consolidated_state(self) -> dict:
         # Pull from upstream services in parallel for snappiness.
-        source, track_info, state_info, position_info, vol_info, karaoke = (
-            await asyncio.gather(
-                self._state.current_source(),
-                self._mopidy.call("core.playback.get_current_track"),
-                self._mopidy.call("core.playback.get_state"),
-                self._mopidy.call("core.playback.get_time_position"),
-                self._state.volume_get(),
-                self._state.karaoke_state(),
-            )
+        (source, track_info, state_info, position_info, vol_info, karaoke,
+         theme_payload) = await asyncio.gather(
+            self._state.current_source(),
+            self._mopidy.call("core.playback.get_current_track"),
+            self._mopidy.call("core.playback.get_state"),
+            self._mopidy.call("core.playback.get_time_position"),
+            self._state.volume_get(),
+            self._state.karaoke_state(),
+            self._fetch_theme(),
         )
 
         track = (track_info or {}).get("result") or {}
@@ -238,8 +238,22 @@ class StateAggregator:
             "sleep_timer_s": None,  # in-memory; Phase 2 wires it
             "recording":     False,
             "mic_on":        karaoke,
-            "skin":          None,
+            "skin":  theme_payload.get("skinId"),
+            "theme": theme_payload.get("theme") or {},
         }
+
+    async def _fetch_theme(self) -> dict:
+        """Pull the active theme from boombox-state. Returns {} on failure —
+        the PWA falls back to its built-in default styling."""
+        try:
+            async with self._sess.get(
+                    "http://127.0.0.1:6681/theme",
+                    timeout=aiohttp_client_lib.ClientTimeout(total=1.5)) as r:
+                if r.status != 200:
+                    return {}
+                return await r.json()
+        except Exception:
+            return {}
 
 
 def create_app(aggregator: "StateAggregator | None" = None,

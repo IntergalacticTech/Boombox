@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import sys
+
 import pytest
 
 
@@ -68,3 +70,37 @@ async def test_state_without_aggregator_returns_503(tmp_path, monkeypatch,
     assert resp.status == 503
     body = await resp.json()
     assert body["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_consolidated_state_includes_theme():
+    import boombox_remote  # noqa: F401 — loads the impl module
+    mod = sys.modules["boombox_remote_impl"]
+
+    agg = mod.StateAggregator(session=None, boombox_id="b", boombox_name="B")
+
+    class FakeMopidy:
+        async def call(self, method, params=None):
+            return {"result": None}
+
+    class FakeState:
+        async def current_source(self):
+            return "mopidy"
+
+        async def volume_get(self):
+            return (0.65, False)
+
+        async def karaoke_state(self):
+            return False
+
+    async def fake_theme():
+        return {"skinId": "spectrum", "name": "Spectrum",
+                "theme": {"bg": "#000", "accent": "#0ff"}}
+
+    agg._mopidy = FakeMopidy()
+    agg._state = FakeState()
+    agg._fetch_theme = fake_theme
+
+    data = await agg.consolidated_state()
+    assert data["skin"] == "spectrum"
+    assert data["theme"] == {"bg": "#000", "accent": "#0ff"}
