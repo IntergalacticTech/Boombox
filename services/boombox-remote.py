@@ -31,6 +31,7 @@ from zeroconf.asyncio import AsyncZeroconf
 
 import actions
 import clients
+import remote_access
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
@@ -156,6 +157,24 @@ async def require_auth(request: web.Request, handler):
     return await handler(request)
 
 
+@web.middleware
+async def require_remote_enabled(request: web.Request, handler):
+    """403 every phone-facing route when the remote_enabled flag is off.
+
+    Exempt: /api/remote/admin/* (that's how the flag gets turned on; those
+    handlers are localhost-gated) and /api/remote/ws (a WebSocket can't
+    return a JSON 403 — the ws handler checks the flag itself and closes
+    with code 4403).
+    """
+    path = request.path
+    if path == "/api/remote/ws" or path.startswith("/api/remote/admin/"):
+        return await handler(request)
+    if not remote_access.is_enabled():
+        return web.json_response(
+            {"ok": False, "error": "remote_disabled"}, status=403)
+    return await handler(request)
+
+
 class StateAggregator:
     """Reads upstream services and produces the consolidated payload.
 
@@ -226,7 +245,8 @@ def create_app(aggregator: "StateAggregator | None" = None,
     Pass `aggregator` for state reads and `dispatcher` for command writes.
     When either is None, the corresponding endpoint returns 503.
     """
-    app = web.Application(middlewares=[require_auth])
+    app = web.Application(
+        middlewares=[require_remote_enabled, require_auth])
     app["aggregator"] = aggregator
     app["dispatcher"] = dispatcher
     app.router.add_get("/api/remote/state", _get_state)
@@ -297,6 +317,12 @@ async def _ws_handler(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         await ws.close(code=4401, message=b"bad_token")
+        return ws
+
+    if not remote_access.is_enabled():
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.close(code=4403, message=b"remote_disabled")
         return ws
 
     agg = request.app.get("aggregator")
