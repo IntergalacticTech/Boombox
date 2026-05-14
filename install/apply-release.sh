@@ -80,7 +80,7 @@ case "$cmd" in
     for unit in "$RELEASES/$ref"/install/systemd/user/*.service; do
       systemd-analyze --user verify "$unit" || fail "systemd-analyze rejected $unit"
     done
-    sudo nginx -t
+    sudo /usr/sbin/nginx -t
     "$VENV/bin/python" -c "
 import importlib.util, sys
 for mod in ('boombox_updater', 'boombox_buttons'):
@@ -109,7 +109,11 @@ for mod in ('boombox_updater', 'boombox_buttons'):
 
   restart)
     log "restart user services (excluding updater)"
-    # The updater self-restarts last (handled by the Python side after verify).
+    # boombox-kiosk (Chromium itself) is intentionally NOT restarted — killing
+    # the kiosk browser mid-update is disruptive; restarting boombox-kiosk-guard
+    # (which IS in the list) re-pins/reloads the page so the new SPA loads.
+    # boombox-updater self-restarts last (Python side, after verify).
+    # boombox-uploader is toggled on-demand, not part of the always-on set.
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
@@ -117,7 +121,7 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     for u in "${units[@]}"; do
       systemctl --user restart "$u.service" || true
     done
-    sudo systemctl reload nginx
+    sudo /usr/bin/systemctl reload nginx
     ;;
 
   verify)
@@ -153,6 +157,7 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     install -m 0644 "$CURRENT/install/systemd/user/"*.service \
       "$HOME/.config/systemd/user/"
     systemctl --user daemon-reload
+    # (see restart case for why these units — and why others — are omitted)
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
@@ -160,7 +165,7 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     for u in "${units[@]}"; do
       systemctl --user restart "$u.service" || true
     done
-    sudo systemctl reload nginx
+    sudo /usr/bin/systemctl reload nginx
     ;;
 
   cleanup)

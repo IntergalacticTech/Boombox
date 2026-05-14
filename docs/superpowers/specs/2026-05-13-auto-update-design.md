@@ -140,7 +140,7 @@ single instance. Three concurrent loops.
 | GET    | `/api/update/config` | current effective config |
 | PUT    | `/api/update/config` | update auto / channel / window_start / window_duration_min; validated, persisted to `/etc/boombox/updater.json` |
 | POST   | `/api/update/check` | force a poll now; returns the new status |
-| POST   | `/api/update/install` | install latest available immediately. Body: `{ref?: string, force?: bool}`. `force` overrides the music-playing guard. Streams the install log via SSE; also written to `state/logs/`. |
+| POST   | `/api/update/install` | install latest available immediately. Body: `{ref?: string, force?: bool}`. `force` overrides the music-playing guard. Streams the install log via SSE; also written to `state/logs/`. *(implemented as status-polling on GET /api/update/status rather than SSE — simpler, same UX)* |
 | POST   | `/api/update/rollback` | flip `current` ↔ `previous`, restart services, smoke-test |
 | GET    | `/api/update/log?n=200` | tail last N lines of the most recent install log |
 
