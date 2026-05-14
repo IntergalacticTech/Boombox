@@ -9,6 +9,7 @@ that the pure-logic unit tests in test_updater_installer.py can't exercise.
 """
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -100,11 +101,8 @@ class TempdirSteps:
         return StepResult.OK
 
     def do_cleanup_failed_release(self, ref: str) -> None:
-        target = self._releases / ref
-        if target.exists():
-            for child in target.iterdir():
-                child.unlink()
-            target.rmdir()
+        # Mirrors `apply-release.sh cleanup` — rm -rf the release dir.
+        shutil.rmtree(self._releases / ref, ignore_errors=True)
 
 
 def test_happy_path(tmp_path: Path) -> None:
@@ -153,6 +151,9 @@ def test_smoke_failure_with_previous_rolls_back(tmp_path: Path) -> None:
     # do_swap set previous=v0.4.0, current=v0.4.1; do_revert flipped current
     # back to v0.4.0 (the release active before this install).
     assert steps.current_target() == "v0.4.0"
+    # do_revert is a true current<->previous swap: after rolling back,
+    # `previous` holds the bad release that was just backed out.
+    assert steps.previous_target() == "v0.4.1"
 
 
 def test_two_bad_releases_lands_on_last_known_good(tmp_path: Path) -> None:
