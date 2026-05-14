@@ -19,10 +19,24 @@ static const NimBLEUUID COMMAND_UUID("0000bbb4-0000-1000-8000-00805f9b34fb");
 // active instance. There's at most one BleClient at a time on the CYD.
 static BleClient* g_inst = nullptr;
 
+// Inter-task buffer: NimBLE host task writes raw JSON here; the Arduino
+// loop reads + parses + dispatches via pumpEvents(). Keeps all LVGL work
+// off the BLE callback (LVGL is not thread-safe with LV_USE_OS=NONE, and
+// heavy work in the NimBLE callback starves IDLE0 → task-watchdog reboot).
+static constexpr size_t STATE_BUF_CAP = 1024;
+static char     _state_buf[STATE_BUF_CAP];
+static size_t   _state_buf_len = 0;
+static volatile bool _state_dirty = false;
+static portMUX_TYPE  _state_mux = portMUX_INITIALIZER_UNLOCKED;
+
 BleClient::BleClient() {
     g_inst = this;
     NimBLEDevice::init("boombox-cyd");
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+    // Consolidated state JSON is ~500 bytes — well over the 20-byte
+    // payload of the default 23-byte ATT MTU. Request the BLE max so
+    // notifications carry the full payload in one go.
+    NimBLEDevice::setMTU(517);
 }
 
 std::vector<BleScanResult> BleClient::scan(uint32_t duration_s) {
@@ -116,12 +130,14 @@ bool BleClient::connect(const String& address) {
         if (_on_status) _on_status(false);
         return false;
     }
-    _svc            = svc;
-    _state_char     = svc->getCharacteristic(STATE_UUID);
-    _command_char   = svc->getCharacteristic(COMMAND_UUID);
-    _pair_req_char  = svc->getCharacteristic(PAIR_REQUEST_UUID);
-    _pair_resp_char = svc->getCharacteristic(PAIR_RESPONSE_UUID);
-    Serial.println("[ble] connected; discovered chars");
+    _svc              = svc;
+    _state_char       = svc->getCharacteristic(STATE_UUID);
+    _command_char     = svc->getCharacteristic(COMMAND_UUID);
+    _pair_req_char    = svc->getCharacteristic(PAIR_REQUEST_UUID);
+    _pair_resp_char   = svc->getCharacteristic(PAIR_RESPONSE_UUID);
+    _device_info_char = svc->getCharacteristic(DEVICE_INFO_UUID);
+    Serial.printf("[ble] connected; discovered chars; negotiated MTU=%u\n",
+                   client->getMTU());
     if (_on_status) _on_status(true);
     return true;
 }
@@ -177,7 +193,34 @@ bool BleClient::subscribeState() {
         Serial.println("[ble] state char does not support notify");
         return false;
     }
-    return sc->subscribe(true, _stateNotifyTrampoline);
+    if (!sc->subscribe(true, _stateNotifyTrampoline)) return false;
+    // BLE peripheral only pushes on change, so a freshly-subscribed
+    // central sees no state until something changes. Stash the current
+    // value into the pump buffer so the next pumpEvents() drives the UI.
+    std::string current = sc->readValue();
+    if (!current.empty()) {
+        Serial.printf("[ble] initial state read len=%u\n",
+                       (unsigned)current.size());
+        size_t n = current.size() < STATE_BUF_CAP ? current.size() : STATE_BUF_CAP;
+        portENTER_CRITICAL(&_state_mux);
+        memcpy(_state_buf, current.data(), n);
+        _state_buf_len = n;
+        _state_dirty = true;
+        portEXIT_CRITICAL(&_state_mux);
+    }
+    return true;
+}
+
+bool BleClient::readDeviceInfo(String& out_id, String& out_name) {
+    auto* dc = static_cast<NimBLERemoteCharacteristic*>(_device_info_char);
+    if (!dc) return false;
+    std::string raw = dc->readValue();
+    if (raw.empty()) return false;
+    JsonDocument doc;
+    if (deserializeJson(doc, raw)) return false;
+    out_id   = doc["id"].as<String>();
+    out_name = doc["name"].as<String>();
+    return out_id.length() > 0;
 }
 
 bool BleClient::sendCommand(const String& action, const String* value_or_null) {
@@ -193,12 +236,36 @@ bool BleClient::sendCommand(const String& action, const String* value_or_null) {
 
 void BleClient::_stateNotifyTrampoline(void* /*chr*/, uint8_t* data,
                                           size_t length, bool /*notify*/) {
-    if (!g_inst || !g_inst->_on_state) return;
-    String body(reinterpret_cast<char*>(data), length);
+    if (!g_inst) return;
+    // Runs on the NimBLE host task — keep it minimal. Just buffer the
+    // raw JSON; the Arduino loop will parse + apply it via pumpEvents().
+    size_t n = length < STATE_BUF_CAP ? length : STATE_BUF_CAP;
+    portENTER_CRITICAL(&_state_mux);
+    memcpy(_state_buf, data, n);
+    _state_buf_len = n;
+    _state_dirty = true;
+    portEXIT_CRITICAL(&_state_mux);
+}
+
+void BleClient::pumpEvents() {
+    if (!_state_dirty) return;
+    char local[STATE_BUF_CAP];
+    size_t n;
+    portENTER_CRITICAL(&_state_mux);
+    n = _state_buf_len;
+    memcpy(local, _state_buf, n);
+    _state_dirty = false;
+    portEXIT_CRITICAL(&_state_mux);
+
+    String body(local, n);
     BoomboxState s;
-    if (parseStateJson(body, s)) {
-        g_inst->_on_state(s);
-    }
+    bool ok = parseStateJson(body, s);
+    Serial.printf("[ble] state pump len=%u parse=%s playing=%d title='%s'\n",
+                   (unsigned)n, ok ? "ok" : "fail",
+                   ok ? (int)s.playing : -1,
+                   ok ? s.track.title.c_str() : "");
+    if (!ok || !_on_state) return;
+    _on_state(s);
 }
 
 void BleClient::_pairNotifyTrampoline(void* /*chr*/, uint8_t* data,

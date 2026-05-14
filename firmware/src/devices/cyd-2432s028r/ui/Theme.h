@@ -5,12 +5,14 @@ namespace boombox::theme {
 
 // Colors — matches the kiosk PairOverlay tokens so the experience feels
 // like the same product across boombox + remote.
-inline const lv_color_t BG_DARK   = lv_color_make(20, 20, 28);
-inline const lv_color_t FG_TEXT   = lv_color_make(240, 240, 245);
-inline const lv_color_t MUTED     = lv_color_make(140, 140, 150);
-inline const lv_color_t ACCENT    = lv_color_make(79, 195, 247);   // cyan
-inline const lv_color_t BUTTON_BG = lv_color_make(40, 40, 50);
-inline const lv_color_t WARN      = lv_color_make(244, 143, 177);
+inline const lv_color_t BG_DARK            = lv_color_make(20, 20, 28);
+inline const lv_color_t FG_TEXT            = lv_color_make(240, 240, 245);
+inline const lv_color_t MUTED              = lv_color_make(140, 140, 150);
+inline const lv_color_t ACCENT             = lv_color_make(79, 195, 247);   // cyan
+inline const lv_color_t ACCENT_PRESSED     = lv_color_make(40, 130, 175);   // darker cyan
+inline const lv_color_t BUTTON_BG          = lv_color_make(40, 40, 50);
+inline const lv_color_t BUTTON_BG_PRESSED  = lv_color_make(72, 72, 88);
+inline const lv_color_t WARN               = lv_color_make(244, 143, 177);
 
 // Apply base styles to the active screen.
 void applyScreen(lv_obj_t* scr);

@@ -67,6 +67,26 @@ class StateApi:
         label = (body.get("label") or "").lower()
         return label or None
 
+    async def active_external(self) -> str | None:
+        """Returns the active non-Mopidy source label only when it's actually
+        playing or paused. Mirrors the SPA's isExternalActive() — a stopped
+        external (e.g. AirPlay after the iPhone disconnects) returns None so
+        callers can fall back to Mopidy instead of routing dead commands to
+        an MPRIS player that won't react."""
+        try:
+            async with self._sess.get(f"{STATE_BASE}/state",
+                                      timeout=aiohttp.ClientTimeout(total=1)) as r:
+                if r.status != 200:
+                    return None
+                body = await r.json()
+        except Exception:
+            return None
+        label = (body.get("label") or "").lower()
+        status = (body.get("status") or "").lower()
+        if not label or status not in ("playing", "paused"):
+            return None
+        return label
+
     async def control(self, action: str) -> None:
         try:
             await self._sess.post(f"{STATE_BASE}/control/{action}",

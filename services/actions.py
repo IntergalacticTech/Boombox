@@ -71,14 +71,29 @@ def _handler(action: str, event: str = "short_press"):
 
 
 # Transport — short presses
+# Route to the external MPRIS player only when it's actively playing/paused
+# (mirrors the SPA's isExternalActive). A "stopped" external player — e.g.
+# AirPlay after the iPhone disconnects — falls back to Mopidy so the remote
+# can resume something instead of firing dead MPRIS commands.
 @_handler("play_pause")
 async def _h_play_pause(d: Dispatcher):
-    source = await d.state.current_source() if d.state else "mopidy"
-    if source in (None, "mopidy"):
+    ext = await d.state.active_external() if d.state else None
+    if ext is None:
         if d.mopidy is None:
             return
         state = (await d.mopidy.call("core.playback.get_state")).get("result")
-        await d.mopidy.call("core.playback.pause" if state == "playing" else "core.playback.play")
+        if state == "playing":
+            await d.mopidy.call("core.playback.pause")
+            return
+        # Don't call core.playback.play on an empty tracklist — in this
+        # deployment it has hung Mopidy badly enough to wedge the whole
+        # HTTP listener. If there's nothing queued, the remote's play
+        # button is a no-op (use the kiosk to queue something first).
+        n = (await d.mopidy.call("core.tracklist.get_length")).get("result") or 0
+        if n > 0:
+            await d.mopidy.call("core.playback.play")
+        else:
+            log.info("play_pause: empty tracklist and no external player; ignoring")
     else:
         await d.state.control("play-pause")
 
@@ -91,8 +106,8 @@ async def _h_stop(d: Dispatcher):
 
 @_handler("previous")
 async def _h_previous(d: Dispatcher):
-    source = await d.state.current_source() if d.state else "mopidy"
-    if source in (None, "mopidy"):
+    ext = await d.state.active_external() if d.state else None
+    if ext is None:
         if d.mopidy:
             await d.mopidy.call("core.playback.previous")
     else:
@@ -101,8 +116,8 @@ async def _h_previous(d: Dispatcher):
 
 @_handler("next")
 async def _h_next(d: Dispatcher):
-    source = await d.state.current_source() if d.state else "mopidy"
-    if source in (None, "mopidy"):
+    ext = await d.state.active_external() if d.state else None
+    if ext is None:
         if d.mopidy:
             await d.mopidy.call("core.playback.next")
     else:
@@ -305,10 +320,39 @@ async def shutdown_sequence(mopidy: MopidyRpc, state: StateApi, kiosk: KioskClie
 
 @_handler("volume")
 async def _h_volume(d: Dispatcher, value=None):
-    """Set absolute volume (0-100). Requires `value` from the remote command."""
+    """Set absolute volume from a percent (0-100). State API uses a fraction
+    (0..1.5, where 1.0=100% and >1.0 is boost), so we divide by 100 here."""
     if d.state is None or value is None:
         return
-    await d.state.volume_set(float(value))
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        return
+    await d.state.volume_set(max(0.0, min(1.0, pct / 100.0)))
+
+
+# Volume delta — read current, ±5% step, mirrors the GPIO encoder logic.
+_VOLUME_STEP = 0.05
+
+
+@_handler("volume_up")
+async def _h_volume_up(d: Dispatcher):
+    if d.state is None:
+        return
+    cur = await d.state.volume_get()
+    if cur is None:
+        return
+    await d.state.volume_set(min(1.0, cur[0] + _VOLUME_STEP))
+
+
+@_handler("volume_down")
+async def _h_volume_down(d: Dispatcher):
+    if d.state is None:
+        return
+    cur = await d.state.volume_get()
+    if cur is None:
+        return
+    await d.state.volume_set(max(0.0, cur[0] - _VOLUME_STEP))
 
 
 @_handler("mute")

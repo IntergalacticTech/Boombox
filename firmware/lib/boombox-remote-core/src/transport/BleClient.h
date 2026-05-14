@@ -49,12 +49,23 @@ public:
     void requestPair(const String& pin, PairResult cb,
                       uint32_t timeout_ms = 8000);
 
+    // Reads the peer's device_info characteristic. Returns true on success
+    // and populates `id` + `name` from the JSON payload.
+    bool readDeviceInfo(String& out_id, String& out_name);
+
     // Register callbacks before subscribing.
     void onState(StateCallback cb)   { _on_state = cb; }
     void onStatus(StatusCallback cb) { _on_status = cb; }
 
     // Begin receiving state notifications. Must be connected.
     bool subscribeState();
+
+    // Call from the Arduino loop. Drains any buffered state notify and
+    // dispatches the parsed state to the registered _on_state callback.
+    // State notifies are queued from the NimBLE host task (high priority,
+    // not LVGL-safe); doing the JSON parse + UI update here keeps all
+    // LVGL work on the Arduino task.
+    void pumpEvents();
 
     // Dispatch a command. Returns false if not connected.
     bool sendCommand(const String& action, const String* value_or_null);
@@ -66,6 +77,7 @@ private:
     void* _command_char = nullptr;
     void* _pair_req_char = nullptr;
     void* _pair_resp_char = nullptr;
+    void* _device_info_char = nullptr;
     StateCallback _on_state;
     StatusCallback _on_status;
     PairResult _pair_cb;

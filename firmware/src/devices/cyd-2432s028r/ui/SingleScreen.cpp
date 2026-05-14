@@ -98,6 +98,7 @@ void SingleScreen::_buildPair() {
         lv_obj_t* btn = theme::makeButton(_grp_pair, KEYS[i], btn_w, btn_h);
         if (i == 9 || i == 11) {
             lv_obj_set_style_bg_color(btn, theme::BUTTON_BG, 0);
+            lv_obj_set_style_bg_color(btn, theme::BUTTON_BG_PRESSED, LV_STATE_PRESSED);
             lv_obj_set_style_text_color(
                 lv_obj_get_child(btn, 0), theme::FG_TEXT, 0);
         }
@@ -166,15 +167,24 @@ void SingleScreen::_buildPlaying() {
     // Volume — two big +/- buttons (more touch-friendly than a slider).
     lv_obj_t* vol_down = theme::makeButton(_grp_playing, "VOL -", 100, 40);
     lv_obj_set_style_bg_color(vol_down, theme::BUTTON_BG, 0);
+    lv_obj_set_style_bg_color(vol_down, theme::BUTTON_BG_PRESSED, LV_STATE_PRESSED);
     lv_obj_set_style_text_color(lv_obj_get_child(vol_down, 0), theme::FG_TEXT, 0);
     lv_obj_align(vol_down, LV_ALIGN_BOTTOM_LEFT, 12, -16);
+    // Tap = one step; hold (>400ms) repeats every 100ms — LVGL's
+    // long-press-repeat fires the same trampoline so the Pi-side delta
+    // handler walks the volume by 5% each tick.
     lv_obj_add_event_cb(vol_down, _onVolDownTramp, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(vol_down, _onVolDownTramp,
+                         LV_EVENT_LONG_PRESSED_REPEAT, nullptr);
 
     lv_obj_t* vol_up = theme::makeButton(_grp_playing, "VOL +", 100, 40);
     lv_obj_set_style_bg_color(vol_up, theme::BUTTON_BG, 0);
+    lv_obj_set_style_bg_color(vol_up, theme::BUTTON_BG_PRESSED, LV_STATE_PRESSED);
     lv_obj_set_style_text_color(lv_obj_get_child(vol_up, 0), theme::FG_TEXT, 0);
     lv_obj_align(vol_up, LV_ALIGN_BOTTOM_RIGHT, -12, -16);
     lv_obj_add_event_cb(vol_up, _onVolUpTramp, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(vol_up, _onVolUpTramp,
+                         LV_EVENT_LONG_PRESSED_REPEAT, nullptr);
 }
 
 void SingleScreen::_setMode(Mode m) {
@@ -317,14 +327,10 @@ void SingleScreen::_onNextTramp(lv_event_t* /*e*/) {
 }
 void SingleScreen::_onVolTramp(lv_event_t* /*e*/) { /* unused */ }
 void SingleScreen::_onVolDownTramp(lv_event_t* /*e*/) {
-    if (gUI && gUI->_actions) {
-        // No absolute-volume from UI without state — fire mute toggle as the
-        // primary down-action for MVP; vol down can be a separate command later.
-        gUI->_actions->volume(30);
-    }
+    if (gUI && gUI->_actions) gUI->_actions->volumeDown();
 }
 void SingleScreen::_onVolUpTramp(lv_event_t* /*e*/) {
-    if (gUI && gUI->_actions) gUI->_actions->volume(70);
+    if (gUI && gUI->_actions) gUI->_actions->volumeUp();
 }
 
 } // namespace boombox::ui

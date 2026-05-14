@@ -66,6 +66,11 @@ void CydDevice::init() {
     _touch.setRotation(0);
 
     lv_init();
+    // LVGL 9 needs a runtime tick source — without this, lv_tick_get()
+    // returns 0 forever, so the refresh timer fires once and then never
+    // again (LVGL 8's compile-time LV_TICK_CUSTOM_SYS_TIME_EXPR is gone).
+    lv_tick_set_cb([]() -> uint32_t { return millis(); });
+
     _disp = lv_display_create(240, 320);
     lv_display_set_flush_cb(_disp, _flush);
     lv_display_set_buffers(_disp, _draw_buf, nullptr,
@@ -74,8 +79,6 @@ void CydDevice::init() {
     lv_indev_t* indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, _read_touch);
-
-    // LVGL ticking happens from the Arduino loop() via lv_timer_handler.
 }
 
 void CydDevice::pollInputs() {

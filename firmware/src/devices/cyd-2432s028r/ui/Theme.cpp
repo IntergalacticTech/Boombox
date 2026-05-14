@@ -27,6 +27,12 @@ lv_obj_t* makeButton(lv_obj_t* parent, const char* label, int w, int h) {
     lv_obj_t* btn = lv_button_create(parent);
     lv_obj_set_size(btn, w, h);
     lv_obj_set_style_bg_color(btn, ACCENT, 0);
+    // Visible "pushed" feedback. LVGL toggles LV_STATE_PRESSED while a
+    // finger is down — this selector overrides the bg color in that state.
+    lv_obj_set_style_bg_color(btn, ACCENT_PRESSED, LV_STATE_PRESSED);
+    // A subtle inward translation reinforces the "press" feel without
+    // needing animations.
+    lv_obj_set_style_translate_y(btn, 2, LV_STATE_PRESSED);
     lv_obj_set_style_text_color(btn, lv_color_make(0, 0, 0), 0);
     lv_obj_set_style_radius(btn, 10, 0);
     lv_obj_set_style_border_width(btn, 0, 0);

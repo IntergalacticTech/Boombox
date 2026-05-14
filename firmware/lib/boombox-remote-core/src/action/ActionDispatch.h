@@ -24,6 +24,8 @@ public:
         String s = String(v);
         return _send("volume", &s);
     }
+    bool volumeUp()   { return _send("volume_up",   nullptr); }
+    bool volumeDown() { return _send("volume_down", nullptr); }
     bool source(const String& name) {
         return _send("source", &name);
     }

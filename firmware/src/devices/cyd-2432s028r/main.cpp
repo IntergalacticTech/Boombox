@@ -60,13 +60,19 @@ void setup() {
     gBle = new boombox::BleClient();
     Serial.println("[boot] BLE central initialized");
 
-    // Always re-pair on boot for Phase 2 MVP.
-    PairedBoomboxStore::clear();
+    PairedBoombox saved;
+    if (PairedBoomboxStore::load(saved)) {
+        Serial.printf("[boot] persisted pair: %s (%s)\n",
+                       saved.name.c_str(), saved.id.c_str());
+    } else {
+        Serial.println("[boot] no persisted pair");
+    }
     Serial.println("ready.");
 }
 
 void loop() {
     lv_timer_handler();
+    if (gBle) gBle->pumpEvents();   // drain any BLE state notify off-task
     gUI_obj.tickPair(millis());
 
     // Boot state machine — runs ONE step per loop iteration so LVGL
@@ -91,6 +97,19 @@ void loop() {
                 gUI_obj.setSearchingStatus("Connect failed — rescanning");
                 delay(800);
                 gBootState = BootState::Scan;
+                break;
+            }
+            // If we previously paired with THIS boombox (matching id), skip
+            // the PIN flow and go straight to Playing. Otherwise show pair.
+            PairedBoombox saved;
+            String bid, bname;
+            if (PairedBoomboxStore::load(saved)
+                && gBle->readDeviceInfo(bid, bname)
+                && bid.length() > 0 && bid == saved.id) {
+                Serial.printf("[loop] resumed pairing with %s\n", bname.c_str());
+                gPendingPair = saved;
+                gPendingPair.name = bname.length() ? bname : saved.name;
+                gBootState = BootState::Playing;
                 break;
             }
             Serial.println("[loop] connected; showing pair screen");
