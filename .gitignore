@@ -36,6 +36,9 @@ install/local/
 # Git worktrees (e.g. .worktrees/auto-update for in-progress feature branches)
 .worktrees/
 
+# Superpowers brainstorm session artifacts
+.superpowers/
+
 # Patches with paths that aren't useful in the repo tree
 *.rej
 *.orig
