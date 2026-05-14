@@ -183,9 +183,9 @@ class StateAggregator:
     """Reads upstream services and produces the consolidated payload.
 
     Phase 1: pulls from Mopidy (track + state + position) and boombox-state
-    (source, volume, mute, karaoke). In-memory bits (sleep_timer, recording,
-    skin) return None for now; they get wired in Phase 2 when there's a
-    real consumer.
+    (source, volume, mute, karaoke, theme). In-memory bits (sleep_timer,
+    recording) return None for now; they get wired in Phase 2 when there's
+    a real consumer.
     """
 
     def __init__(self, session: aiohttp_client_lib.ClientSession,

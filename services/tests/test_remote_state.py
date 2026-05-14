@@ -34,6 +34,7 @@ async def app_with_stub_upstream(tmp_path, monkeypatch):
                 "recording": False,
                 "mic_on": False,
                 "skin": "retro-blue",
+                "theme": {},
             }
 
     app = boombox_remote.create_app(aggregator=StubAggregator())
