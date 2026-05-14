@@ -23,6 +23,7 @@ __pycache__/
 venv/
 .env
 .env.local
+uv.lock
 
 # Local screenshots & dev artifacts
 screenshots/
