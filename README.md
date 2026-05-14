@@ -32,7 +32,7 @@ and keeps the kiosk pinned to its UI.
 | `services/` | Python services (state aggregator, audio visualizer, source orchestrator, GPIO buttons, resume snapshotter, BT volume bridge, kiosk guard) |
 | `ui/` | Vite + React + TypeScript SPA — the touchscreen front-end |
 | `skins/` | Designer source-of-truth: tokens, JSX mockups, font licenses |
-| `install/` | First-time installer, systemd units, config templates, self-update script |
+| `install/` | First-time installer, per-OS session bootstrap (`install/session/`), systemd units, config templates, self-update script |
 | `install/legacy/` | Earlier setup scripts kept for reference |
 | `bin/` | Helpers shipped onto the Pi (e.g. `boombox-update`) |
 | `docs/` | Design notes, PRD, conversation history |
@@ -54,6 +54,16 @@ and keeps the kiosk pinned to its UI.
 
 The installer is idempotent: re-running it picks up changes to configs,
 systemd units, and the UI build.
+
+### Installing on DietPi
+
+The installer also supports [DietPi](https://dietpi.com/) as a leaner base
+than Raspberry Pi OS. Flash DietPi Lite, complete its first-boot, then run
+`install/install.sh` the same way — it auto-detects the OS (`detect_os` in
+`install/session/detect-os.sh`) and, on DietPi, additionally installs the
+Wayland compositor, configures tty1 autologin, and sets up the kiosk
+session that Raspberry Pi OS provides out of the box. Override the
+autodetect with `BOOMBOX_OS=dietpi` or `BOOMBOX_OS=rpi-os` if needed.
 
 ## Updates
 
