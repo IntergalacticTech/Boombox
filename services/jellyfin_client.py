@@ -12,7 +12,7 @@ Jellyfin API reference used here:
   POST /Sessions/{id}/Playing/PreviousTrack
   POST /Sessions/{id}/Playing/Seek?seekPositionTicks=<100ns ticks>
   POST /Sessions/{id}/Command  body {"Name": "SetVolume", "Arguments": {...}}
-  POST /Sessions/{id}/Command  body {"Name": "Mute" | "Unmute"}
+  POST /Sessions/{id}/Command  body {"Name": "ToggleMute"}
 """
 from __future__ import annotations
 
