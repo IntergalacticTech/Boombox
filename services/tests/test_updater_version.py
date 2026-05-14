@@ -64,3 +64,17 @@ class TestCompareEdge:
     def test_short_vs_long_sha_match(self) -> None:
         # Edge installs always store the short sha; the API may return long.
         assert compare_edge(installed="abc1234", available="abc1234567890") is None
+
+    def test_long_installed_vs_short_available(self) -> None:
+        # Reverse of the existing short-vs-long test — exercises a.startswith(b).
+        assert compare_edge(installed="abc1234567890", available="abc1234") is None
+
+    def test_empty_operand_is_outdated(self) -> None:
+        # Defensive: a blank installed/available value should surface, not silently
+        # be treated as up-to-date.
+        assert compare_edge(installed="", available="abc1234") is not None
+        assert compare_edge(installed="abc1234", available="") is not None
+
+    def test_case_insensitive_match(self) -> None:
+        # Git shas are hex; comparison must not be case-sensitive.
+        assert compare_edge(installed="ABC1234", available="abc1234") is None

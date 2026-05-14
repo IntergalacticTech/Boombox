@@ -22,6 +22,9 @@ class UpdateAvailable:
     installed: str
 
 
+# "" is reachable when current/VERSION is missing/empty — keep it as a
+# definitely-outdated sentinel so the updater offers an install instead of
+# silently treating an unknown installed version as up-to-date.
 _SENTINELS_ALWAYS_OUTDATED = {"legacy", "unknown", ""}
 
 
