@@ -69,7 +69,8 @@ async def test_fire_handler_exception_returns_error():
 
 @pytest.mark.asyncio
 async def test_fire_passes_value_to_volume_handler():
-    """fire(d, 'volume', 70) calls StateApi.volume_set(70.0)."""
+    """fire(d, 'volume', 70) interprets 70 as a percent and forwards 0.7 to
+    StateApi.volume_set (which uses a 0..1.5 fraction). 100 → 1.0."""
     calls = []
 
     class StubState:
@@ -79,7 +80,7 @@ async def test_fire_passes_value_to_volume_handler():
     d = _make_dispatcher(state=StubState())
     result = await actions.fire(d, "volume", 70)
     assert result == {"ok": True}
-    assert calls == [70.0]
+    assert calls == [pytest.approx(0.7)]
 
 
 @pytest.mark.asyncio

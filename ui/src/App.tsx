@@ -9,6 +9,7 @@ import { LibraryDrawer } from "./lib/LibraryDrawer";
 import { SettingsDrawer } from "./lib/SettingsDrawer";
 import { NowPlayingBar } from "./lib/NowPlayingBar";
 import { VolumeGesture } from "./lib/VolumeGesture";
+import { OverlayRoot } from "./overlays/OverlayRoot";
 import { SKIN_BY_ID, SKINS, type ChromeApi } from "./lib/skinRegistry";
 import { getQueue } from "./lib/library";
 import type { SkinId, Track, PlayState } from "./lib/types";
@@ -124,6 +125,7 @@ function App() {
 
   return (
     <>
+      <OverlayRoot />
       <ScaleToFit width={1280} height={800}>
         <Audio
           track={trackForSkin}

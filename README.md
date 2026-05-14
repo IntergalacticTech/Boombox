@@ -16,12 +16,13 @@ and keeps the kiosk pinned to its UI.
         │                          │                         │
    Audio path                Control path                 UI / web
    ──────────                ────────────                 ────────
-   HiFiBerry I²S DAC         GPIO buttons                 nginx localhost:80
+   HiFiBerry I²S DAC         17 GPIO buttons + encoder    nginx localhost:80
    PipeWire mixer            touchscreen                  ├─ / (built SPA)
-   Mopidy + Iris             playerctl / MPRIS            ├─ /mopidy/* → 6680
-   shairport-sync (AirPlay)  AVRCP volume (BT)            ├─ /api/*    → 6681
-   raspotify (Spotify)       boombox-orchestrator         ├─ /audio/ws → 6682
-   bluez A2DP sink                                        └─ LAN :8090 requires auth
+   Mopidy + Iris             playerctl / MPRIS            ├─ /mopidy/*       → 6680
+   shairport-sync (AirPlay)  AVRCP volume (BT)            ├─ /api/*          → 6681
+   raspotify (Spotify)       boombox-orchestrator         ├─ /audio/ws       → 6682
+   bluez A2DP sink           kiosk overlay events         ├─ /api/buttons/*  → 6684
+                                                          └─ LAN :8090 requires auth
 ```
 
 ## Repo layout
@@ -101,7 +102,7 @@ folder will publish the latest site.
 | `boombox-state`       | 6681 | MPRIS aggregator: non-Mopidy sources at `/api/state`; also `/api/control`, `/api/volume`, `/api/info`, `/api/sinks`, `/api/karaoke`, `/api/lyrics`, `/api/art`, `/api/mopidy/restart` |
 | `boombox-audio`       | 6682 | PipeWire monitor → FFT/VU → WebSocket at `/audio/ws` |
 | `boombox-orchestrator`| —    | Watches PipeWire; pauses other sources when a new one starts |
-| `boombox-buttons`     | —    | GPIO falling-edge → Mopidy transport |
+| `boombox-buttons`     | 6684 | 17 GPIO buttons + rotary encoder; routes to Mopidy / state API / kiosk overlays; `/api/buttons/` config + learn + test |
 | `boombox-resume`      | —    | Snapshots Mopidy state, restores after reboot |
 | `boombox-bt-volume`   | —    | AVRCP absolute-volume → `bluez_input` node |
 | `boombox-kiosk-guard` | —    | DevTools-driven watchdog that keeps Chromium on `http://localhost/` |
@@ -114,11 +115,13 @@ system services.
 
 - **[ARCHITECTURE.md](./docs/ARCHITECTURE.md)** — one-screen picture of how everything fits together
 - **[SERVICES.md](./docs/SERVICES.md)** — per-service reference: what each daemon does and how to debug it
+- **[BUTTONS.md](./docs/BUTTONS.md)** — wire 17 panel buttons + an encoder, bind pins from the Settings panel, troubleshoot
 - **[SKINS.md](./docs/SKINS.md)** — end-to-end guide to creating a new touchscreen skin
 - **[ACCESS.md](./docs/ACCESS.md)** — authenticated LAN web access, remote/upload page, SMB share, and USB auto-mount
 - **[VIDEO.md](./docs/VIDEO.md)** — Jellyfin server: touchscreen Watch button, native apps, USB videos
 - **[ONBOARDING.md](./docs/ONBOARDING.md)** — first-time setup for a new developer (SSH access, `.env`, first dev loop)
 - **[DEVELOPMENT.md](./docs/DEVELOPMENT.md)** — dev workflow on a laptop, the `pi` helper, common tasks
+- **[CHANGELOG.md](./CHANGELOG.md)** — what shipped when, with links into the design docs
 
 ## Roadmap
 

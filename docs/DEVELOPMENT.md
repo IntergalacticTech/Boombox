@@ -70,12 +70,21 @@ When you're happy, push to the Pi:
 
 ```bash
 cd ui && npm run build
-../pi deploy ui/dist/ /var/www/boombox/
-../pi reload
+# /var/www/boombox is owned by www-data, so a plain `./pi deploy` rsync
+# fails. Stage to /tmp then sudo-rsync into place:
+../pi deploy ui/dist/ /tmp/boombox-dist/
+../pi ssh "sudo rsync -a --delete /tmp/boombox-dist/ /var/www/boombox/ && \
+          sudo chown -R www-data:www-data /var/www/boombox"
+../pi reload      # soft reload — usually enough
+# Hard reload (bypasses the SPA's service-worker cache):
+../pi restart-kiosk
+# Or, from inside DevTools at http://localhost:9222, call Page.reload
+# with {ignoreCache: true}.
 ```
 
-`boombox-update` on the Pi does the same thing if your change is committed
-and pushed.
+`boombox-update` on the Pi does both steps (rsync as root, restart kiosk)
+in one shot if your change is committed and pushed — prefer it for anything
+beyond a quick spot-check.
 
 ### Editing a Python service
 
@@ -226,6 +235,8 @@ curl 127.0.0.1:6682/health
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | `./pi reload` says "no devtools page found" | Kiosk Chromium isn't running, or wasn't launched with `--remote-debugging-port=9222` | `./pi restart-kiosk` |
+| `./pi reload` ran but the SPA still shows old code | `./pi reload` is a soft reload — the service worker can hand back cached JS. Run `location.reload(true)` from DevTools or `./pi restart-kiosk` to force-fetch. | DevTools or restart |
+| `./pi deploy ui/dist /var/www/boombox/` fails with `permission denied` | `/var/www/boombox` is `www-data`-owned; plain rsync over SSH runs as you. | Stage to `/tmp/boombox-dist/` then `./pi ssh "sudo rsync -a --delete /tmp/boombox-dist/ /var/www/boombox/ && sudo chown -R www-data:www-data /var/www/boombox"` |
 | `./pi shot` prints nothing | `grim` not installed, or you're not in the Wayland session | `./pi ssh "which grim"` |
 | Vite dev server loads but Mopidy is offline | `vite.config.ts` proxy points at the wrong IP | Update `target:` to your Pi |
 | `boombox-update` says "local changes present" | Someone edited a file directly on the Pi | `./pi ssh "cd /opt/boombox && git status"`, decide if you want to keep, then `boombox-update --force` |

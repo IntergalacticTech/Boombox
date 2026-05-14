@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -356,16 +357,32 @@ class Recorder:
         ts = datetime.now().strftime("%Y-%m-%d-%H%M%S")
         out = rec_dir / f"{ts}.flac"
         self._path = str(out)
-        # parec reads the default-sink monitor; flac encodes to FLAC stdout->file.
-        self._proc = await asyncio.create_subprocess_exec(
-            "parec", "--monitor-stream=@DEFAULT_AUDIO_SINK@",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        )
-        self._flac = await asyncio.create_subprocess_exec(
-            "flac", "--silent", "-", "-o", str(out),
-            stdin=self._proc.stdout, stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
+        # parec → flac via a real OS pipe. We can't use asyncio's PIPE here
+        # because asyncio gives back a StreamReader for parec.stdout and
+        # asyncio.create_subprocess_exec rejects non-fileno stdin.
+        # --monitor-stream takes an INDEX (not a sink name); use --device
+        # with @DEFAULT_MONITOR@ to read the default sink's monitor source.
+        # flac reading raw PCM from stdin needs explicit format flags.
+        read_fd, write_fd = os.pipe()
+        try:
+            self._proc = await asyncio.create_subprocess_exec(
+                "parec", "--device=@DEFAULT_MONITOR@",
+                "--format=s16le", "--rate=44100", "--channels=2",
+                stdout=write_fd, stderr=asyncio.subprocess.DEVNULL,
+            )
+            self._flac = await asyncio.create_subprocess_exec(
+                "flac", "--silent",
+                "--endian=little", "--sign=signed",
+                "--channels=2", "--bps=16", "--sample-rate=44100",
+                "-", "-o", str(out),
+                stdin=read_fd, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        finally:
+            # Each subprocess inherits its end; close our parent-side copies
+            # so EOF propagates correctly when parec exits.
+            os.close(write_fd)
+            os.close(read_fd)
         return self._path
 
     async def stop(self) -> str | None:
