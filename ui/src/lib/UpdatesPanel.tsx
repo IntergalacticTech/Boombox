@@ -31,7 +31,7 @@ export function UpdatesPanel() {
   const [err, setErr] = useState<string | null>(null);
 
   const refresh = async () => {
-    try { setStatus(await getStatus()); }
+    try { setStatus(await getStatus()); setErr(null); }
     catch (e) { setErr(String(e)); }
   };
 
@@ -43,8 +43,8 @@ export function UpdatesPanel() {
 
   if (!status) {
     return (
-      <div className="settings-section">
-        <h3>Updates</h3>
+      <div style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+        <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em", marginBottom: 10 }}>Updates</div>
         <div>Loading… {err && <span style={{ color: "tomato" }}>{err}</span>}</div>
       </div>
     );
@@ -55,14 +55,14 @@ export function UpdatesPanel() {
   const installing = status.state_machine !== "idle";
 
   const update = async (patch: Partial<typeof status>) => {
-    const next = { ...status, ...patch };
     try {
-      await saveConfig({
-        auto: next.auto, channel: next.channel,
-        window_start: next.window_start,
-        window_duration_min: next.window_duration_min,
+      const saved = await saveConfig({
+        auto: status.auto, channel: status.channel,
+        window_start: status.window_start,
+        window_duration_min: status.window_duration_min,
+        ...patch,
       });
-      setStatus(next);
+      setStatus({ ...status, ...saved });
     } catch (e) { setErr(String(e)); }
   };
 
@@ -74,8 +74,8 @@ export function UpdatesPanel() {
   };
 
   return (
-    <div className="settings-section">
-      <h3>Updates</h3>
+    <div style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+      <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em", marginBottom: 10 }}>Updates</div>
 
       <div>
         {upToDate
@@ -152,7 +152,9 @@ export function UpdatesPanel() {
             <div style={{ color: "tomato" }}>{status.last_attempt.error}</div>
           )}
           <button style={{ marginTop: 4 }}
-                  onClick={async () => setLogText(await fetchLog(500))}>
+                  onClick={() => wrap("log", async () => {
+                    setLogText(await fetchLog(500));
+                  })}>
             View log
           </button>
         </div>
