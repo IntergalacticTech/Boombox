@@ -36,6 +36,8 @@ async def test_command_403_when_disabled(disabled_app, aiohttp_client):
     resp = await client.post("/api/remote/command", json={"action": "next"},
                              headers={"Authorization": "Bearer t"})
     assert resp.status == 403
+    body = await resp.json()
+    assert body["error"] == "remote_disabled"
 
 
 @pytest.mark.asyncio
@@ -43,6 +45,10 @@ async def test_pair_403_when_disabled(disabled_app, aiohttp_client):
     client = await aiohttp_client(disabled_app)
     resp = await client.post("/api/remote/pair", json={"pin": "000000"})
     assert resp.status == 403
+    # /api/remote/pair also 403s on a bad PIN; assert on the error key so
+    # this proves the *gate* fired, not the bad-PIN path.
+    body = await resp.json()
+    assert body["error"] == "remote_disabled"
 
 
 @pytest.mark.asyncio
