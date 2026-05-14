@@ -5,7 +5,7 @@ After=default.target nginx.service
 [Service]
 Type=simple
 Environment=BOOMBOX_UPLOADER_PORT=6683
-ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-uploader.py
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-uploader.py
 # Clear the PIN file on stop so consumers can tell the service is down.
 ExecStopPost=/bin/sh -c 'rm -f "$XDG_RUNTIME_DIR/boombox-uploader.pin"'
 Restart=on-failure

@@ -8,7 +8,7 @@ Type=simple
 Environment=BOOMBOX_KIOSK_CDP=http://127.0.0.1:9222
 Environment=BOOMBOX_KIOSK_HOME=http://localhost/
 Environment=BOOMBOX_KIOSK_POLL=15
-ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-kiosk-guard.py
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-kiosk-guard.py
 Restart=on-failure
 RestartSec=3
 

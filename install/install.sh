@@ -34,6 +34,45 @@ BOOMBOX_GROUP="$(id -gn)"
 BOOMBOX_UID="$(id -u)"
 MUSIC_DIR="${BOOMBOX_MUSIC_DIR:-/home/${BOOMBOX_USER}/Music}"
 
+# ---------------------------------------------------------------------------
+# Layout helpers — releases/<ref>/, current symlink
+# ---------------------------------------------------------------------------
+RELEASES_DIR="$REPO_DIR/releases"
+CURRENT_LINK="$REPO_DIR/current"
+PREVIOUS_LINK="$REPO_DIR/previous"
+SHARED_VENV="$REPO_DIR/.venv"
+STATE_DIR="$REPO_DIR/state"
+
+# True when /opt/boombox is a flat git checkout (legacy layout).
+is_legacy_layout() {
+  [[ -d "$REPO_DIR/.git" ]] && [[ ! -L "$CURRENT_LINK" ]]
+}
+
+migrate_legacy_layout() {
+  log "migrating legacy /opt/boombox layout → releases/<sha>/ + current symlink"
+  local sha
+  sha="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
+  local target="$RELEASES_DIR/legacy-$sha"
+  mkdir -p "$RELEASES_DIR" "$STATE_DIR"
+  if [[ ! -d "$target" ]]; then
+    # Move the entire checkout (including .git) into releases/legacy-<sha>/.
+    # Skip the venv: it's about to live one level up.
+    mkdir "$target"
+    shopt -s dotglob nullglob
+    for entry in "$REPO_DIR"/*; do
+      base="$(basename "$entry")"
+      case "$base" in
+        .venv|releases|current|previous|state) continue ;;
+      esac
+      mv "$entry" "$target/"
+    done
+    shopt -u dotglob nullglob
+    printf 'legacy\n' >"$target/VERSION"
+  fi
+  ln -sfn "releases/legacy-$sha" "$CURRENT_LINK"
+  # No previous yet — first auto-update will populate it.
+}
+
 log()  { printf '\033[1;36m[install]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[install]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[install]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -65,14 +104,33 @@ sudo apt install -y \
 sudo pip install --break-system-packages Mopidy-Iris
 
 # ---------------------------------------------------------------------------
-# 2. Python venv for boombox-* services
+# 1.5. Layout migration (must run before anything else touches REPO_DIR)
 # ---------------------------------------------------------------------------
-log "creating /opt/boombox/.venv (--system-site-packages for dbus/gi)"
-if [[ ! -d "$REPO_DIR/.venv" ]]; then
-  python3 -m venv --system-site-packages "$REPO_DIR/.venv"
+if is_legacy_layout; then
+  migrate_legacy_layout
 fi
-"$REPO_DIR/.venv/bin/pip" install --upgrade pip
-"$REPO_DIR/.venv/bin/pip" install -r "$SCRIPT_DIR/config/requirements.txt"
+
+# Re-anchor SCRIPT_DIR / REPO_DIR to the migrated layout. SCRIPT_DIR no longer
+# refers to the actual checkout — install.sh was launched from inside the
+# legacy tree, but now lives at $CURRENT_LINK/install/install.sh after the
+# move. Re-exec ourselves from the new location once.
+ACTIVE_INSTALL="$CURRENT_LINK/install/install.sh"
+if [[ "$BASH_SOURCE" != "$ACTIVE_INSTALL" && -x "$ACTIVE_INSTALL" ]]; then
+  exec "$ACTIVE_INSTALL" "$@"
+fi
+
+ACTIVE_REPO="$CURRENT_LINK"
+ACTIVE_SCRIPT_DIR="$CURRENT_LINK/install"
+
+# ---------------------------------------------------------------------------
+# 2. Python venv for boombox-* services (shared across releases)
+# ---------------------------------------------------------------------------
+log "creating $SHARED_VENV (--system-site-packages for dbus/gi)"
+if [[ ! -d "$SHARED_VENV" ]]; then
+  python3 -m venv --system-site-packages "$SHARED_VENV"
+fi
+"$SHARED_VENV/bin/pip" install --upgrade pip
+"$SHARED_VENV/bin/pip" install -r "$ACTIVE_SCRIPT_DIR/config/requirements.txt"
 
 # ---------------------------------------------------------------------------
 # 3. Group memberships (gpio, audio, render, video, bluetooth, plugdev)
@@ -88,9 +146,9 @@ done
 # ---------------------------------------------------------------------------
 # 3b. Remove legacy pre-repo services that conflict with this codebase.
 # ---------------------------------------------------------------------------
-if [[ -x "$SCRIPT_DIR/legacy/remove-legacy-buttons.sh" ]]; then
+if [[ -x "$ACTIVE_SCRIPT_DIR/legacy/remove-legacy-buttons.sh" ]]; then
   log "removing legacy /usr/local/bin/boombox-* services (idempotent)"
-  "$SCRIPT_DIR/legacy/remove-legacy-buttons.sh"
+  "$ACTIVE_SCRIPT_DIR/legacy/remove-legacy-buttons.sh"
 fi
 
 # ---------------------------------------------------------------------------
@@ -101,7 +159,7 @@ if [[ ! -d "$BOOT_FW_DIR" ]]; then
   BOOT_FW_DIR=/boot
 fi
 log "installing DAC overlay → $BOOT_FW_DIR/usercfg.txt"
-sudo install -m 0644 "$SCRIPT_DIR/config/usercfg.txt" "$BOOT_FW_DIR/usercfg.txt"
+sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/usercfg.txt" "$BOOT_FW_DIR/usercfg.txt"
 
 # Make sure config.txt actually `include`s usercfg.txt under the [all] section.
 if [[ -f "$BOOT_FW_DIR/config.txt" ]] && ! sudo grep -qE '^\s*include\s+usercfg\.txt' "$BOOT_FW_DIR/config.txt"; then
@@ -113,7 +171,7 @@ fi
 # 5. ALSA default device
 # ---------------------------------------------------------------------------
 log "installing /etc/asound.conf"
-sudo install -m 0644 "$SCRIPT_DIR/config/asound.conf" /etc/asound.conf
+sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/asound.conf" /etc/asound.conf
 
 # ---------------------------------------------------------------------------
 # 6. Music dir + Mopidy config
@@ -212,42 +270,47 @@ fi
 
 log "running Jellyfin first-run automation"
 sudo BOOMBOX_VIDEO_DIR="$VIDEO_DIR" python3 \
-  "$REPO_DIR/services/boombox-jellyfin-setup.py" \
+  "$ACTIVE_REPO/services/boombox-jellyfin-setup.py" \
   || warn "Jellyfin auto-setup didn't finish cleanly (check /etc/boombox/jellyfin.env)"
 
 log "installing /etc/mopidy/mopidy.conf"
 sudo mkdir -p /etc/mopidy
-sudo install -m 0644 "$SCRIPT_DIR/config/mopidy.conf" /etc/mopidy/mopidy.conf
+sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/mopidy.conf" /etc/mopidy/mopidy.conf
 sudo sed -i "s|__MUSIC_DIR__|$MUSIC_DIR|g" /etc/mopidy/mopidy.conf
 
 # Apply the Trixie scan.py compatibility patch (idempotent).
 SCAN_PY=/usr/lib/python3/dist-packages/mopidy/audio/scan.py
 if [[ -f "$SCAN_PY" ]] && sudo grep -q 'msg.get_structure().get_value("caps").get_name()' "$SCAN_PY"; then
   log "patching mopidy scan.py (Trixie python3-gi compatibility)"
-  ( cd / && sudo patch -p0 < "$REPO_DIR/services/scan-py-fix.diff" ) || warn "scan.py patch failed (already applied?)"
+  ( cd / && sudo patch -p0 < "$ACTIVE_REPO/services/scan-py-fix.diff" ) || warn "scan.py patch failed (already applied?)"
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Build UI → /var/www/boombox
+# 7. Build UI in place — nginx serves directly out of current/ui/dist/
 # ---------------------------------------------------------------------------
-log "building UI"
+log "building UI in $ACTIVE_REPO/ui"
 (
-  cd "$REPO_DIR/ui"
+  cd "$ACTIVE_REPO/ui"
   npm install --no-audit --no-fund
   npm run build
 )
-sudo mkdir -p /var/www/boombox
-sudo rsync -a --delete "$REPO_DIR/ui/dist/" /var/www/boombox/
-sudo chown -R www-data:www-data /var/www/boombox
+# nginx user (www-data) must be able to read the built SPA.
+sudo chgrp -R www-data "$ACTIVE_REPO/ui/dist"
+sudo chmod -R g+rX "$ACTIVE_REPO/ui/dist"
+# Tear down the legacy doc root if it's still around.
+if [[ -d /var/www/boombox && ! -L /var/www/boombox ]]; then
+  log "removing legacy /var/www/boombox (nginx now serves from current/ui/dist)"
+  sudo rm -rf /var/www/boombox
+fi
 
 # ---------------------------------------------------------------------------
 # 8. nginx site
 # ---------------------------------------------------------------------------
 log "installing nginx site"
 sudo mkdir -p /etc/nginx/snippets
-sudo install -m 0644 "$SCRIPT_DIR/config/nginx-boombox-common.conf" /etc/nginx/snippets/boombox-common.conf
+sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/nginx-boombox-common.conf" /etc/nginx/snippets/boombox-common.conf
 TMP_NGINX="$(mktemp)"
-sed "s|__REMOTE_WEB_PORT__|$REMOTE_WEB_PORT|g" "$SCRIPT_DIR/config/nginx.conf" > "$TMP_NGINX"
+sed "s|__REMOTE_WEB_PORT__|$REMOTE_WEB_PORT|g" "$ACTIVE_SCRIPT_DIR/config/nginx.conf" > "$TMP_NGINX"
 sudo install -m 0644 "$TMP_NGINX" /etc/nginx/sites-available/boombox
 rm -f "$TMP_NGINX"
 sudo ln -sf /etc/nginx/sites-available/boombox /etc/nginx/sites-enabled/boombox
@@ -260,7 +323,7 @@ TMP_SMB="$(mktemp)"
 sed \
   -e "s|__MUSIC_DIR__|$MUSIC_DIR|g" \
   -e "s|__BOOMBOX_USER__|$BOOMBOX_USER|g" \
-  "$SCRIPT_DIR/config/smb.conf" > "$TMP_SMB"
+  "$ACTIVE_SCRIPT_DIR/config/smb.conf" > "$TMP_SMB"
 sudo install -m 0644 "$TMP_SMB" /etc/samba/smb.conf
 rm -f "$TMP_SMB"
 if sudo pdbedit -L -u "$BOOMBOX_USER" >/dev/null 2>&1; then
@@ -277,7 +340,7 @@ sudo systemctl enable --now smbd
 # ---------------------------------------------------------------------------
 log "installing user systemd units"
 mkdir -p "$HOME/.config/systemd/user"
-install -m 0644 "$SCRIPT_DIR/systemd/user/"*.service "$HOME/.config/systemd/user/"
+install -m 0644 "$ACTIVE_SCRIPT_DIR/systemd/user/"*.service "$HOME/.config/systemd/user/"
 
 # Sweep any legacy chromium-kiosk autostart entries — they predate the
 # boombox-kiosk.service and otherwise launch a second, unmanaged kiosk
@@ -303,6 +366,7 @@ USER_UNITS=(
   boombox-kiosk
   boombox-kiosk-guard
   boombox-osk
+  boombox-updater
 )
 for u in "${USER_UNITS[@]}"; do
   systemctl --user enable "$u.service"
@@ -313,9 +377,9 @@ done
 
 # System-side template + udev rule for USB auto-mount.
 log "installing USB auto-mount (system unit + udev rule)"
-sudo install -m 0644 "$SCRIPT_DIR/systemd/system/boombox-usb-mount@.service" \
+sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/systemd/system/boombox-usb-mount@.service" \
   /etc/systemd/system/boombox-usb-mount@.service
-sudo install -m 0644 "$SCRIPT_DIR/udev/99-boombox-usb.rules" \
+sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/udev/99-boombox-usb.rules" \
   /etc/udev/rules.d/99-boombox-usb.rules
 sudo systemctl daemon-reload
 sudo udevadm control --reload-rules
@@ -328,7 +392,7 @@ sudo chmod 0644 /etc/boombox/desktop-user
 # Sudoers fragment for library-scan / mopidy-restart from the touch UI.
 log "installing sudoers fragment for boombox"
 TMP_SUDOERS="$(mktemp)"
-sed "s/%BOOMBOX_USER%/$BOOMBOX_USER/g" "$SCRIPT_DIR/sudoers/boombox" > "$TMP_SUDOERS"
+sed "s/%BOOMBOX_USER%/$BOOMBOX_USER/g" "$ACTIVE_SCRIPT_DIR/sudoers/boombox" > "$TMP_SUDOERS"
 sudo install -m 0440 -o root -g root "$TMP_SUDOERS" /etc/sudoers.d/boombox
 sudo visudo -cf /etc/sudoers.d/boombox
 rm -f "$TMP_SUDOERS"
@@ -341,13 +405,13 @@ sudo loginctl enable-linger "$BOOMBOX_USER"
 # system-wide, so install lands them in ~/.config/labwc/.
 log "installing Chromium managed policy (suppresses save-password, autofill, etc.)"
 sudo mkdir -p /etc/chromium/policies/managed
-sudo install -m 0644 "$SCRIPT_DIR/config/chromium-policy.json" \
+sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/chromium-policy.json" \
   /etc/chromium/policies/managed/boombox.json
 
 log "installing labwc kiosk config"
 mkdir -p "$HOME/.config/labwc"
-install -m 0644 "$SCRIPT_DIR/config/labwc-rc.xml" "$HOME/.config/labwc/rc.xml"
-install -m 0644 "$SCRIPT_DIR/config/labwc-autostart" "$HOME/.config/labwc/autostart"
+install -m 0644 "$ACTIVE_SCRIPT_DIR/config/labwc-rc.xml" "$HOME/.config/labwc/rc.xml"
+install -m 0644 "$ACTIVE_SCRIPT_DIR/config/labwc-autostart" "$HOME/.config/labwc/autostart"
 
 # Pi OS's rpd-labwc session sources /etc/xdg/labwc/autostart explicitly
 # (not the labwc lookup path), so the user override above isn't enough
@@ -357,7 +421,7 @@ install -m 0644 "$SCRIPT_DIR/config/labwc-autostart" "$HOME/.config/labwc/autost
 if [[ -f /etc/xdg/labwc/autostart && ! -f /etc/xdg/labwc/autostart.pi-os.orig ]]; then
   sudo cp /etc/xdg/labwc/autostart /etc/xdg/labwc/autostart.pi-os.orig
 fi
-sudo install -m 0644 "$SCRIPT_DIR/config/labwc-autostart" /etc/xdg/labwc/autostart
+sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/labwc-autostart" /etc/xdg/labwc/autostart
 
 log "enabling system services"
 sudo systemctl enable mopidy
@@ -370,18 +434,18 @@ sudo systemctl enable smbd
 # ---------------------------------------------------------------------------
 sudo mkdir -p /etc/boombox
 if [[ ! -f /etc/boombox/buttons.json ]]; then
-  sudo install -m 0644 "$SCRIPT_DIR/config/buttons.json" /etc/boombox/buttons.json
+  sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/buttons.json" /etc/boombox/buttons.json
 elif ! sudo grep -q '"power"' /etc/boombox/buttons.json; then
   # Old 5-action schema detected; back up and replace with the full one.
   log "upgrading buttons.json schema (backup at /etc/boombox/buttons.json.pre-fullbuttons)"
   sudo cp /etc/boombox/buttons.json /etc/boombox/buttons.json.pre-fullbuttons
-  sudo install -m 0644 "$SCRIPT_DIR/config/buttons.json" /etc/boombox/buttons.json
+  sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/buttons.json" /etc/boombox/buttons.json
 fi
 
 # ---------------------------------------------------------------------------
 # 11. boombox-update on PATH
 # ---------------------------------------------------------------------------
-sudo install -m 0755 "$REPO_DIR/bin/boombox-update" /usr/local/bin/boombox-update
+sudo install -m 0755 "$ACTIVE_REPO/bin/boombox-update" /usr/local/bin/boombox-update
 
 # ---------------------------------------------------------------------------
 # 12. Try to start what we can right now (the rest comes up after reboot)

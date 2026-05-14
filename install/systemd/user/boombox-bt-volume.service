@@ -5,7 +5,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/services/boombox-bt-volume.py
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-bt-volume.py
 Restart=on-failure
 RestartSec=3
 

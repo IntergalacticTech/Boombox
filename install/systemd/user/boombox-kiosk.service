@@ -33,7 +33,7 @@ ExecStart=/usr/bin/chromium \
   --password-store=basic \
   --no-first-run \
   --no-default-browser-check \
-  --load-extension=/opt/boombox/install/kiosk-extension \
+  --load-extension=/opt/boombox/current/install/kiosk-extension \
   --user-data-dir=%h/.config/chromium
 Restart=on-failure
 RestartSec=3
