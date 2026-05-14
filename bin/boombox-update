@@ -4,7 +4,7 @@
 # or unreachable.
 set -euo pipefail
 
-API="http://127.0.0.1:6685/api/update"
+API="http://127.0.0.1:6686/api/update"
 ROOT="${BOOMBOX_ROOT:-/opt/boombox}"
 APPLY="$ROOT/current/install/apply-release.sh"
 

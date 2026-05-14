@@ -1,4 +1,4 @@
-// ui/src/lib/updaterApi.ts — typed client for /api/update/* (port 6685, fronted
+// ui/src/lib/updaterApi.ts — typed client for /api/update/* (port 6686, fronted
 // by nginx). Mirrors the config + status surface of boombox_updater.api.
 
 export type Channel = "stable" | "edge";

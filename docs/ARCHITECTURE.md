@@ -20,7 +20,7 @@ repo organises itself in your head.
           │            │  │ /api/         :6681 │  │     └────────────────────┘
    GPIO   │            │  │ /audio/ws     :6682 │  │
    buttons│            │  │ /api/buttons/ :6684 │  │
-          │            │  │ /api/update/  :6685 │  │
+          │            │  │ /api/update/  :6686 │  │
           │            │  └─────────────────────┘  │
           │            │  LAN :8090 → Basic auth   │
           │            └───────────────────────────┘
@@ -68,7 +68,7 @@ repo organises itself in your head.
 | `boombox-resume` | user | — | Snapshots Mopidy state, restores after reboot |
 | `boombox-bt-volume` | user | — | AVRCP absolute-volume → `bluez_input` node volume |
 | `boombox-kiosk-guard` | user | — | DevTools watchdog that keeps Chromium pinned to `http://localhost/` |
-| `boombox-updater` | user | 6685 | Polls GitHub Releases; runs scheduled A/B release installs with auto-rollback. See [Updates](#updates). |
+| `boombox-updater` | user | 6686 | Polls GitHub Releases; runs scheduled A/B release installs with auto-rollback. See [Updates](#updates). |
 | `boombox-uploader` | user | 6683 | Off by default. Toggled from the touchscreen; serves a PIN-gated remote/upload page at `/upload/`. See [ACCESS.md](./ACCESS.md). |
 | `boombox-usb-mount@<dev>` | system (template) | — | Triggered by udev. Mounts USB drives R/O under `/media/boombox/<id>` and symlinks them into the Mopidy library at `~/Music/.usb/<id>`. |
 
@@ -186,7 +186,7 @@ place on first run (the old tree becomes `releases/legacy-<sha>/`).
 
 ## Updates
 
-The `boombox-updater` user service (`:6685`) polls GitHub hourly and installs
+The `boombox-updater` user service (`:6686`) polls GitHub hourly and installs
 new releases A/B style. Two channels: `stable` (latest GitHub Release tag) and
 `edge` (`main` HEAD). When a newer version is available, a scheduler runs the
 install inside the configured nightly window (default 03:00–04:00) — unless
@@ -210,7 +210,7 @@ single atomic symlink move, the UI is never half-deployed. Channel, window, and
 the auto-on/off toggle live in `/etc/boombox/updater.json`; runtime state and
 per-attempt logs live under `/opt/boombox/state/`.
 
-`bin/boombox-update` is a thin client of the `:6685` HTTP API (`status`,
+`bin/boombox-update` is a thin client of the `:6686` HTTP API (`status`,
 `check`, `install [REF]`, `rollback`, `config`). If the service is unreachable
 or disabled it falls back to running `apply-release.sh` directly
 (fetch→build→preflight→swap→restart→verify) — note that fallback path has **no

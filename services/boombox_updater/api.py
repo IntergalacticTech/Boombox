@@ -1,5 +1,5 @@
 # services/boombox_updater/api.py
-"""HTTP surface for boombox-updater (mounted at :6685, proxied via nginx)."""
+"""HTTP surface for boombox-updater (mounted at :6686, proxied via nginx)."""
 from __future__ import annotations
 
 from dataclasses import asdict

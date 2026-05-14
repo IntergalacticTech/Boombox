@@ -3,7 +3,7 @@
 """boombox-updater service entry point.
 
 Wires together: GitHub poller, scheduler decision, install state machine
-backed by install/apply-release.sh, and the HTTP API on port 6685.
+backed by install/apply-release.sh, and the HTTP API on port 6686.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ log = logging.getLogger("boombox-updater")
 REPO_ROOT = Path(os.environ.get("BOOMBOX_ROOT", "/opt/boombox"))
 APPLY = REPO_ROOT / "current" / "install" / "apply-release.sh"
 GITHUB_REPO = os.environ.get("BOOMBOX_REPO", "IntergalacticTech/Boombox")
-PORT = int(os.environ.get("BOOMBOX_UPDATER_PORT", "6685"))
+PORT = int(os.environ.get("BOOMBOX_UPDATER_PORT", "6686"))
 POLL_INTERVAL_S = int(os.environ.get("BOOMBOX_UPDATER_POLL_S", str(60 * 60)))
 PLAYBACK_URL = "http://127.0.0.1/api/state"
 

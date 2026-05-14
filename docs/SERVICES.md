@@ -178,7 +178,7 @@ The SPA's overlay components listen on `window.addEventListener('boombox:<event>
 
 ### `boombox-updater` — GitHub release poller + scheduled A/B installer
 
-**Listens on `127.0.0.1:6685`, proxied as `/api/update/` by nginx.**
+**Listens on `127.0.0.1:6686`, proxied as `/api/update/` by nginx.**
 
 Polls GitHub for new releases hourly (and once on boot): the latest
 published release on the `stable` channel, or `main` HEAD on `edge`. A
