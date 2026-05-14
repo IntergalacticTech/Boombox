@@ -405,12 +405,21 @@ async def _get_art(request: web.Request) -> web.Response:
     )
 
 
+def _is_localhost(request: web.Request) -> bool:
+    # nginx proxies /api/remote/ from 127.0.0.1:6685, so request.remote is
+    # always loopback. The :6685 socket is loopback-bound, so the only way
+    # in is via nginx — and nginx overwrites X-Real-IP with $remote_addr,
+    # making it the trustworthy peer identity. Fall back to request.remote
+    # for direct-loopback callers on the Pi (no proxy, no header).
+    peer = request.headers.get("X-Real-IP") or request.remote
+    return peer in ("127.0.0.1", "::1", "localhost")
+
+
 async def _post_pair_start(request: web.Request) -> web.Response:
     """Mint a fresh 6-digit PIN. Localhost-only (kiosk on the Pi)."""
     # Localhost-only — the kiosk runs on the Pi and is the only legit caller.
-    peer_ip = request.remote
-    if peer_ip not in ("127.0.0.1", "::1", "localhost"):
-        log.warning("/pair/start from non-localhost: %s", peer_ip)
+    if not _is_localhost(request):
+        log.warning("/pair/start from non-localhost: %s", request.remote)
         return web.json_response(
             {"ok": False, "error": "forbidden"}, status=403)
 
@@ -423,10 +432,6 @@ async def _post_pair_start(request: web.Request) -> web.Response:
         "pin": pin,
         "expires_at": _PAIR_STATE["expires_at"],
     })
-
-
-def _is_localhost(request: web.Request) -> bool:
-    return request.remote in ("127.0.0.1", "::1", "localhost")
 
 
 async def _get_admin_status(request: web.Request) -> web.Response:

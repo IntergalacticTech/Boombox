@@ -59,3 +59,26 @@ async def test_unpair_removes_one_peer(admin_app, aiohttp_client):
                              json={"token": "tok-a"})
     assert resp.status == 200
     assert json.loads(peers.read_text()) == {}
+
+
+@pytest.mark.asyncio
+async def test_admin_rejects_non_localhost_caller(admin_app, aiohttp_client):
+    # nginx proxies LAN clients from 127.0.0.1:6685 but sets X-Real-IP to
+    # the real peer address — so a LAN IP in that header must be rejected.
+    app, _, _ = admin_app
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/remote/admin/enable",
+                             headers={"X-Real-IP": "192.168.1.50"})
+    assert resp.status == 403
+    assert (await resp.json())["error"] == "forbidden"
+
+
+@pytest.mark.asyncio
+async def test_admin_allows_loopback_x_real_ip(admin_app, aiohttp_client):
+    # The kiosk on the Pi reaches the API through nginx too; nginx stamps
+    # X-Real-IP as 127.0.0.1 for it, which must still be allowed.
+    app, _, _ = admin_app
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/remote/admin/enable",
+                             headers={"X-Real-IP": "127.0.0.1"})
+    assert resp.status != 403
