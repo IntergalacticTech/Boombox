@@ -249,9 +249,9 @@ async def _h_movies(d: Dispatcher):
 
 @_handler("web", "short_press")
 async def _h_web(d: Dispatcher):
-    """Toggle the LAN web access state + show a QR overlay. The SPA owns
-    the toggle bookkeeping; we just emit and let it call /upload/enable
-    or /upload/disable."""
+    """Show the LAN web-access QR overlay. We just emit the `web-qr` kiosk
+    event; the SPA owns everything after that (rendering the overlay and
+    surfacing the remote URL)."""
     if d.kiosk:
         await d.kiosk.emit("web-qr", {})
 
