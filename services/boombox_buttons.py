@@ -2,7 +2,8 @@
 
 The shipped service is `boombox-buttons.py` (hyphenated to match systemd
 unit naming). Python imports don't allow hyphens, so this shim loads the
-real file by path and re-exports its public names.
+real file by path and re-exports its public names -- including names that
+were extracted into the sibling modules `actions` and `clients`.
 """
 from __future__ import annotations
 
@@ -16,11 +17,15 @@ _mod = importlib.util.module_from_spec(_spec)
 sys.modules["boombox_buttons_impl"] = _mod
 _spec.loader.exec_module(_mod)
 
-# Re-export everything the tests touch.
+# Config + input-processing helpers still live in boombox-buttons.py.
 default_config = _mod.default_config
 load_config = _mod.load_config
 enabled_pins = _mod.enabled_pins
 pin_conflicts = _mod.pin_conflicts
 PressClassifier = _mod.PressClassifier
 EncoderDecoder = _mod.EncoderDecoder
-Dispatcher = _mod.Dispatcher
+
+# Dispatcher now lives in actions.py -- source it from there directly.
+import actions  # noqa: E402
+
+Dispatcher = actions.Dispatcher

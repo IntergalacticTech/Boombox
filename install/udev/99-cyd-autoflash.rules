@@ -1,0 +1,12 @@
+# /etc/udev/rules.d/99-cyd-autoflash.rules — auto-flash CYD remotes on plug.
+#
+# CYD 2.8" boards (the wireless-remote profile) use the CH340 USB-to-serial
+# bridge (VID 1a86, PID 7523). On any 'add' event for a CH340-backed tty,
+# hand the device to a per-tty systemd template service that runs the
+# cyd-autoflash script (which verifies the on-flash image and rewrites only
+# if it differs from /opt/boombox/firmware/cyd/firmware.bin).
+#
+# pi-flash keeps that staged image in sync with each Mac-side build, so any
+# new CYD plugged into the Pi picks up the current firmware automatically.
+
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", TAG+="systemd", ENV{SYSTEMD_WANTS}+="cyd-autoflash@$kernel.service"

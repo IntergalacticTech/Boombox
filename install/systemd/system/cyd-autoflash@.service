@@ -1,0 +1,10 @@
+[Unit]
+Description=CYD auto-flash on plug-in (%i)
+After=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cyd-autoflash /dev/%i
+TimeoutStartSec=180
+StandardOutput=append:/var/log/cyd-autoflash.log
+StandardError=append:/var/log/cyd-autoflash.log

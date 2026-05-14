@@ -4,8 +4,9 @@
 // Designed to fit on the 5″ screen without scrolling: each section is a
 // compact row, ~60 px tall. New sections should preserve that height budget.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ButtonsPanel } from "./ButtonsPanel";
+import { PairOverlay } from "./PairOverlay";
 import { UpdatesPanel } from "./UpdatesPanel";
 import { setSleepMinutes, useSleepTimer } from "./sleepTimer";
 
@@ -68,6 +69,13 @@ export function SettingsDrawer({ onClose }: Props) {
   const [usb, setUsb] = useState<UsbList | null>(null);
   const [usbBusy, setUsbBusy] = useState<string | null>(null);   // `${id}:${direction}` while a copy runs
   const [usbResult, setUsbResult] = useState<string | null>(null);
+  const [showPair, setShowPair] = useState(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const nudge = (dir: 1 | -1) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollBy({ top: dir * Math.max(160, el.clientHeight * 0.7), behavior: "smooth" });
+  };
   const sleepRemaining = useSleepTimer();
 
   const refreshKaraoke = async () => {
@@ -210,6 +218,8 @@ export function SettingsDrawer({ onClose }: Props) {
   };
 
   return (
+    <>
+    {showPair && <PairOverlay onClose={() => setShowPair(false)} />}
     <div
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
@@ -236,7 +246,37 @@ export function SettingsDrawer({ onClose }: Props) {
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        position: "relative",
       }}>
+        {/* Floating touch-friendly scroll nudge buttons. Resistive
+          * touchscreens are bad at finger-swipe; these give a
+          * big, certain tap target. Top/bottom of right edge. */}
+        <button
+          onClick={() => nudge(-1)}
+          aria-label="Scroll up"
+          style={{
+            position: "absolute", top: 80, right: 36,
+            width: 56, height: 56, borderRadius: "50%",
+            background: "rgba(79,195,247,0.85)",
+            color: "#000", border: 0,
+            fontSize: 28, fontWeight: 700, lineHeight: 1,
+            cursor: "pointer", zIndex: 5,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+          }}
+        >↑</button>
+        <button
+          onClick={() => nudge(1)}
+          aria-label="Scroll down"
+          style={{
+            position: "absolute", bottom: 240, right: 36,
+            width: 56, height: 56, borderRadius: "50%",
+            background: "rgba(79,195,247,0.85)",
+            color: "#000", border: 0,
+            fontSize: 28, fontWeight: 700, lineHeight: 1,
+            cursor: "pointer", zIndex: 5,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+          }}
+        >↓</button>
         <div style={{
           padding: "12px 16px",
           borderBottom: "1px solid rgba(255,255,255,0.10)",
@@ -264,15 +304,23 @@ export function SettingsDrawer({ onClose }: Props) {
           }}>Close</button>
         </div>
 
-        <div style={{
-          flex: 1,
-          overflowY: "auto",
-          overflowX: "hidden",
-          overscrollBehavior: "contain",
-          touchAction: "pan-y",
-          WebkitOverflowScrolling: "touch",
-          padding: "8px 0",
-        }}>
+        <div
+          ref={scrollRef}
+          className="settings-scroll"
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            overflowX: "hidden",
+            overscrollBehavior: "contain",
+            touchAction: "pan-y",
+            WebkitOverflowScrolling: "touch",
+            padding: "8px 0",
+            // Bottom padding clears the floating NowPlayingBar (~180px tall
+            // including volume strip + position bar + breathing room).
+            paddingBottom: 220,
+            position: "relative",
+          }}
+        >
           {/* Movies — swap the kiosk to Jellyfin */}
           <div style={{
             padding: "14px 16px",
@@ -551,6 +599,17 @@ export function SettingsDrawer({ onClose }: Props) {
           {/* Physical buttons — GPIO pin map + learn/test */}
           <ButtonsPanel />
 
+          {/* Wireless remote pairing — issues a one-time PIN */}
+          <SettingRow
+            title="Pair wireless remote"
+            subtitle="Generate a one-time PIN for a CYD or other ESP32 remote"
+            action={
+              <button onClick={() => setShowPair(true)} style={primaryButton("#4fc3f7")}>
+                Pair…
+              </button>
+            }
+          />
+
           {/* Software updates — channel, window, install, rollback */}
           <UpdatesPanel />
 
@@ -612,6 +671,7 @@ export function SettingsDrawer({ onClose }: Props) {
         </div>
       </div>
     </div>
+    </>
   );
 }
 

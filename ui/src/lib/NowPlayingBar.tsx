@@ -12,7 +12,9 @@ import { AlbumThumb } from "./AlbumThumb";
 import { LyricsDrawer } from "./LyricsDrawer";
 import { toggleFavorite, useFavorites } from "./favorites";
 
-export function NowPlayingBar() {
+type Props = { onDismiss?: () => void };
+
+export function NowPlayingBar({ onDismiss }: Props = {}) {
   const m = useMopidy();
   const ext = useActiveSource(2000);
   const elapsed = useElapsed(m.state, m.positionMs, m.positionAtMs);
@@ -99,6 +101,20 @@ export function NowPlayingBar() {
             {playing ? "❚❚" : "▶"}
           </TransportBtn>
           <TransportBtn onClick={onNext} ariaLabel="Next">››</TransportBtn>
+          {onDismiss && (
+            <button
+              onClick={onDismiss}
+              aria-label="Hide player"
+              style={{
+                width: 32, height: 32, marginLeft: 4,
+                background: "transparent", border: 0, color: "rgba(255,255,255,0.55)",
+                fontSize: 18, lineHeight: 1, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}
+            >
+              ✕
+            </button>
+          )}
         </div>
       </div>
       {/* Volume strip — visible slider so the user doesn't have to discover

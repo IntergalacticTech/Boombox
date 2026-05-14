@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# pi-flash — build the firmware locally with PlatformIO, ship the .bin to
+# the boombox Pi, and flash it onto a CYD plugged into the Pi's USB port.
+#
+# Replaces the "install PlatformIO + driver dance on the Mac" path with
+# a Pi-side flash. Linux ships the CH340 driver in-kernel so no host setup
+# is required beyond `pip install esptool` on the Pi (one-time).
+#
+# Usage:
+#   ./pi-flash                          # build + flash (app only)
+#   ./pi-flash --all                    # also flash bootloader + partitions
+#   ./pi-flash --no-build               # skip build, flash whatever's in .pio
+#   ./pi-flash --monitor                # flash, then tail serial
+#
+# Env overrides:
+#   PI_HOST=jwc@192.168.1.176           # ssh target (default reads ~/.ssh/config 'boombox')
+#   PI_TTY=/dev/ttyUSB0                 # CYD serial device on the Pi
+#   PI_ESPTOOL=/opt/boombox/.venv/bin/esptool
+#   ENV_NAME=cyd-2432s028r              # PlatformIO env
+
+set -euo pipefail
+
+PI_HOST="${PI_HOST:-boombox}"
+PI_TTY="${PI_TTY:-/dev/ttyUSB0}"
+PI_ESPTOOL="${PI_ESPTOOL:-/opt/boombox/.venv/bin/esptool}"
+ENV_NAME="${ENV_NAME:-cyd-2432s028r}"
+REMOTE_DIR="${REMOTE_DIR:-/tmp/cyd-firmware}"
+# Stable on-Pi staging path that the udev-triggered cyd-autoflash service
+# reads on any new CYD plug-in. Always kept in sync with the latest build.
+PI_FW_STAGE="${PI_FW_STAGE:-/opt/boombox/firmware/cyd}"
+
+BUILD=1
+FLASH_ALL=0
+MONITOR=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-build) BUILD=0 ;;
+    --all)      FLASH_ALL=1 ;;
+    --monitor)  MONITOR=1 ;;
+    -h|--help)
+      sed -n '1,/^$/p' "$0" | sed -e 's/^# //; s/^#$//'
+      exit 0
+      ;;
+    *) echo "unknown arg: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+
+cd "$(dirname "$0")"
+
+if [[ $BUILD -eq 1 ]]; then
+  echo "[pi-flash] building $ENV_NAME…"
+  pio run -e "$ENV_NAME"
+fi
+
+BUILD_DIR=".pio/build/$ENV_NAME"
+for f in firmware.bin; do
+  test -f "$BUILD_DIR/$f" || { echo "missing $BUILD_DIR/$f — build first"; exit 1; }
+done
+
+ssh "$PI_HOST" "mkdir -p $REMOTE_DIR"
+
+if [[ $FLASH_ALL -eq 1 ]]; then
+  echo "[pi-flash] rsync bootloader + partitions + firmware…"
+  rsync -az "$BUILD_DIR/bootloader.bin" "$BUILD_DIR/partitions.bin" \
+            "$BUILD_DIR/firmware.bin"   "$PI_HOST:$REMOTE_DIR/"
+  echo "[pi-flash] flashing all three…"
+  ssh "$PI_HOST" "cd $REMOTE_DIR && $PI_ESPTOOL --chip esp32 --port $PI_TTY --baud 460800 write-flash --flash-mode dio --flash-size detect --flash-freq 40m 0x1000 bootloader.bin 0x8000 partitions.bin 0x10000 firmware.bin"
+else
+  echo "[pi-flash] rsync firmware.bin…"
+  rsync -az "$BUILD_DIR/firmware.bin" "$PI_HOST:$REMOTE_DIR/"
+  echo "[pi-flash] flashing app at 0x10000…"
+  ssh "$PI_HOST" "cd $REMOTE_DIR && $PI_ESPTOOL --chip esp32 --port $PI_TTY --baud 460800 write-flash 0x10000 firmware.bin"
+fi
+
+echo "[pi-flash] done."
+
+# Publish the latest image to the stable staging path so the udev-triggered
+# autoflash picks it up on the next plug-in of any CYD.
+echo "[pi-flash] staging firmware at $PI_HOST:$PI_FW_STAGE/"
+ssh "$PI_HOST" "sudo install -d -o root -g root -m 755 $PI_FW_STAGE"
+rsync -az --rsync-path="sudo rsync" "$BUILD_DIR/firmware.bin" \
+    "$PI_HOST:$PI_FW_STAGE/firmware.bin"
+if [[ $FLASH_ALL -eq 1 ]]; then
+    rsync -az --rsync-path="sudo rsync" \
+        "$BUILD_DIR/bootloader.bin" "$BUILD_DIR/partitions.bin" \
+        "$PI_HOST:$PI_FW_STAGE/"
+fi
+
+if [[ $MONITOR -eq 1 ]]; then
+  echo "[pi-flash] tailing serial (Ctrl-C to exit)…"
+  ssh -t "$PI_HOST" "$PI_ESPTOOL --port $PI_TTY --baud 115200 monitor 2>/dev/null || (stty -F $PI_TTY 115200 raw -echo && cat $PI_TTY)"
+fi
