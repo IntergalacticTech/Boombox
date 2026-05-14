@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 
+import aiohttp
 import pytest
 
 
@@ -68,3 +69,45 @@ async def test_delete_removes_file(files_app, aiohttp_client):
                              headers={"Authorization": "Bearer t"})
     assert resp.status == 200
     assert not (music / "Album" / "track.mp3").exists()
+
+
+@pytest.mark.asyncio
+async def test_upload_audio_file(files_app, aiohttp_client):
+    app, music = files_app
+    client = await aiohttp_client(app)
+    data = aiohttp.FormData()
+    data.add_field("file", b"fake-audio-bytes", filename="song.mp3",
+                   content_type="audio/mpeg")
+    resp = await client.post("/api/remote/files/upload", data=data,
+                             headers={"Authorization": "Bearer t"})
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["saved"] == ["uploads/song.mp3"]
+    assert (music / "uploads" / "song.mp3").read_bytes() == b"fake-audio-bytes"
+
+
+@pytest.mark.asyncio
+async def test_upload_rejects_unsupported_type(files_app, aiohttp_client):
+    app, _ = files_app
+    client = await aiohttp_client(app)
+    data = aiohttp.FormData()
+    data.add_field("file", b"not media", filename="notes.txt",
+                   content_type="text/plain")
+    resp = await client.post("/api/remote/files/upload", data=data,
+                             headers={"Authorization": "Bearer t"})
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_upload_accepts_file_over_1mib(files_app, aiohttp_client):
+    # Regression guard: aiohttp's default client_max_size is 1 MiB; without
+    # the explicit client_max_size on the app, a real media file 413s.
+    app, music = files_app
+    client = await aiohttp_client(app)
+    big = b"\0" * (1024 * 1024 + 512 * 1024)  # 1.5 MiB
+    data = aiohttp.FormData()
+    data.add_field("file", big, filename="big.mp3", content_type="audio/mpeg")
+    resp = await client.post("/api/remote/files/upload", data=data,
+                             headers={"Authorization": "Bearer t"})
+    assert resp.status == 200
+    assert (music / "uploads" / "big.mp3").stat().st_size == len(big)

@@ -250,6 +250,7 @@ def create_app(aggregator: "StateAggregator | None" = None,
     When either is None, the corresponding endpoint returns 503.
     """
     app = web.Application(
+        client_max_size=remote_files.MAX_FILE_BYTES + 1024,
         middlewares=[require_remote_enabled, require_auth])
     app["aggregator"] = aggregator
     app["dispatcher"] = dispatcher
