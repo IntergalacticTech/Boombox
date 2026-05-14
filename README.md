@@ -122,8 +122,9 @@ folder will publish the latest site.
 | `boombox-resume`      | —    | Snapshots Mopidy state, restores after reboot |
 | `boombox-bt-volume`   | —    | AVRCP absolute-volume → `bluez_input` node |
 | `boombox-kiosk-guard` | —    | DevTools-driven watchdog that keeps Chromium on `http://localhost/` |
+| `boombox-updater`     | 6685 | GitHub release poller + scheduled A/B installer; `/api/update/*` config, status, install, rollback |
 
-All seven `boombox-*` services run as **user** systemd units (they need the
+All eight `boombox-*` services run as **user** systemd units (they need the
 desktop session's PipeWire / Wayland / BlueZ). `nginx` and `mopidy` are
 system services.
 
