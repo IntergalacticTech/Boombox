@@ -33,6 +33,9 @@ screenshots/
 install/local/
 *.local
 
+# Git worktrees (e.g. .worktrees/auto-update for in-progress feature branches)
+.worktrees/
+
 # Patches with paths that aren't useful in the repo tree
 *.rej
 *.orig
