@@ -66,3 +66,20 @@ export function useRemote(): RemoteContextValue {
   }
   return ctx;
 }
+
+/** Test/Storybook helper: provide a fixed RemoteState + command spy without
+ *  a real transport. Not used in production. */
+export function RemoteContextHarness(
+  { state, command, status = "connected", children }: {
+    state: RemoteState | null;
+    command: (action: string, value?: unknown) => Promise<CommandResult>;
+    status?: ConnectionStatus;
+    children: ReactNode;
+  },
+) {
+  return (
+    <RemoteContext.Provider value={{ state, status, command }}>
+      {children}
+    </RemoteContext.Provider>
+  );
+}
