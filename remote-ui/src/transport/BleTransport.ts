@@ -33,7 +33,11 @@ export class BleTransport implements Transport {
   }
 
   async connect(): Promise<void> {
-    await this.stateChar.startNotifications();
+    // Register the listener BEFORE enabling notifications. The boombox's BLE
+    // peripheral pushes current state immediately when a subscriber appears
+    // (see services/ble_peripheral.py _push_state_loop); without the listener
+    // already in place, that first push fires into a void and the PWA sits in
+    // "connecting" until the next state change. Standard Web Bluetooth pattern.
     this.stateChar.addEventListener("characteristicvaluechanged", (e) => {
       const dv = (e.target as { value?: DataView }).value;
       if (!dv) return;
@@ -46,6 +50,7 @@ export class BleTransport implements Transport {
         /* ignore malformed notify */
       }
     });
+    await this.stateChar.startNotifications();
     this.emitStatus("connected");
   }
 
