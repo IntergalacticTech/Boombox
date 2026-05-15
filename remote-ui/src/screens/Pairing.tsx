@@ -21,6 +21,7 @@ export function Pairing({ onPaired }: { onPaired: (p: PairingData) => void }) {
   const normalizeBase = (h: string): string => {
     const trimmed = h.trim().replace(/\/$/, "");
     if (/^https?:\/\//.test(trimmed)) return trimmed;
+    if (/:\d+$/.test(trimmed)) return `http://${trimmed}`;
     return `http://${trimmed}:8090`;
   };
 

@@ -30,6 +30,28 @@ describe("Pairing screen", () => {
     });
   });
 
+  it("normalizeBase preserves an already-ported host (no double :8090)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true, auth_token: "tok42", boombox_name: "Loft",
+      }),
+    }));
+    const onPaired = vi.fn();
+    render(<Pairing onPaired={onPaired} />);
+    fireEvent.change(screen.getByLabelText(/boombox address/i),
+                     { target: { value: "192.168.1.9:9090" } });
+    fireEvent.change(screen.getByLabelText(/pin/i),
+                     { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: /pair/i }));
+    await waitFor(() => expect(onPaired).toHaveBeenCalled());
+    expect(onPaired).toHaveBeenCalledWith({
+      base: "http://192.168.1.9:9090",
+      token: "tok42",
+      name: "Loft",
+    });
+  });
+
   it("shows an error message when the PIN is rejected", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: false, status: 403,
