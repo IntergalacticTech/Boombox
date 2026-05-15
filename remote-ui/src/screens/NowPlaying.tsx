@@ -7,6 +7,14 @@ function mmss(sec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  mopidy: "Library",
+  airplay: "AirPlay",
+  spotify: "Spotify",
+  bluetooth: "Bluetooth",
+  movies: "Movies",
+};
+
 /** The core remote: album art, current track, transport controls, volume. */
 export function NowPlaying() {
   const { state, command } = useRemote();
@@ -17,12 +25,43 @@ export function NowPlaying() {
   // Clear the optimistic override whenever a fresh state push arrives.
   useEffect(() => { setPendingVolume(null); }, [liveVolume]);
   const volume = pendingVolume ?? liveVolume;
+  const sources = state?.sources_available ?? [];
+  const activeSource = state?.source ?? null;
 
   return (
     <div style={{
-      display: "flex", flexDirection: "column", gap: 24,
-      padding: 24, maxWidth: 520, margin: "0 auto", alignItems: "center",
+      display: "flex", flexDirection: "column", gap: 20,
+      padding: 24, paddingBottom: 96, maxWidth: 520, margin: "0 auto",
+      alignItems: "center",
     }}>
+      {sources.length > 0 && (
+        <div role="group" aria-label="Source"
+             style={{
+               display: "flex", gap: 6, flexWrap: "wrap",
+               justifyContent: "center", width: "100%",
+             }}>
+          {sources.map((s) => {
+            const active = s === activeSource;
+            return (
+              <button
+                key={s} type="button"
+                aria-pressed={active}
+                onClick={() => command("source", s)}
+                style={{
+                  padding: "6px 12px", borderRadius: 999, fontSize: 12,
+                  border: "1px solid var(--rule)",
+                  background: active ? "var(--accent)" : "var(--panel)",
+                  color: active ? "var(--bg)" : "var(--ink2)",
+                  cursor: "pointer",
+                }}
+              >
+                {SOURCE_LABELS[s] ?? s}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div style={{
         width: "min(70vw, 320px)", aspectRatio: "1",
         borderRadius: 16, background: "var(--panel)",
