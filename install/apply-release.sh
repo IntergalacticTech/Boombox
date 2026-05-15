@@ -166,10 +166,22 @@ for mod in ('boombox_updater', 'boombox_buttons'):
       sleep 1
     done
     (( ok == 1 )) || fail "user services did not all become active"
-    curl -fsS --max-time 5 http://localhost/            >/dev/null || fail "nginx /"
-    curl -fsS --max-time 5 http://localhost/remote/     >/dev/null || fail "/remote/"
-    curl -fsS --max-time 5 http://localhost/api/state   >/dev/null || fail "/api/state"
-    curl -fsS --max-time 5 http://localhost/api/buttons/ >/dev/null || fail "/api/buttons/"
+    # is-active fires the moment systemd-exec hands off to the Python entry
+    # point — the aiohttp server takes another second or two to bind its
+    # port. Retry each probe up to 10s instead of failing on the first 502.
+    probe() {
+      local url="$1" name="$2" tries=0
+      while (( tries < 10 )); do
+        if curl -fsS --max-time 5 "$url" >/dev/null 2>&1; then return 0; fi
+        tries=$((tries + 1))
+        sleep 1
+      done
+      fail "$name"
+    }
+    probe http://localhost/            "nginx /"
+    probe http://localhost/remote/     "/remote/"
+    probe http://localhost/api/state   "/api/state"
+    probe http://localhost/api/buttons/ "/api/buttons/"
     ;;
 
   revert)

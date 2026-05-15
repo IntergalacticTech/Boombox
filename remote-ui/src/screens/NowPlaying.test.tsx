@@ -100,6 +100,39 @@ describe("NowPlaying", () => {
     expect(command).toHaveBeenCalledWith("shuffle");
   });
 
+  it("renders one chip per source with the active one toggled", () => {
+    const withSources: RemoteState = {
+      ...playing, source: "airplay",
+      sources_available: ["mopidy", "airplay", "spotify"],
+    };
+    render(
+      <RemoteContextHarness state={withSources} command={vi.fn()}>
+        <NowPlaying />
+      </RemoteContextHarness>,
+    );
+    const airplay = screen.getByRole("button", { name: /AirPlay/ });
+    expect(airplay.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen.getByRole("button", { name: /Library/ })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
+  it("clicking a source chip fires command('source', name)", () => {
+    const command = vi.fn().mockResolvedValue({ ok: true });
+    const withSources: RemoteState = {
+      ...playing, source: "airplay",
+      sources_available: ["mopidy", "airplay"],
+    };
+    render(
+      <RemoteContextHarness state={withSources} command={command}>
+        <NowPlaying />
+      </RemoteContextHarness>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Library/ }));
+    expect(command).toHaveBeenCalledWith("source", "mopidy");
+  });
+
   it("shows a placeholder when nothing is playing", () => {
     const idle: RemoteState = { ...playing, track: null, playing: false };
     render(
