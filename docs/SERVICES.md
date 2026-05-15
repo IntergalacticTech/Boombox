@@ -281,14 +281,20 @@ on boombox-state, which signals wvkbd.
 (`auth_basic off`). Boot-enabled.**
 
 The single phone-facing backend: the HTTP/WS API for the CYD hardware
-remote, the forthcoming phone web app (Phase 2 — not built yet), and any
-other HTTP client on the LAN. It exposes consolidated state, a command
-endpoint, a push-on-change WebSocket, resized album art, a file surface
-(browse / download / upload / delete), a library/playlist/queue surface
-over Mopidy, and a Jellyfin video-transport proxy. Commands flow through
-the shared `actions.fire()` dispatcher, so GPIO buttons and remotes share
-one code path. A BLE peripheral runs alongside the HTTP server as the
-primary transport for the CYD hardware remote.
+remote, the phone web app at `/remote/`, and any other HTTP client on the
+LAN. It exposes consolidated state, a command endpoint, a push-on-change
+WebSocket, resized album art, a file surface (browse / download / upload /
+delete), a library/playlist/queue surface over Mopidy, and a Jellyfin
+video-transport proxy. Commands flow through the shared `actions.fire()`
+dispatcher, so GPIO buttons and remotes share one code path. A BLE
+peripheral runs alongside the HTTP server as the primary transport for the
+CYD hardware remote.
+
+The PWA itself is a separate static bundle, not part of this service: nginx
+serves it from `current/remote-ui/dist/` at the `/remote/` location, built
+in place by `install.sh` / `apply-release.sh` (same pattern as the kiosk
+SPA). The bundle talks to `/api/remote/` here, optionally over a BLE
+GATT transport for off-network Android phones.
 
 | Endpoint | Used by |
 |----------|---------|

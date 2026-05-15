@@ -71,12 +71,20 @@ case "$cmd" in
     # the release dir + ui/ world-traversable.
     chmod -R a+rX "$RELEASES/$ref/ui/dist"
     chmod o+x "$ROOT" "$RELEASES" "$RELEASES/$ref" "$RELEASES/$ref/ui"
+    (
+      cd "$RELEASES/$ref/remote-ui"
+      npm install --no-audit --no-fund
+      npm run build
+    )
+    chmod -R a+rX "$RELEASES/$ref/remote-ui/dist"
+    chmod o+x "$RELEASES/$ref/remote-ui"
     ;;
 
   preflight)
     ref="${1:?ref required}"
     log "preflight $ref"
     [[ -f "$RELEASES/$ref/ui/dist/index.html" ]] || fail "ui/dist/index.html missing"
+    [[ -f "$RELEASES/$ref/remote-ui/dist/index.html" ]] || fail "remote-ui/dist/index.html missing"
     for unit in "$RELEASES/$ref"/install/systemd/user/*.service; do
       systemd-analyze --user verify "$unit" || fail "systemd-analyze rejected $unit"
     done
@@ -140,6 +148,7 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     done
     (( ok == 1 )) || fail "user services did not all become active"
     curl -fsS --max-time 5 http://localhost/            >/dev/null || fail "nginx /"
+    curl -fsS --max-time 5 http://localhost/remote/     >/dev/null || fail "/remote/"
     curl -fsS --max-time 5 http://localhost/api/state   >/dev/null || fail "/api/state"
     curl -fsS --max-time 5 http://localhost/api/buttons/ >/dev/null || fail "/api/buttons/"
     ;;

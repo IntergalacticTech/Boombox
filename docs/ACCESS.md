@@ -34,15 +34,21 @@ Basic-auth modal first.
 
 `boombox-remote` is the single phone-facing backend. It's a boot-enabled
 user service on `127.0.0.1:6685`, proxied as `/api/remote/` by nginx. It
-serves the CYD hardware remote (over BLE and HTTP), any HTTP client on the
-LAN, and the forthcoming phone web app.
+serves the CYD hardware remote (over BLE and HTTP), the phone web app at
+`/remote/`, and any other HTTP client on the LAN.
 
-> **What's real today vs. Phase 2.** Phase 1 delivers the consolidated
-> *API*, the enable toggle, and PIN pairing. The installable phone web app
-> (the page you'd open on a phone) is **Phase 2 — not built yet**. The CYD
-> hardware remote already uses this API and is unaffected. The touchscreen's
-> web-QR overlay points at `http://<host>:8090/remote/` in anticipation of
-> Phase 2, but that page is not served yet.
+> **What's real today.** Phase 1 delivered the consolidated *API*, the
+> enable toggle, and PIN pairing. Phase 2A added the installable phone
+> web app: an offline-capable PWA served by nginx at
+> `http://<pi-ip>:8090/remote/` — the same URL the touchscreen's web-QR
+> overlay encodes. Open it on a phone, redeem the PIN displayed on the
+> touchscreen, and you get a Now Playing screen with transport controls
+> (play/pause/next/previous/stop, shuffle, mute, volume) themed to match
+> the active skin. Use the browser's **Add to Home Screen** to install it
+> as a standalone app. The next phase adds the remaining screens
+> (sources, video, playlists, file browser, extras) and a Web Bluetooth
+> pairing flow for off-network Android control; the CYD hardware remote
+> already uses this same API and is unaffected.
 
 The remote API can:
 
@@ -235,7 +241,8 @@ something with rate-limiting and TLS.
 
 ### Remote-first workflow ideas
 
-These fit the phone/laptop client (Phase 2) better than the 5" touchscreen:
+These fit the phone/laptop client better than the 5" touchscreen and are
+targeted at the next phase, beyond the Now Playing screen shipped today:
 
 - **Playlist studio:** drag/reorder drafts, edit existing playlists, import
   current queue, duplicate playlists, and bulk-add search results.
