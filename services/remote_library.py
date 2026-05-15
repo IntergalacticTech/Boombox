@@ -104,14 +104,39 @@ def _make_handlers(mopidy):
             await mopidy.call("core.playback.play")
         return web.json_response({"ok": True})
 
-    return search, list_playlists, create_playlist, playlist_items, queue
+    async def rescan(_request: web.Request) -> web.Response:
+        """Trigger a full Mopidy library rescan via boombox-state. Heavier
+        than core.library.refresh — runs `mopidyctl local scan` server-side
+        which actually re-indexes new files dropped over Samba / USB.
+        Fires the scan and returns immediately; the rescan can take minutes
+        on a large library and there's no streaming progress channel yet."""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=4)) as s:
+                async with s.post(
+                        "http://127.0.0.1:6681/library/scan") as r:
+                    if r.status != 200:
+                        return web.json_response(
+                            {"ok": False, "error": f"upstream_{r.status}"},
+                            status=502)
+                    body = await r.json()
+        except Exception as e:
+            return web.json_response(
+                {"ok": False, "error": str(e)}, status=502)
+        return web.json_response({"ok": bool(body.get("ok"))})
+
+    return (search, list_playlists, create_playlist, playlist_items, queue,
+            rescan)
 
 
 def add_routes(app: web.Application, mopidy) -> None:
     """Register library/playlist/queue routes. `mopidy` is a
     clients.MopidyRpc (or any object with an async .call(method, params))."""
-    search, list_pls, create_pl, pl_items, queue = _make_handlers(mopidy)
+    (search, list_pls, create_pl, pl_items, queue, rescan) = _make_handlers(
+        mopidy)
     app.router.add_get("/api/remote/library/search", search)
+    app.router.add_post("/api/remote/library/rescan", rescan)
     app.router.add_get("/api/remote/playlists", list_pls)
     app.router.add_post("/api/remote/playlists", create_pl)
     app.router.add_get("/api/remote/playlists/{uri}/items", pl_items)
