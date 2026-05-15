@@ -36,6 +36,8 @@ export interface RemoteState {
   mic_on: boolean;
   skin: string | null;
   theme: ThemeVars;
+  shuffle?: boolean;
+  repeat?: "off" | "all" | "one";
 }
 
 export interface CommandResult {

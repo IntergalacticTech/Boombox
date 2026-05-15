@@ -199,19 +199,35 @@ class StateAggregator:
     async def consolidated_state(self) -> dict:
         # Pull from upstream services in parallel for snappiness.
         (source, track_info, state_info, position_info, vol_info, karaoke,
-         theme_payload) = await asyncio.gather(
-            self._state.current_source(),
-            self._mopidy.call("core.playback.get_current_track"),
-            self._mopidy.call("core.playback.get_state"),
-            self._mopidy.call("core.playback.get_time_position"),
-            self._state.volume_get(),
-            self._state.karaoke_state(),
-            self._fetch_theme(),
+         theme_payload, random_info, repeat_info, single_info) = (
+            await asyncio.gather(
+                self._state.current_source(),
+                self._mopidy.call("core.playback.get_current_track"),
+                self._mopidy.call("core.playback.get_state"),
+                self._mopidy.call("core.playback.get_time_position"),
+                self._state.volume_get(),
+                self._state.karaoke_state(),
+                self._fetch_theme(),
+                self._mopidy.call("core.tracklist.get_random"),
+                self._mopidy.call("core.tracklist.get_repeat"),
+                self._mopidy.call("core.tracklist.get_single"),
+            )
         )
 
         track = (track_info or {}).get("result") or {}
         playing_state = (state_info or {}).get("result")
         position_ms = (position_info or {}).get("result") or 0
+        shuffle = bool((random_info or {}).get("result"))
+        repeat_flag = bool((repeat_info or {}).get("result"))
+        single_flag = bool((single_info or {}).get("result"))
+        # Mopidy splits "repeat all" and "repeat one" across two flags;
+        # actions.py cycles off → all → one → off.
+        if single_flag:
+            repeat: str = "one"
+        elif repeat_flag:
+            repeat = "all"
+        else:
+            repeat = "off"
 
         return {
             "boombox": {
@@ -233,6 +249,8 @@ class StateAggregator:
             "art_url":  None,
             "volume":   vol_info[0] if vol_info else None,
             "muted":    vol_info[1] if vol_info else False,
+            "shuffle":  shuffle,
+            "repeat":   repeat,
             "sources_available": ["mopidy", "airplay", "spotify",
                                    "bluetooth", "movies"],
             "sleep_timer_s": None,  # in-memory; Phase 2 wires it

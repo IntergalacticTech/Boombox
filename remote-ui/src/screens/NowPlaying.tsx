@@ -80,7 +80,7 @@ export function NowPlaying() {
         </IconButton>
         <input
           aria-label="Volume"
-          type="range" min={0} max={100} value={volume}
+          type="range" min={0} max={1} step={0.01} value={volume}
           onChange={(e) => {
             const n = Number(e.target.value);
             setPendingVolume(n);
@@ -90,13 +90,20 @@ export function NowPlaying() {
         />
         <span style={{ fontFamily: "var(--mono)", fontSize: 13,
                        color: "var(--ink2)", width: 38, textAlign: "right" }}>
-          {volume}
+          {Math.round(volume * 100)}%
         </span>
       </div>
 
-      <IconButton label="Shuffle" onClick={() => command("shuffle")}>
-        🔀
-      </IconButton>
+      <div style={{ display: "flex", gap: 14 }}>
+        <IconButton label="Shuffle" toggled={!!state?.shuffle}
+                    onClick={() => command("shuffle")}>
+          🔀
+        </IconButton>
+        <IconButton label="Repeat" toggled={!!state?.repeat && state.repeat !== "off"}
+                    onClick={() => command("repeat")}>
+          {state?.repeat === "one" ? "🔂" : "🔁"}
+        </IconButton>
+      </div>
     </div>
   );
 }
