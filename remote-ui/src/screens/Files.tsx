@@ -89,6 +89,18 @@ export function Files() {
     }
   };
 
+  const onRescan = async () => {
+    setUploadStatus("Rescanning library…");
+    try {
+      await api.post<{ ok: boolean }>("api/remote/library/rescan");
+      setUploadStatus("Library rescan started (can take a few minutes).");
+    } catch (e: unknown) {
+      setUploadStatus(
+        e instanceof ApiError ? `Rescan failed (${e.status})` : "Rescan failed",
+      );
+    }
+  };
+
   return (
     <div style={{ padding: 16, paddingBottom: 96 }}>
       <header style={{ display: "flex", alignItems: "center", gap: 12,
@@ -103,6 +115,8 @@ export function Files() {
                       whiteSpace: "nowrap" }}>
           /{path || ""}
         </div>
+        <button type="button" onClick={onRescan} style={smallBtn}
+                aria-label="Rescan library">↻</button>
         <button type="button"
                 onClick={() => fileInputRef.current?.click()}
                 style={primaryBtn}>+ Upload</button>
@@ -185,4 +199,9 @@ const primaryBtn: React.CSSProperties = {
 const rowBtn: React.CSSProperties = {
   background: "transparent", border: 0, color: "var(--ink)",
   fontSize: 15, padding: "4px 0", cursor: "pointer",
+};
+const smallBtn: React.CSSProperties = {
+  padding: "6px 10px", borderRadius: 6,
+  border: "1px solid var(--rule)", background: "var(--panel)",
+  color: "var(--ink)", fontSize: 13, cursor: "pointer",
 };

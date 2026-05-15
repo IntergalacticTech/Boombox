@@ -16,7 +16,9 @@ function mmss(sec: number): string {
 
 /** Library search. Hits the consolidated Mopidy search backend; results are
  *  capped server-side at 80 tracks. Each result is individually queue-able,
- *  plus a "Play all" that queues the whole result set + starts playback. */
+ *  plus a "Play all" that queues the whole result set + starts playback.
+ *  Multi-select + "Save as playlist" lets the user build a playlist from
+ *  the current result set in one tap. */
 export function Search() {
   const api = useApi();
   const [q, setQ] = useState("");
@@ -24,6 +26,7 @@ export function Search() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -31,6 +34,7 @@ export function Search() {
     if (!term) return;
     setBusy(true);
     setErr(null);
+    setSelected(new Set());
     api
       .get<{ ok: boolean; tracks: Track[] }>(
         `api/remote/library/search?q=${encodeURIComponent(term)}`,
@@ -39,6 +43,34 @@ export function Search() {
       .catch((e: unknown) =>
         setErr(e instanceof ApiError ? `${e.status}` : "failed"))
       .finally(() => setBusy(false));
+  };
+
+  const toggleSelected = (uri: string) => {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(uri)) next.delete(uri); else next.add(uri);
+      return next;
+    });
+  };
+
+  const saveAsPlaylist = async (uris: string[]) => {
+    const name = window.prompt(
+      `Save ${uris.length} track${uris.length === 1 ? "" : "s"} as playlist — name?`,
+    );
+    if (!name || !name.trim()) return;
+    setToast("Creating playlist…");
+    try {
+      await api.post<{ ok: boolean; uri: string }>(
+        "api/remote/playlists",
+        { name: name.trim(), uris },
+      );
+      setToast(`Saved playlist "${name.trim()}".`);
+      setSelected(new Set());
+    } catch (e: unknown) {
+      setToast(
+        e instanceof ApiError ? `Save failed (${e.status})` : "Save failed",
+      );
+    }
   };
 
   const queueOne = async (t: Track, play: boolean) => {
@@ -79,13 +111,30 @@ export function Search() {
 
       {tracks && tracks.length > 0 && (
         <div style={{ display: "flex", justifyContent: "space-between",
-                      alignItems: "center", marginBottom: 8 }}>
+                      alignItems: "center", marginBottom: 8, gap: 8 }}>
           <span style={{ color: "var(--ink2)", fontSize: 13 }}>
             {tracks.length} result{tracks.length === 1 ? "" : "s"}
+            {selected.size > 0 && (
+              <span style={{ marginLeft: 8, color: "var(--accent)" }}>
+                ({selected.size} selected)
+              </span>
+            )}
           </span>
-          <button type="button" onClick={playAll} style={smallBtn}>
-            ▶ Play all
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            {selected.size > 0 && (
+              <button type="button" style={smallBtn}
+                      onClick={() => saveAsPlaylist(Array.from(selected))}>
+                ＋ Save as playlist
+              </button>
+            )}
+            <button type="button" style={smallBtn}
+                    onClick={() => saveAsPlaylist(tracks.map((t) => t.uri))}>
+              ＋ All as playlist
+            </button>
+            <button type="button" onClick={playAll} style={smallBtn}>
+              ▶ Play all
+            </button>
+          </div>
         </div>
       )}
 
@@ -114,6 +163,11 @@ export function Search() {
             display: "flex", alignItems: "center", gap: 8,
             padding: "10px 4px", borderBottom: "1px solid var(--rule)",
           }}>
+            <input type="checkbox"
+                   aria-label={`Select ${t.title ?? t.uri}`}
+                   checked={selected.has(t.uri)}
+                   onChange={() => toggleSelected(t.uri)}
+                   style={{ width: 18, height: 18, accentColor: "var(--accent)" }} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 15, overflow: "hidden",
                             textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
