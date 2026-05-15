@@ -320,6 +320,15 @@ log "building UI in $ACTIVE_REPO/ui"
 # needed — the install user owns /opt/boombox.
 chmod -R a+rX "$ACTIVE_REPO/ui/dist"
 chmod o+x "$BOOMBOX_ROOT" "$RELEASES_DIR" "$ACTIVE_REPO" "$ACTIVE_REPO/ui"
+
+log "building remote-ui (PWA) in $ACTIVE_REPO/remote-ui"
+(
+  cd "$ACTIVE_REPO/remote-ui"
+  npm install --no-audit --no-fund
+  npm run build
+)
+chmod -R a+rX "$ACTIVE_REPO/remote-ui/dist"
+chmod o+x "$ACTIVE_REPO/remote-ui"
 # Tear down the legacy doc root if it's still around.
 if [[ -d /var/www/boombox && ! -L /var/www/boombox ]]; then
   log "removing legacy /var/www/boombox (nginx now serves from current/ui/dist)"
