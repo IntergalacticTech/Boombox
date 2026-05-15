@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -23,6 +23,6 @@
     "typescript": "~6.0.2",
     "vite": "^8.0.10",
     "vite-plugin-pwa": "^1.0.0",
-    "vitest": "^3.0.5"
+    "vitest": "^4.0.0"
   }
 }
