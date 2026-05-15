@@ -149,16 +149,27 @@ class StateApi:
         self, artist: str | None, album: str | None, track: str | None,
     ) -> str | None:
         """Resolve album art via boombox-state's iTunes lookup. Returns a
-        public https URL or None. boombox-state caches lookups in-process,
-        so calling this on every state read is cheap (cache hit) after the
-        first miss per (artist|album|track) tuple. iTunes is best-effort:
-        anything from a 404 to a network glitch becomes None and the
-        caller renders the no-art placeholder."""
+        public https URL or None. boombox-state caches lookups in-process
+        for 24 h, so calling this on every state read is cheap (cache hit)
+        after the first miss. iTunes is best-effort: anything from a 404
+        to a network glitch becomes None and the caller renders the no-art
+        placeholder.
+
+        boombox-state's handler uses `album or track` for the lookup term —
+        track is only consulted when album is missing. We mirror that so
+        both consumers share a cache key and we don't re-query iTunes for
+        every track on the same album."""
         if not (artist or album or track):
             return None
-        params = {k: v for k, v in
-                  (("artist", artist), ("album", album), ("track", track))
-                  if v}
+        params: dict[str, str] = {}
+        if artist:
+            params["artist"] = artist
+        if album:
+            params["album"] = album
+        elif track:
+            params["track"] = track
+        if not params:
+            return None
         try:
             async with self._sess.get(
                     f"{STATE_BASE}/art", params=params,
