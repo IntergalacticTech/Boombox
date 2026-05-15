@@ -7,6 +7,8 @@ import { ApiProvider, makeApi } from "./lib/api";
 import { Pairing as PairingScreen } from "./screens/Pairing";
 import { NowPlaying } from "./screens/NowPlaying";
 import { Files } from "./screens/Files";
+import { Playlists } from "./screens/Playlists";
+import { Search } from "./screens/Search";
 import { TabBar, type Tab } from "./components/TabBar";
 
 /** Inside the provider: routes on connection status, then on selected tab. */
@@ -61,23 +63,10 @@ function Remote({ onUnpair }: { onUnpair: () => void }) {
     <>
       {tab === "now" && <NowPlaying />}
       {tab === "files" && <Files />}
-      {tab === "playlists" && (
-        <Stub title="Playlists" hint="Coming next deploy." />
-      )}
-      {tab === "search" && (
-        <Stub title="Search" hint="Coming next deploy." />
-      )}
+      {tab === "playlists" && <Playlists />}
+      {tab === "search" && <Search />}
       <TabBar active={tab} onChange={setTab} />
     </>
-  );
-}
-
-function Stub({ title, hint }: { title: string; hint: string }) {
-  return (
-    <div style={{ padding: 24, textAlign: "center" }}>
-      <h2 style={{ marginTop: 24 }}>{title}</h2>
-      <p style={{ color: "var(--ink2)" }}>{hint}</p>
-    </div>
   );
 }
 
