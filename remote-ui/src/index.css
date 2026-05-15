@@ -1,0 +1,26 @@
+:root {
+  --bg: #07060c;
+  --panel: #100d1c;
+  --ink: #f3f1ff;
+  --ink2: #9892b8;
+  --accent: #8b5cf6;
+  --accent2: #5be7ff;
+  --rule: rgba(255, 255, 255, 0.08);
+  --font: system-ui, -apple-system, sans-serif;
+  --mono: ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+}
+
+body {
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
