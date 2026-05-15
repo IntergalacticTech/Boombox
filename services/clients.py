@@ -150,37 +150,42 @@ class StateApi:
     ) -> str | None:
         """Resolve album art via boombox-state's iTunes lookup. Returns a
         public https URL or None. boombox-state caches lookups in-process
-        for 24 h, so calling this on every state read is cheap (cache hit)
-        after the first miss. iTunes is best-effort: anything from a 404
-        to a network glitch becomes None and the caller renders the no-art
-        placeholder.
+        for 24 h.
 
-        boombox-state's handler uses `album or track` for the lookup term —
-        track is only consulted when album is missing. We mirror that so
-        both consumers share a cache key and we don't re-query iTunes for
-        every track on the same album."""
+        Tries the (artist, album) entity=album query first — that's what
+        the kiosk uses, so we share its cache. If that returns null
+        (common for live albums with "(Disk One)" / "(Remastered)" cruft
+        that iTunes doesn't recognize), fall back to (artist, track) which
+        searches the song entity and matches a much wider swath of the
+        catalog. iTunes failures (timeout, 404, no match) become None and
+        the caller renders the no-art placeholder."""
         if not (artist or album or track):
             return None
-        params: dict[str, str] = {}
+
+        async def _lookup(params: dict[str, str]) -> str | None:
+            try:
+                async with self._sess.get(
+                        f"{STATE_BASE}/art", params=params,
+                        timeout=aiohttp.ClientTimeout(total=4)) as r:
+                    if r.status != 200:
+                        return None
+                    body = await r.json()
+            except Exception:
+                return None
+            url = body.get("url")
+            return url if isinstance(url, str) else None
+
+        if artist and album:
+            url = await _lookup({"artist": artist, "album": album})
+            if url:
+                return url
+        if artist and track:
+            return await _lookup({"artist": artist, "track": track})
+        if track:
+            return await _lookup({"track": track})
         if artist:
-            params["artist"] = artist
-        if album:
-            params["album"] = album
-        elif track:
-            params["track"] = track
-        if not params:
-            return None
-        try:
-            async with self._sess.get(
-                    f"{STATE_BASE}/art", params=params,
-                    timeout=aiohttp.ClientTimeout(total=4)) as r:
-                if r.status != 200:
-                    return None
-                body = await r.json()
-        except Exception:
-            return None
-        url = body.get("url")
-        return url if isinstance(url, str) else None
+            return await _lookup({"artist": artist})
+        return None
 
 
 class KioskClient:
