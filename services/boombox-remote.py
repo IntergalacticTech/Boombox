@@ -595,7 +595,11 @@ async def main() -> None:
         dispatcher = actions.Dispatcher(
             mopidy=clients.MopidyRpc(session),
             state=clients.StateApi(session),
-            kiosk=None,        # populated when KioskClient is wired in
+            # KioskClient drives the on-Pi Chromium via CDP on :9222 — needed
+            # for source overlays (airplay/spotify/bluetooth) and the
+            # Library/Jellyfin navigates. Without it every source handler
+            # short-circuits at `if d.kiosk` and the chip is a no-op.
+            kiosk=clients.KioskClient(session),
             recorder=None,     # populated alongside boombox-buttons
             display=None,
             sleep=None,
