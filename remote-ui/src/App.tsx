@@ -3,12 +3,16 @@ import { loadPairing, clearPairing } from "./lib/pairing";
 import type { Pairing } from "./lib/pairing";
 import { makeHttpTransport } from "./transport/select";
 import { TransportProvider, useRemote } from "./state/store";
+import { ApiProvider, makeApi } from "./lib/api";
 import { Pairing as PairingScreen } from "./screens/Pairing";
 import { NowPlaying } from "./screens/NowPlaying";
+import { Files } from "./screens/Files";
+import { TabBar, type Tab } from "./components/TabBar";
 
-/** Inside the provider: routes on connection status. */
+/** Inside the provider: routes on connection status, then on selected tab. */
 function Remote({ onUnpair }: { onUnpair: () => void }) {
   const { status } = useRemote();
+  const [tab, setTab] = useState<Tab>("now");
 
   if (status === "disabled") {
     return (
@@ -52,7 +56,29 @@ function Remote({ onUnpair }: { onUnpair: () => void }) {
       </Centered>
     );
   }
-  return <NowPlaying />;
+
+  return (
+    <>
+      {tab === "now" && <NowPlaying />}
+      {tab === "files" && <Files />}
+      {tab === "playlists" && (
+        <Stub title="Playlists" hint="Coming next deploy." />
+      )}
+      {tab === "search" && (
+        <Stub title="Search" hint="Coming next deploy." />
+      )}
+      <TabBar active={tab} onChange={setTab} />
+    </>
+  );
+}
+
+function Stub({ title, hint }: { title: string; hint: string }) {
+  return (
+    <div style={{ padding: 24, textAlign: "center" }}>
+      <h2 style={{ marginTop: 24 }}>{title}</h2>
+      <p style={{ color: "var(--ink2)" }}>{hint}</p>
+    </div>
+  );
 }
 
 export default function App() {
@@ -70,12 +96,14 @@ export default function App() {
   // `key` forces a fresh TransportProvider (new transport) when the pairing
   // changes — e.g. after re-pairing.
   return (
-    <TransportProvider
-      key={pairing.token}
-      transport={makeHttpTransport(pairing.base, pairing.token)}
-    >
-      <Remote onUnpair={unpair} />
-    </TransportProvider>
+    <ApiProvider api={makeApi(pairing.base, pairing.token)}>
+      <TransportProvider
+        key={pairing.token}
+        transport={makeHttpTransport(pairing.base, pairing.token)}
+      >
+        <Remote onUnpair={unpair} />
+      </TransportProvider>
+    </ApiProvider>
   );
 }
 
