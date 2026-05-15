@@ -178,10 +178,11 @@ for mod in ('boombox_updater', 'boombox_buttons'):
       done
       fail "$name"
     }
-    probe http://localhost/            "nginx /"
-    probe http://localhost/remote/     "/remote/"
-    probe http://localhost/api/state   "/api/state"
-    probe http://localhost/api/buttons/ "/api/buttons/"
+    probe http://localhost/                  "nginx /"
+    probe http://localhost/remote/           "/remote/"
+    probe http://localhost/api/state         "/api/state"
+    # /api/buttons/ has no index handler — probe a real GET endpoint.
+    probe http://localhost/api/buttons/config "/api/buttons/config"
     ;;
 
   revert)
