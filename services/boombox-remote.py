@@ -220,6 +220,16 @@ class StateAggregator:
         shuffle = bool((random_info or {}).get("result"))
         repeat_flag = bool((repeat_info or {}).get("result"))
         single_flag = bool((single_info or {}).get("result"))
+        # Resolve cover art via boombox-state's iTunes lookup. Best-effort;
+        # any failure becomes art_url=null and the PWA renders "no art".
+        art_url: str | None = None
+        if track:
+            art_url = await self._state.album_art_url(
+                artist=", ".join(a.get("name", "")
+                                  for a in track.get("artists") or []) or None,
+                album=(track.get("album") or {}).get("name"),
+                track=track.get("name"),
+            )
         # Mopidy splits "repeat all" and "repeat one" across two flags;
         # actions.py cycles off → all → one → off.
         if single_flag:
@@ -245,8 +255,8 @@ class StateAggregator:
                 "duration_s": (track.get("length") or 0) // 1000,
                 "position_s": position_ms // 1000,
             } if track else None,
-            "art_hash": None,   # populated in Task 10 (album-art endpoint)
-            "art_url":  None,
+            "art_hash": None,
+            "art_url":  art_url,
             "volume":   vol_info[0] if vol_info else None,
             "muted":    vol_info[1] if vol_info else False,
             "shuffle":  shuffle,

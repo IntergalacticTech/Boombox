@@ -145,6 +145,32 @@ class StateApi:
         except Exception as e:
             log.warning("state.bluetooth_pair failed: %s", e)
 
+    async def album_art_url(
+        self, artist: str | None, album: str | None, track: str | None,
+    ) -> str | None:
+        """Resolve album art via boombox-state's iTunes lookup. Returns a
+        public https URL or None. boombox-state caches lookups in-process,
+        so calling this on every state read is cheap (cache hit) after the
+        first miss per (artist|album|track) tuple. iTunes is best-effort:
+        anything from a 404 to a network glitch becomes None and the
+        caller renders the no-art placeholder."""
+        if not (artist or album or track):
+            return None
+        params = {k: v for k, v in
+                  (("artist", artist), ("album", album), ("track", track))
+                  if v}
+        try:
+            async with self._sess.get(
+                    f"{STATE_BASE}/api/album-art", params=params,
+                    timeout=aiohttp.ClientTimeout(total=4)) as r:
+                if r.status != 200:
+                    return None
+                body = await r.json()
+        except Exception:
+            return None
+        url = body.get("url")
+        return url if isinstance(url, str) else None
+
 
 class KioskClient:
     """DevTools client for the Chromium kiosk on :9222. Drives navigation
