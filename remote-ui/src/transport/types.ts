@@ -44,12 +44,14 @@ export interface CommandResult {
 }
 
 // Connection status surfaced to the UI. "disabled" = the boombox reported
-// remote_disabled (the touchscreen toggle is off).
+// remote_disabled (the touchscreen toggle is off). "unavailable" = the
+// boombox is reachable but the state aggregator is restarting (WS 4503).
 export type ConnectionStatus =
   | "connecting"
   | "connected"
   | "disabled"
   | "unauthorized"
+  | "unavailable"
   | "error";
 
 // Transport-agnostic contract. Both HttpTransport and BleTransport implement

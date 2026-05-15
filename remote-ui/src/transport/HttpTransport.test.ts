@@ -95,4 +95,51 @@ describe("HttpTransport", () => {
       }),
     );
   });
+
+  it("disconnect() does not emit 'error' status", async () => {
+    const t = new HttpTransport("http://pi:8090", "tok");
+    const statuses: string[] = [];
+    t.onStatus((s) => statuses.push(s));
+    const p = t.connect();
+    FakeWS.instances[0]._open();
+    await p;
+    statuses.length = 0;  // ignore the "connected" emission
+    t.disconnect();
+    FakeWS.instances[0]._close(1000);  // simulate the clean-close that ws.close() triggers
+    expect(statuses).not.toContain("error");
+  });
+
+  it("a 4503 close surfaces status 'unavailable'", async () => {
+    const t = new HttpTransport("http://pi:8090", "tok");
+    const statuses: string[] = [];
+    t.onStatus((s) => statuses.push(s));
+    const p = t.connect();
+    FakeWS.instances[0]._open();
+    await p;
+    FakeWS.instances[0]._close(4503);
+    expect(statuses).toContain("unavailable");
+  });
+
+  it("command() returns http_<status> for non-2xx that isn't 401/403", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false, status: 502,
+      json: async () => { throw new Error("not json"); },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const t = new HttpTransport("http://pi:8090", "tok");
+    const res = await t.command("next");
+    expect(res).toEqual({ ok: false, error: "http_502" });
+  });
+
+  it("onState unsubscribe stops the callback", async () => {
+    const t = new HttpTransport("http://pi:8090", "tok");
+    const seen: RemoteState[] = [];
+    const off = t.onState((s) => seen.push(s));
+    const p = t.connect();
+    FakeWS.instances[0]._open();
+    await p;
+    off();
+    FakeWS.instances[0]._msg({ ok: true, data: sampleState });
+    expect(seen).toHaveLength(0);
+  });
 });

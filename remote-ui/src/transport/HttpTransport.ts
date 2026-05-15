@@ -5,6 +5,7 @@ import type {
 // WebSocket close codes from services/boombox-remote.py's _ws_handler.
 const WS_BAD_TOKEN = 4401;
 const WS_REMOTE_DISABLED = 4403;
+const WS_AGGREGATOR_UNAVAILABLE = 4503;
 
 /** Transport over the boombox-remote HTTP + WebSocket API. The default
  *  transport — works on every phone with LAN access to the boombox. */
@@ -14,6 +15,7 @@ export class HttpTransport implements Transport {
   private readonly base: string;          // e.g. "http://pi:8090"
   private readonly token: string;
   private ws: WebSocket | null = null;
+  private intentionalClose = false;
   private stateCbs = new Set<(s: RemoteState) => void>();
   private statusCbs = new Set<(s: ConnectionStatus) => void>();
 
@@ -43,8 +45,12 @@ export class HttpTransport implements Transport {
         }
       };
       ws.onclose = (e) => {
+        // A locally-initiated disconnect() fires onclose with code 1000;
+        // don't translate that into a status banner.
+        if (this.intentionalClose) return;
         if (e.code === WS_REMOTE_DISABLED) this.emitStatus("disabled");
         else if (e.code === WS_BAD_TOKEN) this.emitStatus("unauthorized");
+        else if (e.code === WS_AGGREGATOR_UNAVAILABLE) this.emitStatus("unavailable");
         else this.emitStatus("error");
         // If the socket closed before it ever opened, the connect() promise
         // is still pending — reject it so the caller sees the failure.
@@ -58,6 +64,7 @@ export class HttpTransport implements Transport {
   }
 
   disconnect(): void {
+    this.intentionalClose = true;
     this.ws?.close();
     this.ws = null;
   }
@@ -86,6 +93,7 @@ export class HttpTransport implements Transport {
       });
       if (r.status === 403) return { ok: false, error: "remote_disabled" };
       if (r.status === 401) return { ok: false, error: "unauthorized" };
+      if (!r.ok) return { ok: false, error: `http_${r.status}` };
       return (await r.json()) as CommandResult;
     } catch {
       return { ok: false, error: "unreachable" };
