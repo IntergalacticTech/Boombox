@@ -9,9 +9,10 @@ const playing: RemoteState = {
   source: "mopidy", playing: true,
   track: { title: "Hey Jude", artist: "The Beatles", album: "1967-1970",
            duration_s: 431, position_s: 60 },
-  art_hash: null, art_url: null, volume: 65, muted: false,
+  art_hash: null, art_url: null, volume: 0.65, muted: false,
   sources_available: ["mopidy"], sleep_timer_s: null, recording: false,
   mic_on: false, skin: null, theme: {},
+  shuffle: false, repeat: "off",
 };
 
 describe("NowPlaying", () => {
@@ -49,7 +50,7 @@ describe("NowPlaying", () => {
     expect(command).toHaveBeenCalledWith("previous");
   });
 
-  it("the volume slider fires a volume command with the new value", () => {
+  it("the volume slider fires a volume command with the new value (0..1)", () => {
     const command = vi.fn().mockResolvedValue({ ok: true });
     render(
       <RemoteContextHarness state={playing} command={command}>
@@ -57,8 +58,8 @@ describe("NowPlaying", () => {
       </RemoteContextHarness>,
     );
     fireEvent.change(screen.getByLabelText(/volume/i),
-                     { target: { value: "80" } });
-    expect(command).toHaveBeenCalledWith("volume", 80);
+                     { target: { value: "0.8" } });
+    expect(command).toHaveBeenCalledWith("volume", 0.8);
   });
 
   it("volume slider tracks user input optimistically (no snap-back during a drag)", () => {
@@ -68,13 +69,35 @@ describe("NowPlaying", () => {
         <NowPlaying />
       </RemoteContextHarness>,
     );
-    // playing.volume = 65 initially; user drags to 80.
+    // playing.volume = 0.65 initially; user drags to 0.8.
     const slider = screen.getByLabelText(/volume/i) as HTMLInputElement;
-    expect(slider.value).toBe("65");
-    fireEvent.change(slider, { target: { value: "80" } });
+    expect(slider.value).toBe("0.65");
+    fireEvent.change(slider, { target: { value: "0.8" } });
     // No state push has arrived yet → the slider must reflect the user's input,
-    // not snap back to 65.
-    expect(slider.value).toBe("80");
+    // not snap back to 0.65.
+    expect(slider.value).toBe("0.8");
+  });
+
+  it("shuffle is rendered toggled when state.shuffle is true", () => {
+    const shufOn: RemoteState = { ...playing, shuffle: true };
+    render(
+      <RemoteContextHarness state={shufOn} command={vi.fn()}>
+        <NowPlaying />
+      </RemoteContextHarness>,
+    );
+    expect(screen.getByRole("button", { name: /shuffle/i })
+      .getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("shuffle button dispatches shuffle command", () => {
+    const command = vi.fn().mockResolvedValue({ ok: true });
+    render(
+      <RemoteContextHarness state={playing} command={command}>
+        <NowPlaying />
+      </RemoteContextHarness>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /shuffle/i }));
+    expect(command).toHaveBeenCalledWith("shuffle");
   });
 
   it("shows a placeholder when nothing is playing", () => {
