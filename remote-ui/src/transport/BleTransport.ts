@@ -33,6 +33,7 @@ export class BleTransport implements Transport {
   }
 
   async connect(): Promise<void> {
+    await this.stateChar.startNotifications();
     this.stateChar.addEventListener("characteristicvaluechanged", (e) => {
       const dv = (e.target as { value?: DataView }).value;
       if (!dv) return;
@@ -45,7 +46,6 @@ export class BleTransport implements Transport {
         /* ignore malformed notify */
       }
     });
-    await this.stateChar.startNotifications();
     this.emitStatus("connected");
   }
 
@@ -73,7 +73,10 @@ export class BleTransport implements Transport {
         new TextEncoder().encode(JSON.stringify(body)),
       );
       // BLE command writes are fire-and-forget — the peripheral has no
-      // per-command response characteristic. Success = the write resolved.
+      // per-command response characteristic. Callers MUST NOT treat
+      // {ok: true} as confirmation the action took effect; observe the
+      // next state push instead. (HttpTransport surfaces handler errors;
+      // BLE cannot.)
       return { ok: true };
     } catch {
       return { ok: false, error: "unreachable" };
