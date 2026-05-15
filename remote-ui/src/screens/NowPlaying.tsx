@@ -27,6 +27,18 @@ export function NowPlaying() {
   const volume = pendingVolume ?? liveVolume;
   const sources = state?.sources_available ?? [];
   const activeSource = state?.source ?? null;
+  const [sourceToast, setSourceToast] = useState<string | null>(null);
+
+  const pickSource = (s: string) => {
+    command("source", s);
+    // Most source handlers navigate or overlay the kiosk Chromium — the
+    // audio "active source" doesn't necessarily change (e.g. tapping
+    // Library while AirPlay is streaming opens the Library view on the
+    // boombox but AirPlay keeps playing). Confirm with a toast so the
+    // tap feels alive even when state.source doesn't move.
+    setSourceToast(`${SOURCE_LABELS[s] ?? s} opened on boombox screen.`);
+    window.setTimeout(() => setSourceToast(null), 2500);
+  };
 
   return (
     <div style={{
@@ -35,30 +47,45 @@ export function NowPlaying() {
       alignItems: "center",
     }}>
       {sources.length > 0 && (
-        <div role="group" aria-label="Source"
-             style={{
-               display: "flex", gap: 6, flexWrap: "wrap",
-               justifyContent: "center", width: "100%",
-             }}>
-          {sources.map((s) => {
-            const active = s === activeSource;
-            return (
-              <button
-                key={s} type="button"
-                aria-pressed={active}
-                onClick={() => command("source", s)}
-                style={{
-                  padding: "6px 12px", borderRadius: 999, fontSize: 12,
-                  border: "1px solid var(--rule)",
-                  background: active ? "var(--accent)" : "var(--panel)",
-                  color: active ? "var(--bg)" : "var(--ink2)",
-                  cursor: "pointer",
-                }}
-              >
-                {SOURCE_LABELS[s] ?? s}
-              </button>
-            );
-          })}
+        <div style={{ width: "100%" }}>
+          <div style={{
+            fontSize: 11, color: "var(--ink2)", letterSpacing: "0.06em",
+            textTransform: "uppercase", textAlign: "center", marginBottom: 6,
+          }}>
+            Boombox screen
+          </div>
+          <div role="group" aria-label="Source"
+               style={{
+                 display: "flex", gap: 6, flexWrap: "wrap",
+                 justifyContent: "center", width: "100%",
+               }}>
+            {sources.map((s) => {
+              const active = s === activeSource;
+              return (
+                <button
+                  key={s} type="button"
+                  aria-pressed={active}
+                  onClick={() => pickSource(s)}
+                  style={{
+                    padding: "6px 12px", borderRadius: 999, fontSize: 12,
+                    border: "1px solid var(--rule)",
+                    background: active ? "var(--accent)" : "var(--panel)",
+                    color: active ? "var(--bg)" : "var(--ink2)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {SOURCE_LABELS[s] ?? s}
+                </button>
+              );
+            })}
+          </div>
+          {sourceToast && (
+            <div role="status" style={{
+              marginTop: 8, padding: "6px 10px", borderRadius: 8,
+              background: "var(--panel)", color: "var(--ink2)",
+              fontSize: 12, textAlign: "center",
+            }}>{sourceToast}</div>
+          )}
         </div>
       )}
 

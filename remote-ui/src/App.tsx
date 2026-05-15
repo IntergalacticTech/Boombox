@@ -13,9 +13,11 @@ import { TabBar, type Tab } from "./components/TabBar";
 
 /** Inside the provider: routes on connection status, then on selected tab. */
 function Remote({ onUnpair }: { onUnpair: () => void }) {
-  const { status } = useRemote();
+  const { state, status } = useRemote();
   const [tab, setTab] = useState<Tab>("now");
 
+  // Terminal states always take over — the user has to act before the app
+  // is usable again.
   if (status === "disabled") {
     return (
       <Centered>
@@ -38,22 +40,19 @@ function Remote({ onUnpair }: { onUnpair: () => void }) {
       </Centered>
     );
   }
-  if (status === "unavailable") {
-    return (
-      <Centered>
-        <h2>Boombox temporarily unavailable</h2>
-        <p style={{ color: "var(--ink2)" }}>
-          The boombox is reachable but its state service is restarting. This
-          will reconnect automatically.
-        </p>
-      </Centered>
-    );
-  }
-  if (status === "error" || status === "connecting") {
+
+  // Transient states: if we already have rendered state, keep showing it
+  // and overlay a thin banner instead of full-screen replacing the UI.
+  // The initial-load case (no state yet) still gets the centered message.
+  const hasState = state !== null;
+  if (!hasState && (status === "connecting" || status === "error" ||
+                    status === "unavailable")) {
     return (
       <Centered>
         <p style={{ color: "var(--ink2)" }}>
-          {status === "connecting" ? "Connecting…" : "Can't reach the boombox."}
+          {status === "connecting" ? "Connecting…"
+            : status === "unavailable" ? "Boombox temporarily unavailable…"
+            : "Can't reach the boombox."}
         </p>
       </Centered>
     );
@@ -61,6 +60,19 @@ function Remote({ onUnpair }: { onUnpair: () => void }) {
 
   return (
     <>
+      {(status === "connecting" || status === "unavailable" ||
+        status === "error") && (
+        <div role="status" style={{
+          position: "fixed", top: 0, left: 0, right: 0, zIndex: 20,
+          padding: "6px 12px", textAlign: "center", fontSize: 12,
+          background: "var(--panel)", color: "var(--ink2)",
+          borderBottom: "1px solid var(--rule)",
+        }}>
+          {status === "connecting" ? "Reconnecting…"
+            : status === "unavailable" ? "Boombox restarting — will reconnect"
+            : "Connection lost — retrying"}
+        </div>
+      )}
       {tab === "now" && <NowPlaying />}
       {tab === "files" && <Files />}
       {tab === "playlists" && <Playlists />}
