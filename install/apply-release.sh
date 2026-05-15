@@ -113,6 +113,16 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     install -m 0644 "$CURRENT/install/systemd/user/"*.service \
       "$HOME/.config/systemd/user/"
     systemctl --user daemon-reload
+    # Sync the nginx snippet so source-controlled location blocks (e.g. the
+    # /remote/ PWA mount, /api/remote/) land without re-running install.sh.
+    # The reload happens in the `restart` step; this just stages the file.
+    # The exact path is required to match the narrow sudoers entry.
+    if [[ -f "$CURRENT/install/config/nginx-boombox-common.conf" ]]; then
+      sudo /usr/bin/install -m 0644 \
+        /opt/boombox/current/install/config/nginx-boombox-common.conf \
+        /etc/nginx/snippets/boombox-common.conf
+      sudo /usr/sbin/nginx -t
+    fi
     ;;
 
   restart)
@@ -124,6 +134,7 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
+      boombox-remote
     )
     for u in "${units[@]}"; do
       systemctl --user restart "$u.service" || true
@@ -137,6 +148,7 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
+      boombox-remote
     )
     while (( $(date +%s) < deadline )); do
       ok=1
@@ -169,6 +181,7 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
+      boombox-remote
     )
     for u in "${units[@]}"; do
       systemctl --user restart "$u.service" || true
