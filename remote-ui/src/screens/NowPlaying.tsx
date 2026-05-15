@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useRemote } from "../state/store";
 import { IconButton } from "../components/IconButton";
 
@@ -11,7 +12,11 @@ export function NowPlaying() {
   const { state, command } = useRemote();
   const track = state?.track ?? null;
   const playing = state?.playing ?? false;
-  const volume = state?.volume ?? 0;
+  const liveVolume = state?.volume ?? 0;
+  const [pendingVolume, setPendingVolume] = useState<number | null>(null);
+  // Clear the optimistic override whenever a fresh state push arrives.
+  useEffect(() => { setPendingVolume(null); }, [liveVolume]);
+  const volume = pendingVolume ?? liveVolume;
 
   return (
     <div style={{
@@ -76,7 +81,11 @@ export function NowPlaying() {
         <input
           aria-label="Volume"
           type="range" min={0} max={100} value={volume}
-          onChange={(e) => command("volume", Number(e.target.value))}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            setPendingVolume(n);
+            command("volume", n);
+          }}
           style={{ flex: 1, accentColor: "var(--accent)" }}
         />
         <span style={{ fontFamily: "var(--mono)", fontSize: 13,

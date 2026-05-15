@@ -61,6 +61,22 @@ describe("NowPlaying", () => {
     expect(command).toHaveBeenCalledWith("volume", 80);
   });
 
+  it("volume slider tracks user input optimistically (no snap-back during a drag)", () => {
+    const command = vi.fn().mockResolvedValue({ ok: true });
+    render(
+      <RemoteContextHarness state={playing} command={command}>
+        <NowPlaying />
+      </RemoteContextHarness>,
+    );
+    // playing.volume = 65 initially; user drags to 80.
+    const slider = screen.getByLabelText(/volume/i) as HTMLInputElement;
+    expect(slider.value).toBe("65");
+    fireEvent.change(slider, { target: { value: "80" } });
+    // No state push has arrived yet → the slider must reflect the user's input,
+    // not snap back to 65.
+    expect(slider.value).toBe("80");
+  });
+
   it("shows a placeholder when nothing is playing", () => {
     const idle: RemoteState = { ...playing, track: null, playing: false };
     render(
