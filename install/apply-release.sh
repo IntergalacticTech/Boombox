@@ -30,6 +30,7 @@ VENV="$ROOT/.venv"
 REPO_URL="${BOOMBOX_REPO_URL:-https://github.com/IntergalacticTech/Boombox.git}"
 
 log()  { printf '\033[1;36m[apply]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[apply]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[apply]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
@@ -116,12 +117,18 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     # Sync the nginx snippet so source-controlled location blocks (e.g. the
     # /remote/ PWA mount, /api/remote/) land without re-running install.sh.
     # The reload happens in the `restart` step; this just stages the file.
-    # The exact path is required to match the narrow sudoers entry.
+    # The exact path is required to match the narrow sudoers entry. On a
+    # box where install.sh hasn't run since the entry was added, sudo will
+    # refuse — that's fine, the nginx config falls back to whatever
+    # install.sh last staged, and the next install.sh run repairs the path.
     if [[ -f "$CURRENT/install/config/nginx-boombox-common.conf" ]]; then
-      sudo /usr/bin/install -m 0644 \
-        /opt/boombox/current/install/config/nginx-boombox-common.conf \
-        /etc/nginx/snippets/boombox-common.conf
-      sudo /usr/sbin/nginx -t
+      if sudo -n /usr/bin/install -m 0644 \
+           /opt/boombox/current/install/config/nginx-boombox-common.conf \
+           /etc/nginx/snippets/boombox-common.conf 2>/dev/null; then
+        sudo /usr/sbin/nginx -t || warn "nginx -t failed after snippet sync"
+      else
+        warn "sudoers missing nginx-snippet entry; run install.sh once to enable per-deploy nginx sync"
+      fi
     fi
     ;;
 
