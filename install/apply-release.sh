@@ -148,6 +148,7 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     done
     (( ok == 1 )) || fail "user services did not all become active"
     curl -fsS --max-time 5 http://localhost/            >/dev/null || fail "nginx /"
+    curl -fsS --max-time 5 http://localhost/remote/     >/dev/null || fail "/remote/"
     curl -fsS --max-time 5 http://localhost/api/state   >/dev/null || fail "/api/state"
     curl -fsS --max-time 5 http://localhost/api/buttons/ >/dev/null || fail "/api/buttons/"
     ;;
