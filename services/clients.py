@@ -161,7 +161,7 @@ class StateApi:
                   if v}
         try:
             async with self._sess.get(
-                    f"{STATE_BASE}/api/album-art", params=params,
+                    f"{STATE_BASE}/art", params=params,
                     timeout=aiohttp.ClientTimeout(total=4)) as r:
                 if r.status != 200:
                     return None
