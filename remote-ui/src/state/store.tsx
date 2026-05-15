@@ -34,10 +34,13 @@ export function TransportProvider(
     });
     const offStatus = t.onStatus?.((s) => setStatus(s));
     // The transport itself emits "connected" via onStatus on successful
-    // open; we only need to surface a hard-failure here. Avoiding an
-    // unconditional setStatus("connected") in .then() also prevents racing
-    // with a real status push that arrives before connect()'s microtask.
-    t.connect().catch(() => setStatus("error"));
+    // open; we only surface a hard-failure here. Functional setState
+    // ensures we don't clobber a more-specific status (disabled /
+    // unauthorized / unavailable) that the transport pushed synchronously
+    // from onclose before connect()'s reject microtask fires.
+    t.connect().catch(() =>
+      setStatus((cur) => (cur === "connecting" ? "error" : cur)),
+    );
     return () => {
       offState();
       offStatus?.();

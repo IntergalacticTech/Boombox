@@ -79,4 +79,24 @@ describe("TransportProvider / useRemote", () => {
     await act(async () => { pushStatus("disabled"); });
     expect(screen.getByTestId("status").textContent).toBe("disabled");
   });
+
+  it("a rejected connect() does NOT overwrite a more-specific status already pushed", async () => {
+    // Simulate: HttpTransport's onclose(4403) synchronously emits "disabled"
+    // and THEN connect() rejects. Without the functional-setState guard, the
+    // .catch overwrites "disabled" with "error".
+    const { transport, pushStatus } = makeFakeTransport();
+    (transport.connect as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => {
+        pushStatus("disabled");
+        return Promise.reject(new Error("ws closed: 4403"));
+      });
+    render(
+      <TransportProvider transport={transport}>
+        <Probe />
+      </TransportProvider>,
+    );
+    // Wait for the rejected promise's microtask to settle.
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByTestId("status").textContent).toBe("disabled");
+  });
 });
