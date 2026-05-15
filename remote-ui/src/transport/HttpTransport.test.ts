@@ -142,4 +142,48 @@ describe("HttpTransport", () => {
     FakeWS.instances[0]._msg({ ok: true, data: sampleState });
     expect(seen).toHaveLength(0);
   });
+
+  it("non-terminal close schedules a reconnect (idle timeout, etc.)", async () => {
+    vi.useFakeTimers();
+    const t = new HttpTransport("http://pi:8090", "tok");
+    const statuses: string[] = [];
+    t.onStatus((s) => statuses.push(s));
+    const p = t.connect();
+    FakeWS.instances[0]._open();
+    await p;
+    // Idle-timeout style close — generic close code, not 4401/4403.
+    FakeWS.instances[0]._close(1006);
+    expect(statuses).toContain("connecting");
+    // First retry kicks in at 1s; advance and confirm a new socket is born.
+    vi.advanceTimersByTime(1000);
+    expect(FakeWS.instances.length).toBe(2);
+    FakeWS.instances[1]._open();
+    expect(statuses).toContain("connected");
+    vi.useRealTimers();
+  });
+
+  it("terminal close (4401) does NOT schedule a reconnect", async () => {
+    vi.useFakeTimers();
+    const t = new HttpTransport("http://pi:8090", "tok");
+    const p = t.connect();
+    FakeWS.instances[0]._open();
+    await p;
+    FakeWS.instances[0]._close(4401);
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWS.instances.length).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it("disconnect() cancels a pending reconnect", async () => {
+    vi.useFakeTimers();
+    const t = new HttpTransport("http://pi:8090", "tok");
+    const p = t.connect();
+    FakeWS.instances[0]._open();
+    await p;
+    FakeWS.instances[0]._close(1006);    // schedules reconnect
+    t.disconnect();                       // should cancel it
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWS.instances.length).toBe(1);
+    vi.useRealTimers();
+  });
 });
