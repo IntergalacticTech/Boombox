@@ -110,3 +110,73 @@ async def test_search_uses_fts5(client):
     assert r.status == 200
     body = await r.json()
     assert any(i["id"] == "al1" for i in body["results"])
+
+
+@pytest.mark.asyncio
+async def test_browse_albums(client):
+    """Smoke-test the albums browse query (different columns than artists)."""
+    c, ctx, conn = client
+    # Seed an artist first (FK)
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
+                 "VALUES('ar1','ABBA','abba',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,year,"
+                 "song_count,duration_s,is_compilation,navidrome_starred,"
+                 "art_id,updated_at) VALUES('al1','Arrival','arrival','ar1',"
+                 "1976,1,30,0,0,'cover-art-1',0)")
+    r = await c.get("/api/library/browse", params={"type": "albums"})
+    assert r.status == 200
+    body = await r.json()
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["id"] == "al1"
+    assert item["name"] == "Arrival"
+    assert item["year"] == 1976
+    assert item["art_id"] == "cover-art-1"
+
+
+@pytest.mark.asyncio
+async def test_browse_playlists(client):
+    """Smoke-test the playlists browse query."""
+    c, ctx, conn = client
+    conn.execute("INSERT INTO playlists(id,name,song_count,owner,public,"
+                 "updated_at) VALUES('pl1','My Mix',5,'jwc',0,0)")
+    r = await c.get("/api/library/browse", params={"type": "playlists"})
+    assert r.status == 200
+    body = await r.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["name"] == "My Mix"
+    assert body["items"][0]["song_count"] == 5
+
+
+@pytest.mark.asyncio
+async def test_browse_unknown_type_returns_400(client):
+    c, ctx, _ = client
+    r = await c.get("/api/library/browse", params={"type": "garbage"})
+    assert r.status == 400
+    body = await r.json()
+    assert "error" in body
+
+
+@pytest.mark.asyncio
+async def test_source_put_failure_does_not_leak_submitted_password(client, tmp_path):
+    """Defense in depth: when test_source() reports failure, the error
+    message returned to the client must NEVER contain the submitted
+    password. Even if upstream code carelessly str(exception)s an aiohttp
+    error that includes the URL+creds, the API layer should scrub it."""
+    c, ctx, _ = client
+
+    # Override the fake's test_source to simulate a "leaky" upstream
+    # that returns the password in its error message.
+    async def leaky_test(url, username, password):
+        # Pretend an aiohttp error stringified the URL with creds:
+        return (False, f"auth failed: GET http://nav/?p={password}&u={username}")
+    ctx.test_source = leaky_test
+
+    r = await c.put("/api/library/source", json={
+        "url": "http://nav:4533",
+        "username": "u",
+        "password": "supersecret-do-not-leak",
+    })
+    assert r.status == 400
+    body_text = await r.text()
+    assert "supersecret-do-not-leak" not in body_text

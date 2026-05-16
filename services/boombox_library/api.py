@@ -70,7 +70,10 @@ async def _source_put(req: web.Request) -> web.Response:
     )
     ok, msg = await ctx.test_source(new_source.url, new_source.username, new_source.password)
     if not ok:
-        return web.json_response({"ok": False, "error": msg}, status=400)
+        # Defense in depth: never echo the submitted password back, even
+        # if upstream test_source leaked it into its error message.
+        safe_msg = msg.replace(new_source.password, "***") if new_source.password else msg
+        return web.json_response({"ok": False, "error": safe_msg}, status=400)
     ctx.save_config(replace(ctx.cfg, source=new_source))
     await ctx.trigger_sync()
     return web.json_response({"ok": True})
