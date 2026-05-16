@@ -211,6 +211,28 @@ function PlaylistDetail(
     }
   };
 
+  const moveOne = async (from_index: number, to_index: number) => {
+    // Optimistic: splice locally, then send. reload() reconciles.
+    setTracks((prev) => {
+      if (!prev) return prev;
+      const next = prev.slice();
+      const [moved] = next.splice(from_index, 1);
+      const target = Math.max(0, Math.min(next.length, to_index));
+      next.splice(target, 0, moved);
+      return next;
+    });
+    try {
+      await api.post(
+        `api/remote/playlists/${encodeURIComponent(playlist.uri)}/move_item`,
+        { from_index, to_index },
+      );
+      reload();
+    } catch (e: unknown) {
+      setToast(e instanceof ApiError ? `Failed (${e.status})` : "Failed");
+      reload();
+    }
+  };
+
   return (
     <div style={{ padding: 16, paddingBottom: 96 }}>
       <header style={{ display: "flex", alignItems: "center", gap: 8,
@@ -244,9 +266,9 @@ function PlaylistDetail(
       )}
 
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {tracks?.map((t) => (
-          <li key={t.uri} style={{
-            display: "flex", alignItems: "center", gap: 8,
+        {tracks?.map((t, i) => (
+          <li key={`${t.uri}#${i}`} style={{
+            display: "flex", alignItems: "center", gap: 6,
             padding: "10px 4px", borderBottom: "1px solid var(--rule)",
           }}>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -260,6 +282,16 @@ function PlaylistDetail(
                 {[t.artist, t.album].filter(Boolean).join(" · ") || t.uri}
               </div>
             </div>
+            <button type="button"
+                    aria-label={`Move ${t.title ?? t.uri} up`}
+                    disabled={i === 0}
+                    onClick={() => moveOne(i, i - 1)}
+                    style={miniIconBtn}>▲</button>
+            <button type="button"
+                    aria-label={`Move ${t.title ?? t.uri} down`}
+                    disabled={i === (tracks?.length ?? 0) - 1}
+                    onClick={() => moveOne(i, i + 1)}
+                    style={miniIconBtn}>▼</button>
             <button type="button"
                     aria-label={`Play ${t.title ?? t.uri}`}
                     onClick={() => playOne(t.uri, t.title ?? t.uri)}
@@ -288,6 +320,12 @@ const iconBtn: React.CSSProperties = {
   width: 32, height: 32, borderRadius: 16,
   border: "1px solid var(--rule)", background: "var(--panel)",
   color: "var(--ink2)", cursor: "pointer", fontSize: 16, lineHeight: 1,
+};
+const miniIconBtn: React.CSSProperties = {
+  width: 28, height: 32, borderRadius: 6,
+  border: "1px solid var(--rule)", background: "var(--panel)",
+  color: "var(--ink2)", cursor: "pointer", fontSize: 10, lineHeight: 1,
+  padding: 0,
 };
 const rowBtn: React.CSSProperties = {
   background: "transparent", border: 0, color: "var(--ink)",
