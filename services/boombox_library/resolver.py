@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from sqlite3 import Connection
 from typing import Optional
+from urllib.parse import quote
 
 
 class PlaybackSource(str, Enum):
@@ -41,9 +42,13 @@ def resolve_playback(conn: Connection, track_id: str, online: bool) -> PlaybackR
     ).fetchone()
 
     if row is not None and row["status"] == "present" and row["local_path"]:
+        # file:// URI plays through Mopidy's bundled stream backend (GStreamer
+        # filesrc) — independent of Mopidy-Local's index. urllib.parse.quote
+        # handles paths with spaces, unicode, #, ?, % correctly.
+        quoted = quote(row["local_path"], safe="/")
         return PlaybackResolution(
             source=PlaybackSource.CACHE,
-            uri=f"local:track:{row['local_path']}",
+            uri=f"file://{quoted}",
             cache_status="present",
         )
 
