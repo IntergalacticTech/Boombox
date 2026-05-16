@@ -1,6 +1,7 @@
 """Tests for boombox_library.config — YAML config + Fernet password encryption."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -75,3 +76,31 @@ def test_machine_id_derived_key_stable(monkeypatch):
     k2 = _derive_key()
     assert k1 == k2  # deterministic per machine
     assert len(k1) == 44  # Fernet base64 key length
+
+
+def test_source_config_repr_does_not_leak_password():
+    """Defense in depth: even if someone logs the config dataclass, the
+    password must not appear in its string repr."""
+    s = SourceConfig(url="http://x", username="u", password="hunter2")
+    text = repr(s)
+    assert "hunter2" not in text
+    assert "url='http://x'" in text or "url=" in text
+    assert "username='u'" in text or "username=" in text
+
+
+def test_save_config_fsyncs_before_rename(tmp_path: Path, monkeypatch):
+    """fsync the temp file before os.replace, so power-loss can't leave
+    a renamed-but-empty file. We can't truly observe fsync, but we can
+    verify save_config calls os.fsync on the tmp file's fd."""
+    monkeypatch.setattr("boombox_library.config._machine_id",
+                        lambda: "deadbeef" * 4)
+
+    fsync_calls: list[int] = []
+    real_fsync = os.fsync
+    def fake_fsync(fd):
+        fsync_calls.append(fd)
+        return real_fsync(fd)
+    monkeypatch.setattr("boombox_library.config.os.fsync", fake_fsync)
+
+    save_config(DEFAULT_CONFIG, path=tmp_path / "library.yml")
+    assert len(fsync_calls) >= 1, "save_config must call os.fsync on the tmp file"

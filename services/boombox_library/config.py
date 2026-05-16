@@ -13,7 +13,7 @@ import base64
 import hashlib
 import os
 import yaml
-from dataclasses import dataclass, asdict, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -27,7 +27,9 @@ _KEY_SALT = b"boombox-library-v1"
 class SourceConfig:
     url: str = ""
     username: str = ""
-    password: str = ""  # plaintext in-memory; encrypted on disk
+    # plaintext in-memory; encrypted on disk. repr=False so accidental
+    # log.debug(cfg) or print() can never leak the password.
+    password: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True)
@@ -144,5 +146,9 @@ def save_config(cfg: LibraryConfig, path: Path = CONFIG_PATH) -> None:
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(yaml.safe_dump(out, sort_keys=False))
+    payload = yaml.safe_dump(out, sort_keys=False)
+    with tmp.open("w") as fh:
+        fh.write(payload)
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, path)
