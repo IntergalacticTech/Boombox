@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApi, ApiError } from "../lib/api";
 
 interface Track {
@@ -34,6 +34,10 @@ export function Search() {
   const [toast, setToast] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
+  // Track the in-flight query so a rapid-fire type doesn't let an
+  // earlier slower response overwrite a later one when it finally lands.
+  const reqSeqRef = useRef(0);
+
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault();
     const term = q.trim();
@@ -41,15 +45,37 @@ export function Search() {
     setBusy(true);
     setErr(null);
     setSelected(new Set());
+    const mySeq = ++reqSeqRef.current;
     api
       .get<{ ok: boolean; tracks: Track[] }>(
         `api/remote/library/search?q=${encodeURIComponent(term)}&field=${field}`,
       )
-      .then((r) => setTracks(r.tracks))
-      .catch((e: unknown) =>
-        setErr(e instanceof ApiError ? `${e.status}` : "failed"))
-      .finally(() => setBusy(false));
+      .then((r) => {
+        if (mySeq !== reqSeqRef.current) return; // stale
+        setTracks(r.tracks);
+      })
+      .catch((e: unknown) => {
+        if (mySeq !== reqSeqRef.current) return;
+        setErr(e instanceof ApiError ? `${e.status}` : "failed");
+      })
+      .finally(() => {
+        if (mySeq !== reqSeqRef.current) return;
+        setBusy(false);
+      });
   };
+
+  // Debounce typed input. 400 ms after the user stops typing (or changes
+  // the field), auto-submit. The explicit Go button stays for users who
+  // want to commit without waiting.
+  useEffect(() => {
+    const term = q.trim();
+    if (!term) { setTracks(null); return; }
+    const t = window.setTimeout(() => submit(), 400);
+    return () => window.clearTimeout(t);
+    // submit reads q + field from closure; depending on q + field is
+    // exactly what we want.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, field]);
 
   const toggleSelected = (uri: string) => {
     setSelected((s) => {
