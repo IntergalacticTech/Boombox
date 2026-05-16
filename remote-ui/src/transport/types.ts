@@ -2,6 +2,7 @@
 // Mirrors StateAggregator.consolidated_state() in services/boombox-remote.py.
 
 export interface Track {
+  uri?: string | null;
   title: string | null;
   artist: string | null;
   album: string | null;
