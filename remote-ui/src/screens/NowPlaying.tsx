@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useRemote } from "../state/store";
+import { useApi } from "../lib/api";
 import { IconButton } from "../components/IconButton";
 import { QueueView } from "../components/QueueView";
+import { Visualizer } from "../components/Visualizer";
 
 function mmss(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
@@ -19,6 +21,7 @@ const SOURCE_LABELS: Record<string, string> = {
 /** The core remote: album art, current track, transport controls, volume. */
 export function NowPlaying() {
   const { state, command } = useRemote();
+  const api = useApi();
   const track = state?.track ?? null;
   const playing = state?.playing ?? false;
   const liveVolume = state?.volume ?? 0;
@@ -240,6 +243,11 @@ export function NowPlaying() {
           {state?.repeat === "one" ? "🔂" : "🔁"}
         </IconButton>
       </div>
+
+      {/* Live spectrum from boombox-audio's /audio/ws. Only enabled
+          while audio is playing — otherwise we'd waste a WS connection
+          and animate noise. */}
+      <Visualizer base={api.base} enabled={playing} />
 
       {/* The queue refreshes whenever the current track or play state
           changes — every state push from the boombox bumps a counter so

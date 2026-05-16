@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApi, ApiError } from "../lib/api";
+import { useDragSort } from "../lib/dragSort";
 
 interface QueueRow {
   tlid: number;
@@ -80,6 +81,13 @@ export function QueueView({ refreshKey }: { refreshKey: number }) {
     load();
   };
 
+  const moveByIndex = (from: number, to: number) => {
+    const r = rows?.[from];
+    if (!r) return;
+    void move(r.tlid, to);
+  };
+  const drag = useDragSort(rows?.length ?? 0, moveByIndex);
+
   const saveAsPlaylist = async () => {
     if (!rows || rows.length === 0) return;
     const name = window.prompt(
@@ -127,7 +135,8 @@ export function QueueView({ refreshKey }: { refreshKey: number }) {
           Nothing queued.
         </div>
       )}
-      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0,
+                    position: "relative" }}>
         {rows?.map((t, i) => (
           <li key={t.tlid} style={{
             display: "flex", alignItems: "center", gap: 6,
@@ -135,7 +144,15 @@ export function QueueView({ refreshKey }: { refreshKey: number }) {
             background: t.playing ? "var(--panel)" : "transparent",
             borderRadius: t.playing ? 6 : 0,
             opacity: busyTlid === t.tlid ? 0.5 : 1,
+            ...drag.rowStyle(i),
           }}>
+            <span {...drag.handleProps(i)}
+                  role="button"
+                  aria-label={`Drag ${t.title ?? t.uri} to reorder`}
+                  style={{ ...drag.handleProps(i).style,
+                           width: 16, color: "var(--ink2)",
+                           fontSize: 14, textAlign: "center",
+                           userSelect: "none" }}>≡</span>
             <span style={{ width: 12, color: "var(--accent)",
                            fontSize: 12, textAlign: "center" }}>
               {t.playing ? "▶" : ""}

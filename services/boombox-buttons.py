@@ -400,7 +400,8 @@ async def main() -> None:
 
         dispatcher_ref = [dispatcher]
         learn_state: dict = {"action": None, "until": 0, "result": None}
-        api_runner = await _http_api(cfg_ref, dispatcher_ref, learn_state)
+        api_runner = await _http_api(cfg_ref, dispatcher_ref, learn_state,
+                                      sleep_t)
 
         # Wrap the loop so we can rebuild it on config change.
         from watchdog.observers import Observer
@@ -484,7 +485,8 @@ from aiohttp import web
 BUTTONS_API_PORT = 6684
 
 
-async def _http_api(cfg_ref: list, dispatcher_ref: list, learn_state: dict) -> web.AppRunner:
+async def _http_api(cfg_ref: list, dispatcher_ref: list, learn_state: dict,
+                    sleep_t: "SleepTimer") -> web.AppRunner:
     """cfg_ref and dispatcher_ref are single-element lists so the handlers
     can mutate them when the config hot-reloads.
 
@@ -527,11 +529,30 @@ async def _http_api(cfg_ref: list, dispatcher_ref: list, learn_state: dict) -> w
         await dispatcher_ref[0].dispatch(action, event)
         return web.json_response({"ok": True})
 
+    # Sleep timer is shared across remote clients (PWA, CYD) and the
+    # physical button. Expose the same SleepTimer instance over HTTP so
+    # everyone reads/writes the same state instead of running parallel
+    # timers that drift apart.
+    async def get_sleep(_req):
+        return web.json_response({"minutes": sleep_t.active_minutes})
+
+    async def post_sleep_press(_req):
+        t_ms = int(asyncio.get_running_loop().time() * 1000)
+        mins = await sleep_t.press(t_ms)
+        return web.json_response({"minutes": mins})
+
+    async def post_sleep_cancel(_req):
+        await sleep_t.cancel()
+        return web.json_response({"minutes": None})
+
     app = web.Application()
     app.router.add_get("/config", get_config)
     app.router.add_post("/config", post_config)
     app.router.add_post("/learn", post_learn)
     app.router.add_post("/test", post_test)
+    app.router.add_get("/sleep", get_sleep)
+    app.router.add_post("/sleep/press", post_sleep_press)
+    app.router.add_post("/sleep/cancel", post_sleep_cancel)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", BUTTONS_API_PORT)

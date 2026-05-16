@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useApi, ApiError } from "../lib/api";
 import { SkeletonRows } from "../components/Skeleton";
+import { useDragSort } from "../lib/dragSort";
 
 interface Playlist {
   name: string;
@@ -210,6 +211,9 @@ function PlaylistDetail(
     }
   };
 
+  const drag = useDragSort(tracks?.length ?? 0,
+                            (from, to) => { void moveOne(from, to); });
+
   const moveOne = async (from_index: number, to_index: number) => {
     // Optimistic: splice locally, then send. reload() reconciles.
     setTracks((prev) => {
@@ -269,7 +273,15 @@ function PlaylistDetail(
           <li key={`${t.uri}#${i}`} style={{
             display: "flex", alignItems: "center", gap: 6,
             padding: "10px 4px", borderBottom: "1px solid var(--rule)",
+            ...drag.rowStyle(i),
           }}>
+            <span {...drag.handleProps(i)}
+                  role="button"
+                  aria-label={`Drag ${t.title ?? t.uri} to reorder`}
+                  style={{ ...drag.handleProps(i).style,
+                           width: 18, color: "var(--ink2)",
+                           fontSize: 16, textAlign: "center",
+                           userSelect: "none" }}>≡</span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 15, overflow: "hidden",
                             textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
