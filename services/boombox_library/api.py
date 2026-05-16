@@ -1,0 +1,117 @@
+"""HTTP surface for boombox-library (mounted at :6687, proxied via nginx
+under /api/library/).
+
+The app needs a Context object supplied by the service entry point.
+Context exposes the DB connection, config, cache drive state, and a few
+async hooks (test_source, trigger_sync, is_online) so the API doesn't
+hard-depend on the runtime wiring (keeps tests fast).
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import replace
+from typing import Protocol
+
+from aiohttp import web
+
+from . import __version__
+from .config import LibraryConfig, SourceConfig
+
+log = logging.getLogger("boombox-library.api")
+
+
+class Context(Protocol):
+    conn: object  # sqlite3.Connection
+    cfg: LibraryConfig
+
+    async def is_online(self) -> bool: ...
+    async def trigger_sync(self) -> None: ...
+    def cache_drive_state(self): ...
+    def save_config(self, cfg: LibraryConfig) -> None: ...
+    async def test_source(self, url: str, username: str, password: str) -> tuple[bool, str]: ...
+
+
+def build_app(ctx: Context) -> web.Application:
+    app = web.Application()
+    app["ctx"] = ctx
+    app.router.add_get("/api/library/health", _health)
+    app.router.add_get("/api/library/source", _source_get)
+    app.router.add_put("/api/library/source", _source_put)
+    app.router.add_post("/api/library/source/test", _source_test)
+    app.router.add_get("/api/library/browse", _browse)
+    app.router.add_get("/api/library/search", _search)
+    return app
+
+
+async def _health(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    drive = ctx.cache_drive_state()
+    return web.json_response({
+        "service_version": __version__,
+        "navidrome_reachable": await ctx.is_online(),
+        "cache_present": bool(drive and drive.present) if drive else False,
+        "cache_mount": str(drive.mount_path) if drive and drive.mount_path else None,
+    })
+
+
+async def _source_get(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    s = ctx.cfg.source
+    return web.json_response({"url": s.url, "username": s.username})
+
+
+async def _source_put(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    body = await req.json()
+    new_source = SourceConfig(
+        url=body.get("url", ""),
+        username=body.get("username", ""),
+        password=body.get("password", ""),
+    )
+    ok, msg = await ctx.test_source(new_source.url, new_source.username, new_source.password)
+    if not ok:
+        return web.json_response({"ok": False, "error": msg}, status=400)
+    ctx.save_config(replace(ctx.cfg, source=new_source))
+    await ctx.trigger_sync()
+    return web.json_response({"ok": True})
+
+
+async def _source_test(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    body = await req.json()
+    ok, msg = await ctx.test_source(
+        body.get("url", ""), body.get("username", ""), body.get("password", ""),
+    )
+    return web.json_response({"ok": ok, "error": msg if not ok else ""})
+
+
+_BROWSE_QUERIES = {
+    "artists": "SELECT id, name, album_count, art_id FROM artists ORDER BY sort_name",
+    "albums": "SELECT id, name, artist_id, year, art_id FROM albums ORDER BY sort_name",
+    "playlists": "SELECT id, name, song_count FROM playlists ORDER BY name",
+}
+
+
+async def _browse(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    t = req.query.get("type", "artists")
+    sql = _BROWSE_QUERIES.get(t)
+    if not sql:
+        return web.json_response({"error": f"unknown type {t}"}, status=400)
+    rows = list(ctx.conn.execute(sql))
+    return web.json_response({"items": [dict(r) for r in rows]})
+
+
+async def _search(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    q = req.query.get("q", "").strip()
+    if not q:
+        return web.json_response({"results": []})
+    # FTS5 MATCH; escape double-quote inside q
+    safe = q.replace('"', '""')
+    rows = list(ctx.conn.execute(
+        "SELECT content_type, id, title FROM search_index "
+        "WHERE search_index MATCH ? LIMIT 200",
+        (f'"{safe}"',),
+    ))
+    return web.json_response({"results": [dict(r) for r in rows]})
