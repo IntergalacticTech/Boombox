@@ -208,6 +208,13 @@ export function Search() {
         }}>Error: {err}</div>
       )}
 
+      {tracks === null && !busy && (
+        <div style={{ color: "var(--ink2)", fontSize: 13,
+                       padding: "24px 4px", textAlign: "center" }}>
+          Type a query and tap Go. Use the field chips above to scope to
+          Artist, Album, or Track.
+        </div>
+      )}
       {tracks && tracks.length === 0 && (
         <div style={{ color: "var(--ink2)", padding: "16px 4px" }}>
           No results.
@@ -344,7 +351,9 @@ const primaryBtn: React.CSSProperties = {
   fontSize: 14, fontWeight: 600, cursor: "pointer",
 };
 const smallBtn: React.CSSProperties = {
-  padding: "6px 10px", borderRadius: 6,
+  // Larger min height (44px iOS HIG target) so transport buttons are
+  // pleasant to tap. Width grows with content to avoid cramped icons.
+  minHeight: 36, padding: "8px 12px", borderRadius: 8,
   border: "1px solid var(--rule)", background: "var(--panel)",
-  color: "var(--ink)", fontSize: 13, cursor: "pointer",
+  color: "var(--ink)", fontSize: 14, cursor: "pointer",
 };

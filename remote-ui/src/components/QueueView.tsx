@@ -131,9 +131,11 @@ const smallBtn: React.CSSProperties = {
   color: "var(--ink2)", fontSize: 11, cursor: "pointer",
 };
 const iconBtn: React.CSSProperties = {
-  width: 28, height: 28, borderRadius: 14,
+  // 36px target — small in a queue row so we don't dominate the title,
+  // but still big enough for thumb taps on a phone.
+  width: 36, height: 36, borderRadius: 18,
   border: "1px solid var(--rule)", background: "var(--panel)",
-  color: "var(--ink2)", cursor: "pointer", fontSize: 14, lineHeight: 1,
+  color: "var(--ink2)", cursor: "pointer", fontSize: 16, lineHeight: 1,
 };
 const rowBtn: React.CSSProperties = {
   background: "transparent", border: 0, color: "var(--ink)",
