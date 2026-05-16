@@ -40,6 +40,21 @@ export function NowPlaying() {
   useEffect(() => { setQueueRefreshKey((k) => k + 1); },
             [trackTitle, playingFlag]);
 
+  // Seek bar — same optimistic pattern as volume. Hold the user's drag
+  // position locally, send on release, clear when the next state push
+  // confirms (which usually arrives within a second of `seek`).
+  const livePosition = state?.track?.position_s ?? 0;
+  const [pendingPosition, setPendingPosition] = useState<number | null>(null);
+  useEffect(() => { setPendingPosition(null); }, [livePosition]);
+  const commitSeek = (secs: number) => {
+    command("seek", secs);
+    // Hold pendingPosition for ~1s longer so the state push from the
+    // server-side seek doesn't snap the slider back to its pre-seek value
+    // during the round-trip.
+    setPendingPosition(secs);
+    window.setTimeout(() => setPendingPosition(null), 1200);
+  };
+
   const pickSource = (s: string) => {
     command("source", s);
     // Most source handlers navigate or overlay the kiosk Chromium — the
@@ -112,7 +127,7 @@ export function NowPlaying() {
           : <span style={{ color: "var(--ink2)", fontSize: 13 }}>no art</span>}
       </div>
 
-      <div style={{ textAlign: "center", minHeight: 64 }}>
+      <div style={{ textAlign: "center", minHeight: 64, width: "100%" }}>
         {track
           ? <>
               <div style={{ fontSize: 22, fontWeight: 800 }}>
@@ -121,11 +136,36 @@ export function NowPlaying() {
               <div style={{ color: "var(--ink2)", marginTop: 4 }}>
                 {[track.artist, track.album].filter(Boolean).join(" · ") || " "}
               </div>
-              <div style={{
-                color: "var(--ink2)", fontFamily: "var(--mono)",
-                fontSize: 13, marginTop: 6,
-              }}>
-                {mmss(track.position_s)} / {mmss(track.duration_s)}
+              <div style={{ marginTop: 8, display: "flex",
+                            alignItems: "center", gap: 8,
+                            fontFamily: "var(--mono)", fontSize: 12,
+                            color: "var(--ink2)" }}>
+                <span style={{ width: 38, textAlign: "right" }}>
+                  {mmss(pendingPosition ?? track.position_s)}
+                </span>
+                <input
+                  aria-label="Seek"
+                  type="range" min={0}
+                  max={Math.max(1, track.duration_s)}
+                  step={1}
+                  value={pendingPosition ?? track.position_s}
+                  onChange={(e) =>
+                    setPendingPosition(Number(e.target.value))}
+                  onMouseUp={(e) => commitSeek(
+                    Number((e.target as HTMLInputElement).value))}
+                  onTouchEnd={(e) => commitSeek(
+                    Number((e.target as HTMLInputElement).value))}
+                  onKeyUp={(e) => {
+                    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                      commitSeek(Number((e.target as HTMLInputElement).value));
+                    }
+                  }}
+                  style={{ flex: 1, accentColor: "var(--accent)" }}
+                  disabled={!track.duration_s}
+                />
+                <span style={{ width: 38, textAlign: "left" }}>
+                  {mmss(track.duration_s)}
+                </span>
               </div>
             </>
           : <div style={{ color: "var(--ink2)", fontSize: 16 }}>

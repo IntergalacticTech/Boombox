@@ -344,15 +344,33 @@ async def shutdown_sequence(mopidy: MopidyRpc, state: StateApi, kiosk: KioskClie
 
 @_handler("volume")
 async def _h_volume(d: Dispatcher, value=None):
-    """Set absolute volume from a percent (0-100). State API uses a fraction
-    (0..1.5, where 1.0=100% and >1.0 is boost), so we divide by 100 here."""
+    """Set absolute volume. Accepts both conventions for compatibility:
+    - 0..1 floats (the PWA's slider scale, matches the StateApi response)
+    - 0..100 percents (the CYD firmware sends these from its encoder)
+    Heuristic: anything > 1 is treated as a percent."""
     if d.state is None or value is None:
         return
     try:
-        pct = float(value)
+        v = float(value)
     except (TypeError, ValueError):
         return
-    await d.state.volume_set(max(0.0, min(1.0, pct / 100.0)))
+    fraction = v if v <= 1.0 else v / 100.0
+    await d.state.volume_set(max(0.0, min(1.0, fraction)))
+
+
+@_handler("seek")
+async def _h_seek(d: Dispatcher, value=None):
+    """Absolute seek to `value` seconds. The PWA's seek-bar drag passes
+    the float seconds matching state.track.position_s. Mopidy's seek
+    takes milliseconds, so we convert."""
+    if d.mopidy is None or value is None:
+        return
+    try:
+        secs = float(value)
+    except (TypeError, ValueError):
+        return
+    pos_ms = max(0, int(secs * 1000))
+    await d.mopidy.call("core.playback.seek", {"time_position": pos_ms})
 
 
 # Volume delta — read current, ±5% step, mirrors the GPIO encoder logic.
