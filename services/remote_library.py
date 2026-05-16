@@ -111,10 +111,83 @@ def _make_handlers(mopidy):
         uri = request.match_info["uri"]
         res = await mopidy.call("core.playlists.get_items", {"uri": uri})
         items = res.get("result") or []
+        # Resolve to track summaries so the playlist detail view can render
+        # title/artist/album without a second round-trip.
+        uris = [it.get("uri") for it in items if it.get("uri")]
+        if not uris:
+            return web.json_response({"ok": True, "uris": [], "tracks": []})
+        lookups = await mopidy.call("core.library.lookup", {"uris": uris})
+        by_uri = lookups.get("result") or {}
+        tracks: list[dict] = []
+        for u in uris:
+            ts = by_uri.get(u) or []
+            if ts:
+                tracks.append(_track_summary(ts[0]))
+            else:
+                # Mopidy doesn't always resolve URIs (e.g. a stale m3u
+                # entry whose file went missing). Surface a stub so the
+                # row still renders and the user can remove it.
+                tracks.append({"uri": u, "title": None, "artist": None,
+                               "album": None, "duration_s": 0})
         return web.json_response({
-            "ok": True,
-            "uris": [it.get("uri") for it in items if it.get("uri")],
+            "ok": True, "uris": uris, "tracks": tracks,
         })
+
+    async def playlist_append(request: web.Request) -> web.Response:
+        """Append URIs to an existing playlist. Mopidy doesn't expose an
+        atomic append — we lookup, splice, and save. Lossy under concurrent
+        edits from another client, but that's a rare two-remote race."""
+        target = request.match_info["uri"]
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid_json"},
+                                     status=400)
+        new_uris = (body or {}).get("uris") if isinstance(body, dict) else None
+        if not isinstance(new_uris, list) or not new_uris:
+            return web.json_response({"ok": False, "error": "uris_required"},
+                                     status=400)
+        looked = await mopidy.call("core.playlists.lookup", {"uri": target})
+        playlist = looked.get("result")
+        if not playlist:
+            return web.json_response({"ok": False, "error": "not_found"},
+                                     status=404)
+        existing = playlist.get("tracks") or []
+        playlist["tracks"] = existing + [{"uri": u} for u in new_uris]
+        saved = (await mopidy.call(
+            "core.playlists.save", {"playlist": playlist})).get("result")
+        if not saved:
+            return web.json_response({"ok": False, "error": "save_failed"},
+                                     status=502)
+        return web.json_response({"ok": True, "added": len(new_uris)})
+
+    async def playlist_remove_item(request: web.Request) -> web.Response:
+        """Remove a single track URI from a playlist. Same lookup-splice-save
+        pattern as append. Removes ALL occurrences of the URI."""
+        target = request.match_info["uri"]
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid_json"},
+                                     status=400)
+        drop_uri = (body or {}).get("uri") if isinstance(body, dict) else None
+        if not isinstance(drop_uri, str) or not drop_uri:
+            return web.json_response({"ok": False, "error": "uri_required"},
+                                     status=400)
+        looked = await mopidy.call("core.playlists.lookup", {"uri": target})
+        playlist = looked.get("result")
+        if not playlist:
+            return web.json_response({"ok": False, "error": "not_found"},
+                                     status=404)
+        existing = playlist.get("tracks") or []
+        playlist["tracks"] = [t for t in existing if t.get("uri") != drop_uri]
+        saved = (await mopidy.call(
+            "core.playlists.save", {"playlist": playlist})).get("result")
+        if not saved:
+            return web.json_response({"ok": False, "error": "save_failed"},
+                                     status=502)
+        return web.json_response(
+            {"ok": True, "removed": len(existing) - len(playlist["tracks"])})
 
     async def queue(request: web.Request) -> web.Response:
         try:
@@ -209,15 +282,15 @@ def _make_handlers(mopidy):
 
     return (search, list_playlists, create_playlist, playlist_items, queue,
             rescan, browse, lookup, queue_list, queue_jump, queue_remove,
-            queue_clear)
+            queue_clear, playlist_append, playlist_remove_item)
 
 
 def add_routes(app: web.Application, mopidy) -> None:
     """Register library/playlist/queue routes. `mopidy` is a
     clients.MopidyRpc (or any object with an async .call(method, params))."""
     (search, list_pls, create_pl, pl_items, queue, rescan, browse, lookup,
-     queue_list, queue_jump, queue_remove, queue_clear) = _make_handlers(
-        mopidy)
+     queue_list, queue_jump, queue_remove, queue_clear,
+     playlist_append, playlist_remove_item) = _make_handlers(mopidy)
     app.router.add_get("/api/remote/library/search", search)
     app.router.add_get("/api/remote/library/browse", browse)
     app.router.add_get("/api/remote/library/lookup", lookup)
@@ -225,6 +298,9 @@ def add_routes(app: web.Application, mopidy) -> None:
     app.router.add_get("/api/remote/playlists", list_pls)
     app.router.add_post("/api/remote/playlists", create_pl)
     app.router.add_get("/api/remote/playlists/{uri}/items", pl_items)
+    app.router.add_post("/api/remote/playlists/{uri}/append", playlist_append)
+    app.router.add_post("/api/remote/playlists/{uri}/remove_item",
+                        playlist_remove_item)
     app.router.add_post("/api/remote/queue", queue)
     app.router.add_get("/api/remote/queue", queue_list)
     app.router.add_post("/api/remote/queue/jump", queue_jump)

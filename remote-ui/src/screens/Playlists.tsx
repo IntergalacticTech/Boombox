@@ -6,16 +6,24 @@ interface Playlist {
   uri: string;
 }
 
-/** Playlist list + open-to-play. Each row shows the playlist name and a
- *  ▶ button that resolves its tracks via /playlists/{uri}/items and queues
- *  them. Creating a playlist from search results lives on the Search tab
- *  (sibling deploy) — this screen is intentionally focused on consumption. */
+interface PlaylistTrack {
+  uri: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  duration_s: number;
+}
+
+/** Playlist list + drill-into-detail. Tapping the row body drills in;
+ *  the ▶ on each row queues + plays the whole playlist immediately.
+ *  Creation lives on the Search tab ("Save as playlist"). */
 export function Playlists() {
   const api = useApi();
   const [playlists, setPlaylists] = useState<Playlist[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Playlist | null>(null);
 
   const reload = () => {
     setBusy(true);
@@ -47,6 +55,11 @@ export function Playlists() {
     }
   };
 
+  if (detail) {
+    return <PlaylistDetail playlist={detail}
+                            onBack={() => { setDetail(null); reload(); }} />;
+  }
+
   return (
     <div style={{ padding: 16, paddingBottom: 96 }}>
       <header style={{ display: "flex", justifyContent: "space-between",
@@ -57,16 +70,12 @@ export function Playlists() {
       </header>
 
       {toast && (
-        <div role="status" style={{
-          padding: "8px 12px", marginBottom: 12, borderRadius: 8,
-          background: "var(--panel)", color: "var(--ink2)", fontSize: 13,
-        }}>{toast}</div>
+        <div role="status" style={banner}>{toast}</div>
       )}
       {err && (
-        <div role="alert" style={{
-          padding: "8px 12px", marginBottom: 12, borderRadius: 8,
-          background: "var(--panel)", color: "var(--accent2)", fontSize: 13,
-        }}>Error: {err}</div>
+        <div role="alert" style={{ ...banner, color: "var(--accent2)" }}>
+          Error: {err}
+        </div>
       )}
 
       {busy && !playlists && (
@@ -84,7 +93,10 @@ export function Playlists() {
             display: "flex", alignItems: "center", gap: 8,
             padding: "10px 4px", borderBottom: "1px solid var(--rule)",
           }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <button type="button"
+                    onClick={() => setDetail(p)}
+                    aria-label={`Open ${p.name || "playlist"}`}
+                    style={{ ...rowBtn, flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 15, overflow: "hidden",
                             textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {p.name || "Untitled"}
@@ -95,7 +107,7 @@ export function Playlists() {
                             whiteSpace: "nowrap" }}>
                 {p.uri}
               </div>
-            </div>
+            </button>
             <button type="button" aria-label={`Play ${p.name || "playlist"}`}
                     onClick={() => playList(p)} style={smallBtn}>▶</button>
           </li>
@@ -105,8 +117,141 @@ export function Playlists() {
   );
 }
 
+function PlaylistDetail(
+  { playlist, onBack }: { playlist: Playlist; onBack: () => void },
+) {
+  const api = useApi();
+  const [tracks, setTracks] = useState<PlaylistTrack[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const reload = () => {
+    setBusy(true);
+    setErr(null);
+    api
+      .get<{ ok: boolean; tracks: PlaylistTrack[] }>(
+        `api/remote/playlists/${encodeURIComponent(playlist.uri)}/items`,
+      )
+      .then((r) => setTracks(r.tracks))
+      .catch((e: unknown) =>
+        setErr(e instanceof ApiError ? `${e.status}` : "failed"))
+      .finally(() => setBusy(false));
+  };
+  useEffect(reload, [playlist.uri]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const playOne = async (uri: string, label: string) => {
+    setToast(null);
+    try {
+      await api.post("api/remote/queue", { uris: [uri], play: true });
+      setToast(`Playing: ${label}`);
+    } catch (e: unknown) {
+      setToast(e instanceof ApiError ? `Failed (${e.status})` : "Failed");
+    }
+  };
+
+  const playAll = async () => {
+    if (!tracks || tracks.length === 0) return;
+    setToast(null);
+    try {
+      await api.post("api/remote/queue",
+                     { uris: tracks.map((t) => t.uri), play: true });
+      setToast(`Playing ${tracks.length} track(s).`);
+    } catch (e: unknown) {
+      setToast(e instanceof ApiError ? `Failed (${e.status})` : "Failed");
+    }
+  };
+
+  const removeOne = async (uri: string) => {
+    setToast(null);
+    try {
+      await api.post(
+        `api/remote/playlists/${encodeURIComponent(playlist.uri)}/remove_item`,
+        { uri },
+      );
+      setToast("Removed.");
+      reload();
+    } catch (e: unknown) {
+      setToast(e instanceof ApiError ? `Failed (${e.status})` : "Failed");
+    }
+  };
+
+  return (
+    <div style={{ padding: 16, paddingBottom: 96 }}>
+      <header style={{ display: "flex", alignItems: "center", gap: 8,
+                       marginBottom: 12 }}>
+        <button type="button" onClick={onBack} style={iconBtn}
+                aria-label="Back">‹</button>
+        <h2 style={{ margin: 0, fontSize: 20, flex: 1, minWidth: 0,
+                     overflow: "hidden", textOverflow: "ellipsis",
+                     whiteSpace: "nowrap" }}>
+          {playlist.name}
+        </h2>
+        <button type="button" onClick={playAll}
+                disabled={!tracks || tracks.length === 0}
+                style={smallBtn}>▶ Play all</button>
+      </header>
+
+      {toast && <div role="status" style={banner}>{toast}</div>}
+      {err && <div role="alert" style={{ ...banner, color: "var(--accent2)" }}>
+        Error: {err}
+      </div>}
+
+      {busy && !tracks && <div style={{ color: "var(--ink2)" }}>Loading…</div>}
+      {tracks && tracks.length === 0 && (
+        <div style={{ color: "var(--ink2)", padding: "16px 4px" }}>
+          Empty playlist.
+        </div>
+      )}
+
+      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+        {tracks?.map((t) => (
+          <li key={t.uri} style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "10px 4px", borderBottom: "1px solid var(--rule)",
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, overflow: "hidden",
+                            textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {t.title ?? <em style={{ color: "var(--ink2)" }}>missing</em>}
+              </div>
+              <div style={{ color: "var(--ink2)", fontSize: 12,
+                            overflow: "hidden", textOverflow: "ellipsis",
+                            whiteSpace: "nowrap" }}>
+                {[t.artist, t.album].filter(Boolean).join(" · ") || t.uri}
+              </div>
+            </div>
+            <button type="button"
+                    aria-label={`Play ${t.title ?? t.uri}`}
+                    onClick={() => playOne(t.uri, t.title ?? t.uri)}
+                    style={smallBtn}>▶</button>
+            <button type="button"
+                    aria-label={`Remove ${t.title ?? t.uri}`}
+                    onClick={() => removeOne(t.uri)}
+                    style={iconBtn}>×</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+const banner: React.CSSProperties = {
+  padding: "8px 12px", marginBottom: 12, borderRadius: 8,
+  background: "var(--panel)", color: "var(--ink2)", fontSize: 13,
+};
 const smallBtn: React.CSSProperties = {
   padding: "6px 10px", borderRadius: 6,
   border: "1px solid var(--rule)", background: "var(--panel)",
   color: "var(--ink)", fontSize: 13, cursor: "pointer",
+};
+const iconBtn: React.CSSProperties = {
+  width: 32, height: 32, borderRadius: 16,
+  border: "1px solid var(--rule)", background: "var(--panel)",
+  color: "var(--ink2)", cursor: "pointer", fontSize: 16, lineHeight: 1,
+};
+const rowBtn: React.CSSProperties = {
+  background: "transparent", border: 0, color: "var(--ink)",
+  fontSize: 15, padding: "2px 4px", cursor: "pointer",
+  textAlign: "left",
 };
