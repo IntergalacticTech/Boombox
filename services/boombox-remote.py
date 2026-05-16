@@ -197,12 +197,19 @@ class StateAggregator:
         self._state = clients.StateApi(session)
         # Set externally after construction so we don't have a circular
         # dep on the dispatcher's SleepTimer at __init__ time.
-        self.sleep_timer: clients.SleepTimer | None = None
+        self.sleep_timer: clients.SleepTimer | clients.SleepRemote | None = None
 
     async def consolidated_state(self) -> dict:
-        # Pull from upstream services in parallel for snappiness.
+        # Pull from upstream services in parallel for snappiness. The
+        # sleep timer refresh is folded in here so PWA sees changes from
+        # the physical button or another remote on the next state push.
+        sleep_refresh = (
+            self.sleep_timer.refresh()
+            if isinstance(self.sleep_timer, clients.SleepRemote)
+            else asyncio.sleep(0)
+        )
         (source, track_info, state_info, position_info, vol_info, karaoke,
-         theme_payload, random_info, repeat_info, single_info) = (
+         theme_payload, random_info, repeat_info, single_info, _) = (
             await asyncio.gather(
                 self._state.current_source(),
                 self._mopidy.call("core.playback.get_current_track"),
@@ -214,6 +221,7 @@ class StateAggregator:
                 self._mopidy.call("core.tracklist.get_random"),
                 self._mopidy.call("core.tracklist.get_repeat"),
                 self._mopidy.call("core.tracklist.get_single"),
+                sleep_refresh,
             )
         )
 
@@ -635,15 +643,12 @@ async def main() -> None:
         )
         mopidy_for_dispatch = clients.MopidyRpc(session)
 
-        async def _on_sleep_expire() -> None:
-            try:
-                await mopidy_for_dispatch.call("core.playback.pause")
-            except Exception as exc:
-                log.warning("sleep expire pause failed: %s", exc)
-
-        sleep_t = clients.SleepTimer(on_expire=_on_sleep_expire)
-        # The aggregator reads sleep_t.active_minutes on every state assembly
-        # so the PWA's "Sleep: 30m" indicator updates without us pushing.
+        # Shared sleep timer — boombox-buttons owns the canonical SleepTimer
+        # instance and exposes it via /sleep on 127.0.0.1:6684. SleepRemote
+        # is a same-interface adapter so the dispatcher handlers work
+        # unchanged but the timer is single-sourced across PWA / CYD /
+        # physical button.
+        sleep_t = clients.SleepRemote(session)
         agg.sleep_timer = sleep_t
 
         dispatcher = actions.Dispatcher(
@@ -656,10 +661,6 @@ async def main() -> None:
             kiosk=clients.KioskClient(session),
             recorder=None,     # populated alongside boombox-buttons
             display=None,
-            # Per-process SleepTimer — independent from the boombox-buttons
-            # service's instance. Two-clients-with-conflicting-timers is
-            # rare; surfacing _this_ timer's state via the consolidated
-            # response keeps the PWA UI honest about what it can control.
             sleep=sleep_t,
             disabled=set(),
         )

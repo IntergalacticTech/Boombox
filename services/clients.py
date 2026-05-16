@@ -197,6 +197,65 @@ class StateApi:
         return None
 
 
+class SleepRemote:
+    """Drop-in for SleepTimer that proxies to boombox-buttons over HTTP.
+
+    Both boombox-remote and (eventually) any other client converge on the
+    single SleepTimer instance owned by boombox-buttons, so a press from
+    the PWA, the CYD remote, or the physical button update the *same*
+    timer. Same interface as SleepTimer so actions.py handlers work
+    unchanged.
+
+    Caches the most recently observed `active_minutes` so callers (the
+    state aggregator) can render without a per-frame HTTP round trip;
+    `refresh()` re-fetches the canonical value."""
+
+    def __init__(self, session: aiohttp.ClientSession,
+                 base: str = "http://127.0.0.1:6684"):
+        self._sess = session
+        self._base = base.rstrip("/")
+        self._cached_minutes: int | None = None
+
+    @property
+    def active_minutes(self) -> int | None:
+        return self._cached_minutes
+
+    async def refresh(self) -> None:
+        try:
+            async with self._sess.get(
+                    f"{self._base}/sleep",
+                    timeout=aiohttp.ClientTimeout(total=1)) as r:
+                if r.status != 200:
+                    return
+                body = await r.json()
+        except Exception:
+            return
+        m = body.get("minutes")
+        self._cached_minutes = m if isinstance(m, int) else None
+
+    async def press(self, _t_ms: int) -> int | None:
+        try:
+            async with self._sess.post(
+                    f"{self._base}/sleep/press",
+                    timeout=aiohttp.ClientTimeout(total=2)) as r:
+                if r.status == 200:
+                    body = await r.json()
+                    m = body.get("minutes")
+                    self._cached_minutes = m if isinstance(m, int) else None
+        except Exception:
+            pass
+        return self._cached_minutes
+
+    async def cancel(self) -> None:
+        try:
+            await self._sess.post(
+                f"{self._base}/sleep/cancel",
+                timeout=aiohttp.ClientTimeout(total=2))
+        except Exception:
+            pass
+        self._cached_minutes = None
+
+
 _ALBUM_QUALIFIER_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]\s*$")
 
 
