@@ -16,6 +16,9 @@ from aiohttp import web
 
 from . import __version__
 from .config import LibraryConfig, SourceConfig
+from .models import PinKind, PinSource
+from .pins import pin as _pin_fn, unpin as _unpin_fn
+from .resolver import resolve_playback
 
 log = logging.getLogger("boombox-library.api")
 
@@ -40,6 +43,10 @@ def build_app(ctx: Context) -> web.Application:
     app.router.add_post("/api/library/source/test", _source_test)
     app.router.add_get("/api/library/browse", _browse)
     app.router.add_get("/api/library/search", _search)
+    app.router.add_post("/api/library/pin", _pin)
+    app.router.add_post("/api/library/sync/run", _sync_run)
+    app.router.add_get("/api/library/track/{track_id}/playback", _resolver)
+    app.router.add_get("/api/library/cache/stats", _cache_stats)
     return app
 
 
@@ -118,3 +125,72 @@ async def _search(req: web.Request) -> web.Response:
         (f'"{safe}"',),
     ))
     return web.json_response({"results": [dict(r) for r in rows]})
+
+
+async def _pin(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    body = await req.json()
+    try:
+        kind = PinKind(body["kind"])
+    except (KeyError, ValueError):
+        return web.json_response({"error": "invalid kind"}, status=400)
+    target_id = body.get("id")
+    if not target_id:
+        return web.json_response({"error": "missing id"}, status=400)
+    mode = body.get("mode", "pin")
+    if mode == "pin":
+        _pin_fn(ctx.conn, kind, target_id, PinSource.USER)
+    elif mode == "unpin":
+        _unpin_fn(ctx.conn, kind, target_id)
+    else:
+        return web.json_response({"error": "invalid mode"}, status=400)
+    return web.json_response({"ok": True})
+
+
+async def _sync_run(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    await ctx.trigger_sync()
+    return web.json_response({"ok": True})
+
+
+async def _resolver(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    track_id = req.match_info["track_id"]
+    online = await ctx.is_online()
+    r = resolve_playback(ctx.conn, track_id, online)
+    return web.json_response({
+        "source": r.source.value,
+        "uri": r.uri,
+        "cache_status": r.cache_status,
+    })
+
+
+async def _cache_stats(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    drive = ctx.cache_drive_state()
+    if not drive or not drive.present:
+        return web.json_response({
+            "present": False, "capacity": 0, "free": 0,
+            "pinned_bytes": 0, "streamed_bytes": 0,
+            "reserved": ctx.cfg.cache.reserve_bytes,
+        })
+    from .pins import all_pinned_track_ids
+    pinned_ids = all_pinned_track_ids(ctx.conn)
+    rows = list(ctx.conn.execute(
+        "SELECT track_id, size_bytes FROM cache_state WHERE status='present'"
+    ))
+    pinned_bytes = sum(
+        int(r["size_bytes"] or 0) for r in rows if r["track_id"] in pinned_ids
+    )
+    streamed_bytes = sum(
+        int(r["size_bytes"] or 0) for r in rows if r["track_id"] not in pinned_ids
+    )
+    return web.json_response({
+        "present": True,
+        "mount_path": str(drive.mount_path),
+        "capacity": drive.total_bytes or 0,
+        "free": drive.free_bytes or 0,
+        "pinned_bytes": pinned_bytes,
+        "streamed_bytes": streamed_bytes,
+        "reserved": ctx.cfg.cache.reserve_bytes,
+    })

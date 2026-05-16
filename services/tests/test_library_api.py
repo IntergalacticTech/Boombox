@@ -158,6 +158,66 @@ async def test_browse_unknown_type_returns_400(client):
 
 
 @pytest.mark.asyncio
+async def test_pin_inserts_row(client):
+    c, ctx, conn = client
+    # Seed a target so the pin is meaningful
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
+                 "VALUES('ar','X','x',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,"
+                 "duration_s,is_compilation,navidrome_starred,updated_at) "
+                 "VALUES('al','A','a','ar',1,30,0,0,0)")
+    r = await c.post("/api/library/pin", json={
+        "kind": "album", "id": "al", "mode": "pin",
+    })
+    assert r.status == 200
+    rows = list(conn.execute("SELECT * FROM pins"))
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_unpin_removes_row(client):
+    c, ctx, conn = client
+    conn.execute("INSERT INTO pins(target_kind,target_id,source,added_at) "
+                 "VALUES('album','al','user',0)")
+    r = await c.post("/api/library/pin", json={
+        "kind": "album", "id": "al", "mode": "unpin",
+    })
+    assert r.status == 200
+    assert list(conn.execute("SELECT * FROM pins")) == []
+
+
+@pytest.mark.asyncio
+async def test_sync_run_triggers(client):
+    c, ctx, conn = client
+    r = await c.post("/api/library/sync/run")
+    assert r.status == 200
+    assert ctx.synced == 1
+
+
+@pytest.mark.asyncio
+async def test_resolver_endpoint_returns_cache_uri(client):
+    c, ctx, conn = client
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
+                 "VALUES('ar','X','x',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,"
+                 "duration_s,is_compilation,navidrome_starred,updated_at) "
+                 "VALUES('al','A','a','ar',1,30,0,0,0)")
+    conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,"
+                 "size_bytes,content_type,navidrome_starred,updated_at) "
+                 "VALUES('t1','al','T',30,'mp3',1000,'audio/mpeg',0,0)")
+    conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,"
+                 "downloaded_at) VALUES('t1','present','/x/audio/t1.mp3',1000,0)")
+    r = await c.get("/api/library/track/t1/playback")
+    assert r.status == 200
+    body = await r.json()
+    assert body["source"] == "cache"
+    # Note: Task 12's fix changed the resolver URI format from `local:track:`
+    # to `file://<urllib.parse.quote(path)>` so Mopidy's stream backend can
+    # play directly without depending on Mopidy-Local's index.
+    assert body["uri"] == "file:///x/audio/t1.mp3"
+
+
+@pytest.mark.asyncio
 async def test_source_put_failure_does_not_leak_submitted_password(client, tmp_path):
     """Defense in depth: when test_source() reports failure, the error
     message returned to the client must NEVER contain the submitted
