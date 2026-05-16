@@ -12,7 +12,10 @@ from pathlib import Path
 
 log = logging.getLogger("boombox-library.mopidy_config")
 
-_SECTION_RE = re.compile(r"^\[(\w+)\]\s*$", re.MULTILINE)
+_SUBSONIC_BLOCK_RE = re.compile(
+    r"^\[subsonic\][^\n]*\n(?:(?!^\[).*\n?)*",
+    re.MULTILINE,
+)
 _BLOCK = """\
 [subsonic]
 hostname = {hostname}
@@ -41,8 +44,9 @@ def write_subsonic_block(
     password: str,
 ) -> None:
     """Idempotently write the [subsonic] block in mopidy.conf. Preserves
-    all other sections. Atomic via .tmp + fsync + rename so a crashed
-    write never corrupts the file."""
+    all other sections and any comments. Atomic via .tmp + rename + fsync.
+    Sets 0o600 on the tmp file before rename so a fresh-create doesn't
+    leak the plaintext Subsonic password to world-readable mode."""
     host, port, ssl = _split_url(url)
     new_block = _BLOCK.format(
         hostname=host, port=port, username=username,
@@ -51,20 +55,18 @@ def write_subsonic_block(
 
     if path.exists():
         current = path.read_text()
-        # Find and replace existing [subsonic] block, or append.
-        replaced, n = re.subn(
-            r"\[subsonic\][^\[]*",
-            new_block + "\n",
-            current,
-            count=1,
-        )
+        replaced, n = _SUBSONIC_BLOCK_RE.subn(new_block + "\n", current, count=1)
         if n == 0:
+            # Append; ensure exactly one trailing newline between sections.
             replaced = current.rstrip() + "\n\n" + new_block
     else:
         replaced = new_block
 
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w") as fh:
+    # Open with explicit 0o600 so a fresh-create doesn't expose the
+    # plaintext Subsonic password to a world-readable umask default.
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
         fh.write(replaced)
         fh.flush()
         os.fsync(fh.fileno())
