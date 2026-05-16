@@ -92,7 +92,7 @@ greyed-out with a "Pin for next time" affordance.
 ┌────────────────────────────┴────────────────────────────────────┐
 │                     Pi 5 (the boombox)                          │
 │                                                                 │
-│  NEW: boombox-library service ── :6686 ── /api/library/*        │
+│  NEW: boombox-library service ── :6687 ── /api/library/*        │
 │   • SQLite catalog cache (NVMe)                                 │
 │   • pin-state DB (NVMe) + JSON sidecar (cache drive)            │
 │   • file downloader → USB cache drive                           │
@@ -134,7 +134,7 @@ greyed-out with a "Pin for next time" affordance.
    project-wide rule that hardware-coupled additions must run cleanly when
    any subset is absent or unwired.
 
-**New surface:** one new port (`:6686`), one new service, one new Mopidy
+**New surface:** one new port (`:6687`), one new service, one new Mopidy
 backend, one repointed backend, two new Settings sections, one new browse
 root, one persistent status chip. The rest of the system is untouched.
 
@@ -155,7 +155,7 @@ root, one persistent status chip. The rest of the system is untouched.
 8. Detect the USB cache drive by marker file and degrade gracefully when
    absent
 
-**HTTP API (`:6686`):**
+**HTTP API (`:6687`):**
 
 ```
 GET  /api/library/health          → service + nav reachable + cache mounted
@@ -254,11 +254,11 @@ Network-up dependency but does NOT block on Navidrome reachability.
   the boombox-library service writing to `mopidy.conf` whenever source
   config changes (URL/user/pass). Service reloads Mopidy after writes.
 - **Mopidy-Local** (repointed) — `media_dir` changes from `~/Music` to
-  the fixed path `/var/lib/boombox/cache-mount/audio/`.
+  the fixed path `/opt/boombox/cache-mount/audio/`.
 
 #### Cache-mount symlink (first-class concept)
 
-`/var/lib/boombox/cache-mount` is a symlink maintained by
+`/opt/boombox/cache-mount` is a symlink maintained by
 `boombox-library`. Its target points at the root of the currently-adopted
 cache drive (e.g., `/media/usb-music`). The audio directory at
 `cache-mount/audio/` is therefore always Mopidy-Local's `media_dir` —
@@ -281,13 +281,13 @@ play request:
 
 ```python
 def resolve_playback(subsonic_id: str) -> PlaybackResolution:
-    r = requests.get(f"http://localhost:6686/api/library/track/{id}/playback")
+    r = requests.get(f"http://localhost:6687/api/library/track/{id}/playback")
     # r.json() = { uri: str|null, source: "cache"|"stream"|"offline_miss",
     #              cache_status: "absent"|"present"|... }
 
     if r.source == "stream":
         # fire-and-forget cache trigger
-        requests.post(f"http://localhost:6686/api/library/cache/streamed?id={id}")
+        requests.post(f"http://localhost:6687/api/library/cache/streamed?id={id}")
 
     if r.uri is None:
         return error("not synced and library is offline")
@@ -589,7 +589,7 @@ One-time install (idempotent — fits the existing installer pattern):
    - Add `[subsonic]` block to `/etc/mopidy/mopidy.conf` with placeholder
      URL/creds (boombox-library overwrites when user saves Settings)
    - Repoint `[local] media_dir` from `~/Music` to
-     `/var/lib/boombox/cache-mount/audio/` (symlink updated by
+     `/opt/boombox/cache-mount/audio/` (symlink updated by
      boombox-library on adopt/detach)
 
 2. **New service:**
@@ -598,7 +598,7 @@ One-time install (idempotent — fits the existing installer pattern):
    - Catalog DB dir under existing service data path
 
 3. **nginx:**
-   - `location /api/library/ { proxy_pass http://127.0.0.1:6686; }`
+   - `location /api/library/ { proxy_pass http://127.0.0.1:6687; }`
    - Reload nginx
 
 4. **Retire SMB / `~/Music` workflow:**
@@ -618,7 +618,7 @@ One-time install (idempotent — fits the existing installer pattern):
    - First sync shows progress modal
 
 7. **Documentation:**
-   - README services table (new line: `boombox-library | 6686`)
+   - README services table (new line: `boombox-library | 6687`)
    - New `docs/HOME-LIBRARY.md`: setup, troubleshooting, Subsonic compat
      notes, "creating a dedicated Navidrome user"
    - Update `docs/SERVICES.md` and `docs/ARCHITECTURE.md`
