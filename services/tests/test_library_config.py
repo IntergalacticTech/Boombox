@@ -104,3 +104,61 @@ def test_save_config_fsyncs_before_rename(tmp_path: Path, monkeypatch):
 
     save_config(DEFAULT_CONFIG, path=tmp_path / "library.yml")
     assert len(fsync_calls) >= 1, "save_config must call os.fsync on the tmp file"
+
+
+def test_write_mopidy_subsonic_block_creates(tmp_path: Path):
+    from boombox_library.mopidy_config import write_subsonic_block
+
+    mopidy_conf = tmp_path / "mopidy.conf"
+    mopidy_conf.write_text(
+        "[core]\n"
+        "data_dir = /var/lib/mopidy\n"
+        "\n"
+        "[local]\n"
+        "media_dir = /opt/boombox/cache-mount/audio\n"
+    )
+    write_subsonic_block(
+        path=mopidy_conf,
+        url="http://192.168.1.223:4533",
+        username="boombox",
+        password="hunter2",
+    )
+    text = mopidy_conf.read_text()
+    assert "[subsonic]" in text
+    assert "hostname = 192.168.1.223" in text
+    assert "port = 4533" in text
+    assert "username = boombox" in text
+    assert "password = hunter2" in text
+    # Idempotent: original blocks preserved
+    assert "[local]" in text
+    assert "[core]" in text
+
+
+def test_write_mopidy_subsonic_block_replaces(tmp_path: Path):
+    from boombox_library.mopidy_config import write_subsonic_block
+
+    mopidy_conf = tmp_path / "mopidy.conf"
+    mopidy_conf.write_text(
+        "[subsonic]\n"
+        "hostname = old.example\n"
+        "port = 4533\n"
+        "username = old\n"
+        "password = old\n"
+        "ssl = false\n"
+        "\n"
+        "[local]\n"
+        "media_dir = /tmp\n"
+    )
+    write_subsonic_block(
+        path=mopidy_conf,
+        url="http://new:4533",
+        username="new",
+        password="newpass",
+    )
+    text = mopidy_conf.read_text()
+    assert text.count("[subsonic]") == 1
+    assert "hostname = new" in text
+    assert "username = new" in text
+    assert "password = newpass" in text
+    assert "old.example" not in text
+    assert "[local]" in text
