@@ -14,6 +14,11 @@ function mmss(sec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+type SearchField = "any" | "artist" | "album" | "track";
+const FIELD_LABELS: Record<SearchField, string> = {
+  any: "Any", artist: "Artist", album: "Album", track: "Track",
+};
+
 /** Library search. Hits the consolidated Mopidy search backend; results are
  *  capped server-side at 80 tracks. Each result is individually queue-able,
  *  plus a "Play all" that queues the whole result set + starts playback.
@@ -22,6 +27,7 @@ function mmss(sec: number): string {
 export function Search() {
   const api = useApi();
   const [q, setQ] = useState("");
+  const [field, setField] = useState<SearchField>("any");
   const [tracks, setTracks] = useState<Track[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -37,7 +43,7 @@ export function Search() {
     setSelected(new Set());
     api
       .get<{ ok: boolean; tracks: Track[] }>(
-        `api/remote/library/search?q=${encodeURIComponent(term)}`,
+        `api/remote/library/search?q=${encodeURIComponent(term)}&field=${field}`,
       )
       .then((r) => setTracks(r.tracks))
       .catch((e: unknown) =>
@@ -121,16 +127,37 @@ export function Search() {
   return (
     <div style={{ padding: 16, paddingBottom: 96 }}>
       <form onSubmit={submit} style={{ display: "flex", gap: 8,
-                                       marginBottom: 12 }}>
+                                       marginBottom: 8 }}>
         <input type="search" aria-label="Search query"
                value={q} onChange={(e) => setQ(e.target.value)}
-               placeholder="Search artist, album, track…"
+               placeholder={`Search ${FIELD_LABELS[field].toLowerCase()}…`}
                style={searchInput} />
         <button type="submit" disabled={busy || !q.trim()}
                 style={primaryBtn}>
           {busy ? "…" : "Go"}
         </button>
       </form>
+      <div role="group" aria-label="Search field"
+           style={{ display: "flex", gap: 6, marginBottom: 12,
+                    flexWrap: "wrap" }}>
+        {(["any", "artist", "album", "track"] as const).map((f) => {
+          const active = f === field;
+          return (
+            <button key={f} type="button"
+                    aria-pressed={active}
+                    onClick={() => setField(f)}
+                    style={{
+                      padding: "4px 10px", borderRadius: 999, fontSize: 11,
+                      border: "1px solid var(--rule)",
+                      background: active ? "var(--accent)" : "var(--panel)",
+                      color: active ? "var(--bg)" : "var(--ink2)",
+                      cursor: "pointer",
+                    }}>
+              {FIELD_LABELS[f]}
+            </button>
+          );
+        })}
+      </div>
 
       {tracks && tracks.length > 0 && (
         <div style={{ display: "flex", justifyContent: "space-between",
