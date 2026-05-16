@@ -119,29 +119,44 @@ class ServiceContext:
 
     async def sync_timer(self) -> None:
         # First-boot immediate sync
-        await self.trigger_sync()
+        try:
+            await self.trigger_sync()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("initial sync trigger failed")
         while True:
             await asyncio.sleep(self.cfg.sync.interval_seconds)
-            await self.trigger_sync()
+            try:
+                await self.trigger_sync()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("periodic sync trigger failed; will retry")
 
     async def cache_poll(self) -> None:
         while True:
-            new_state = detect_cache_drive(
-                search_paths=[Path(p) for p in self.cfg.cache.search_paths],
-                marker=self.cfg.cache.marker_filename,
-            )
-            if new_state.mount_path != self.cache_state.mount_path:
-                # Adopted or detached
-                if new_state.present and new_state.mount_path:
-                    log.info("cache drive present at %s", new_state.mount_path)
-                    update_symlink(DEFAULT_SYMLINK, new_state.mount_path)
-                    self._init_download_queue(new_state.mount_path)
-                    self._load_sidecar_if_present()
-                else:
-                    log.warning("cache drive lost")
-                    remove_symlink(DEFAULT_SYMLINK)
-                    self._download_queue = None
-            self.cache_state = new_state
+            try:
+                new_state = detect_cache_drive(
+                    search_paths=[Path(p) for p in self.cfg.cache.search_paths],
+                    marker=self.cfg.cache.marker_filename,
+                )
+                if new_state.mount_path != self.cache_state.mount_path:
+                    # Adopted or detached
+                    if new_state.present and new_state.mount_path:
+                        log.info("cache drive present at %s", new_state.mount_path)
+                        update_symlink(DEFAULT_SYMLINK, new_state.mount_path)
+                        self._init_download_queue(new_state.mount_path)
+                        self._load_sidecar_if_present()
+                    else:
+                        log.warning("cache drive lost")
+                        remove_symlink(DEFAULT_SYMLINK)
+                        self._download_queue = None
+                self.cache_state = new_state
+            except asyncio.CancelledError:
+                raise  # Always re-raise CancelledError so shutdown works
+            except Exception:
+                log.exception("cache_poll iteration failed; will retry")
             await asyncio.sleep(CACHE_POLL_SECONDS)
 
     # ----- internals -----
