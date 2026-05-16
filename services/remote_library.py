@@ -292,7 +292,9 @@ def _make_handlers(mopidy):
         index. Frontend renders this as "Up next" inline on Now Playing.
         tlid is Mopidy's per-tracklist identity — survives reorders, dies
         on tracklist.clear; we use it for jump / remove instead of array
-        indices which shift under us."""
+        indices which shift under us. `index` is also surfaced so the
+        UI can render position-aware controls (reorder up/down) without
+        a separate ordinal-lookup round-trip."""
         items, idx = await asyncio.gather(
             mopidy.call("core.tracklist.get_tl_tracks"),
             mopidy.call("core.tracklist.index"),
@@ -304,9 +306,45 @@ def _make_handlers(mopidy):
             t = it.get("track") or {}
             summary = _track_summary(t)
             summary["tlid"] = it.get("tlid")
+            summary["index"] = i
             summary["playing"] = (i == playing_index)
             out.append(summary)
         return web.json_response({"ok": True, "tracks": out})
+
+    async def queue_move(request: web.Request) -> web.Response:
+        """Move a single tracklist entry. Body: {tlid, to_position}.
+        Mopidy's core.tracklist.move operates on a slice [start, end)
+        and shifts it to to_position. We resolve tlid → current index
+        server-side so the client doesn't race with another remote's
+        reorder. `to_position` is clamped to the valid range."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid_json"},
+                                     status=400)
+        tlid = (body or {}).get("tlid") if isinstance(body, dict) else None
+        to_pos = (body or {}).get("to_position") \
+            if isinstance(body, dict) else None
+        if not isinstance(tlid, int) or not isinstance(to_pos, int):
+            return web.json_response({"ok": False, "error": "bad_args"},
+                                     status=400)
+        items = (await mopidy.call(
+            "core.tracklist.get_tl_tracks")).get("result") or []
+        cur_idx = next((i for i, it in enumerate(items)
+                         if it.get("tlid") == tlid), None)
+        if cur_idx is None:
+            return web.json_response({"ok": False, "error": "tlid_not_found"},
+                                     status=404)
+        # Clamp to_position; Mopidy is strict about end > length.
+        n = len(items)
+        target = max(0, min(n - 1, to_pos))
+        if target == cur_idx:
+            return web.json_response({"ok": True, "noop": True})
+        await mopidy.call("core.tracklist.move",
+                          {"start": cur_idx, "end": cur_idx + 1,
+                           "to_position": target})
+        return web.json_response({"ok": True,
+                                   "from": cur_idx, "to": target})
 
     async def queue_jump(request: web.Request) -> web.Response:
         try:
@@ -364,7 +402,7 @@ def _make_handlers(mopidy):
     return (search, list_playlists, create_playlist, playlist_items, queue,
             rescan, browse, lookup, queue_list, queue_jump, queue_remove,
             queue_clear, playlist_append, playlist_remove_item,
-            playlist_delete, playlist_rename)
+            playlist_delete, playlist_rename, queue_move)
 
 
 def add_routes(app: web.Application, mopidy) -> None:
@@ -373,7 +411,7 @@ def add_routes(app: web.Application, mopidy) -> None:
     (search, list_pls, create_pl, pl_items, queue, rescan, browse, lookup,
      queue_list, queue_jump, queue_remove, queue_clear,
      playlist_append, playlist_remove_item,
-     playlist_delete, playlist_rename) = _make_handlers(mopidy)
+     playlist_delete, playlist_rename, queue_move) = _make_handlers(mopidy)
     app.router.add_get("/api/remote/library/search", search)
     app.router.add_get("/api/remote/library/browse", browse)
     app.router.add_get("/api/remote/library/lookup", lookup)
@@ -391,3 +429,4 @@ def add_routes(app: web.Application, mopidy) -> None:
     app.router.add_post("/api/remote/queue/jump", queue_jump)
     app.router.add_post("/api/remote/queue/remove", queue_remove)
     app.router.add_post("/api/remote/queue/clear", queue_clear)
+    app.router.add_post("/api/remote/queue/move", queue_move)

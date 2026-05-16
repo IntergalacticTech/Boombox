@@ -3,6 +3,7 @@ import { useApi, ApiError } from "../lib/api";
 
 interface QueueRow {
   tlid: number;
+  index: number;
   uri: string;
   title: string | null;
   artist: string | null;
@@ -50,6 +51,27 @@ export function QueueView({ refreshKey }: { refreshKey: number }) {
     load();
   };
 
+  const move = async (tlid: number, to_position: number) => {
+    setBusyTlid(tlid);
+    // Optimistically reorder so the row jumps before the server-round-trip
+    // refresh — feels much more direct on a phone.
+    setRows((prev) => {
+      if (!prev) return prev;
+      const i = prev.findIndex((r) => r.tlid === tlid);
+      if (i < 0) return prev;
+      const next = prev.slice();
+      const [moved] = next.splice(i, 1);
+      const target = Math.max(0, Math.min(next.length, to_position));
+      next.splice(target, 0, moved);
+      return next.map((r, ix) => ({ ...r, index: ix }));
+    });
+    try {
+      await api.post("api/remote/queue/move", { tlid, to_position });
+    } catch { /* surfaced on next refresh */ }
+    setBusyTlid(null);
+    load();
+  };
+
   const clearAll = async () => {
     if (!window.confirm("Clear the queue?")) return;
     try {
@@ -88,7 +110,7 @@ export function QueueView({ refreshKey }: { refreshKey: number }) {
         </div>
       )}
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {rows?.map((t) => (
+        {rows?.map((t, i) => (
           <li key={t.tlid} style={{
             display: "flex", alignItems: "center", gap: 6,
             padding: "6px 4px", borderBottom: "1px solid var(--rule)",
@@ -116,6 +138,16 @@ export function QueueView({ refreshKey }: { refreshKey: number }) {
               </div>
             </button>
             <button type="button"
+                    aria-label={`Move ${t.title ?? t.uri} up`}
+                    disabled={i === 0}
+                    onClick={() => move(t.tlid, i - 1)}
+                    style={miniIconBtn}>▲</button>
+            <button type="button"
+                    aria-label={`Move ${t.title ?? t.uri} down`}
+                    disabled={i === (rows?.length ?? 0) - 1}
+                    onClick={() => move(t.tlid, i + 1)}
+                    style={miniIconBtn}>▼</button>
+            <button type="button"
                     aria-label={`Remove ${t.title ?? t.uri}`}
                     onClick={() => remove(t.tlid)} style={iconBtn}>×</button>
           </li>
@@ -129,6 +161,12 @@ const smallBtn: React.CSSProperties = {
   padding: "4px 8px", borderRadius: 6,
   border: "1px solid var(--rule)", background: "var(--panel)",
   color: "var(--ink2)", fontSize: 11, cursor: "pointer",
+};
+const miniIconBtn: React.CSSProperties = {
+  width: 28, height: 36, borderRadius: 6,
+  border: "1px solid var(--rule)", background: "var(--panel)",
+  color: "var(--ink2)", cursor: "pointer", fontSize: 10, lineHeight: 1,
+  padding: 0,
 };
 const iconBtn: React.CSSProperties = {
   // 36px target — small in a queue row so we don't dominate the title,

@@ -6,9 +6,9 @@ import { ApiProvider, type RemoteApi } from "../lib/api";
 const sample = {
   ok: true,
   tracks: [
-    { tlid: 11, uri: "local:track:a", title: "A", artist: "X",
+    { tlid: 11, index: 0, uri: "local:track:a", title: "A", artist: "X",
       album: null, duration_s: 0, playing: true },
-    { tlid: 12, uri: "local:track:b", title: "B", artist: "Y",
+    { tlid: 12, index: 1, uri: "local:track:b", title: "B", artist: "Y",
       album: null, duration_s: 0, playing: false },
   ],
 };
@@ -67,6 +67,24 @@ describe("QueueView", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledWith(
       "api/remote/queue/clear",
     ));
+  });
+
+  it("move-down POSTs queue/move with target index", async () => {
+    const api = mockApi();
+    wrap(api);
+    await waitFor(() => screen.getByText("A"));
+    fireEvent.click(screen.getByRole("button", { name: /Move A down/ }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith(
+      "api/remote/queue/move", { tlid: 11, to_position: 1 },
+    ));
+  });
+
+  it("move-up disabled on the first row", async () => {
+    const api = mockApi();
+    wrap(api);
+    await waitFor(() => screen.getByText("A"));
+    expect(screen.getByRole("button", { name: /Move A up/ })
+      .hasAttribute("disabled")).toBe(true);
   });
 
   it("empty queue shows the empty state", async () => {
