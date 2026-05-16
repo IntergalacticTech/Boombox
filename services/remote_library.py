@@ -7,6 +7,7 @@ mockable in tests.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiohttp import web
@@ -132,6 +133,58 @@ def _make_handlers(mopidy):
             await mopidy.call("core.playback.play")
         return web.json_response({"ok": True})
 
+    async def queue_list(_request: web.Request) -> web.Response:
+        """Current tracklist with stable tlid handles + currently-playing
+        index. Frontend renders this as "Up next" inline on Now Playing.
+        tlid is Mopidy's per-tracklist identity — survives reorders, dies
+        on tracklist.clear; we use it for jump / remove instead of array
+        indices which shift under us."""
+        items, idx = await asyncio.gather(
+            mopidy.call("core.tracklist.get_tl_tracks"),
+            mopidy.call("core.tracklist.index"),
+        )
+        rows = items.get("result") or []
+        playing_index = idx.get("result")
+        out = []
+        for i, it in enumerate(rows):
+            t = it.get("track") or {}
+            summary = _track_summary(t)
+            summary["tlid"] = it.get("tlid")
+            summary["playing"] = (i == playing_index)
+            out.append(summary)
+        return web.json_response({"ok": True, "tracks": out})
+
+    async def queue_jump(request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid_json"},
+                                     status=400)
+        tlid = (body or {}).get("tlid") if isinstance(body, dict) else None
+        if not isinstance(tlid, int):
+            return web.json_response({"ok": False, "error": "tlid_required"},
+                                     status=400)
+        await mopidy.call("core.playback.play", {"tlid": tlid})
+        return web.json_response({"ok": True})
+
+    async def queue_remove(request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid_json"},
+                                     status=400)
+        tlid = (body or {}).get("tlid") if isinstance(body, dict) else None
+        if not isinstance(tlid, int):
+            return web.json_response({"ok": False, "error": "tlid_required"},
+                                     status=400)
+        await mopidy.call("core.tracklist.remove",
+                          {"criteria": {"tlid": [tlid]}})
+        return web.json_response({"ok": True})
+
+    async def queue_clear(_request: web.Request) -> web.Response:
+        await mopidy.call("core.tracklist.clear")
+        return web.json_response({"ok": True})
+
     async def rescan(_request: web.Request) -> web.Response:
         """Trigger a full Mopidy library rescan via boombox-state. Heavier
         than core.library.refresh — runs `mopidyctl local scan` server-side
@@ -155,14 +208,16 @@ def _make_handlers(mopidy):
         return web.json_response({"ok": bool(body.get("ok"))})
 
     return (search, list_playlists, create_playlist, playlist_items, queue,
-            rescan, browse, lookup)
+            rescan, browse, lookup, queue_list, queue_jump, queue_remove,
+            queue_clear)
 
 
 def add_routes(app: web.Application, mopidy) -> None:
     """Register library/playlist/queue routes. `mopidy` is a
     clients.MopidyRpc (or any object with an async .call(method, params))."""
-    (search, list_pls, create_pl, pl_items, queue, rescan,
-     browse, lookup) = _make_handlers(mopidy)
+    (search, list_pls, create_pl, pl_items, queue, rescan, browse, lookup,
+     queue_list, queue_jump, queue_remove, queue_clear) = _make_handlers(
+        mopidy)
     app.router.add_get("/api/remote/library/search", search)
     app.router.add_get("/api/remote/library/browse", browse)
     app.router.add_get("/api/remote/library/lookup", lookup)
@@ -171,3 +226,7 @@ def add_routes(app: web.Application, mopidy) -> None:
     app.router.add_post("/api/remote/playlists", create_pl)
     app.router.add_get("/api/remote/playlists/{uri}/items", pl_items)
     app.router.add_post("/api/remote/queue", queue)
+    app.router.add_get("/api/remote/queue", queue_list)
+    app.router.add_post("/api/remote/queue/jump", queue_jump)
+    app.router.add_post("/api/remote/queue/remove", queue_remove)
+    app.router.add_post("/api/remote/queue/clear", queue_clear)
