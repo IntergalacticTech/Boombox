@@ -144,6 +144,21 @@ describe("NowPlaying", () => {
     ).toBe("false");
   });
 
+  it("seek slider commits commit on mouseup with seconds value", () => {
+    const command = vi.fn().mockResolvedValue({ ok: true });
+    render(
+      <ApiProvider api={stubApi}>
+        <RemoteContextHarness state={playing} command={command}>
+          <NowPlaying />
+        </RemoteContextHarness>
+      </ApiProvider>,
+    );
+    const seek = screen.getByLabelText(/seek/i) as HTMLInputElement;
+    fireEvent.change(seek, { target: { value: "120" } });
+    fireEvent.mouseUp(seek, { target: { value: "120" } });
+    expect(command).toHaveBeenCalledWith("seek", 120);
+  });
+
   it("clicking a source chip fires command('source', name)", () => {
     const command = vi.fn().mockResolvedValue({ ok: true });
     const withSources: RemoteState = {
