@@ -7,6 +7,7 @@ import { ApiProvider, makeApi } from "./lib/api";
 import { Pairing as PairingScreen } from "./screens/Pairing";
 import { NowPlaying } from "./screens/NowPlaying";
 import { Files } from "./screens/Files";
+import { Library } from "./screens/Library";
 import { Playlists } from "./screens/Playlists";
 import { Search } from "./screens/Search";
 import { TabBar, type Tab } from "./components/TabBar";
@@ -74,9 +75,10 @@ function Remote({ onUnpair }: { onUnpair: () => void }) {
         </div>
       )}
       {tab === "now" && <NowPlaying />}
-      {tab === "files" && <Files />}
+      {tab === "library" && <Library />}
       {tab === "playlists" && <Playlists />}
       {tab === "search" && <Search />}
+      {tab === "files" && <Files />}
       <TabBar active={tab} onChange={setTab} />
     </>
   );

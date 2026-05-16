@@ -39,6 +39,34 @@ def _make_handlers(mopidy):
                   for t in (group.get("tracks") or [])][:80]
         return web.json_response({"ok": True, "tracks": tracks})
 
+    async def browse(request: web.Request) -> web.Response:
+        """List children of a Mopidy library URI. Empty/missing uri lists
+        the root (the backends, e.g. local: and m3u:). Each ref is the
+        Mopidy shape: {uri, name, type} where type is one of directory,
+        album, artist, track, playlist."""
+        uri = request.query.get("uri") or None
+        res = await mopidy.call("core.library.browse", {"uri": uri})
+        refs = res.get("result") or []
+        return web.json_response({"ok": True, "refs": refs})
+
+    async def lookup(request: web.Request) -> web.Response:
+        """Resolve a non-track URI (album, artist, directory) into a flat
+        list of tracks. Mopidy's core.library.lookup returns one track for
+        track URIs, the album's tracks for album URIs, and the artist's
+        full discography for artist URIs — exactly what the PWA needs to
+        queue a "Play this album" button."""
+        uri = (request.query.get("uri") or "").strip()
+        if not uri:
+            return web.json_response({"ok": False, "error": "missing_uri"},
+                                     status=400)
+        res = await mopidy.call("core.library.lookup", {"uris": [uri]})
+        by_uri = res.get("result") or {}
+        tracks: list[dict] = []
+        for ts in by_uri.values():
+            for t in ts or []:
+                tracks.append(_track_summary(t))
+        return web.json_response({"ok": True, "tracks": tracks})
+
     async def list_playlists(request: web.Request) -> web.Response:
         res = await mopidy.call("core.playlists.as_list")
         refs = res.get("result") or []
@@ -127,15 +155,17 @@ def _make_handlers(mopidy):
         return web.json_response({"ok": bool(body.get("ok"))})
 
     return (search, list_playlists, create_playlist, playlist_items, queue,
-            rescan)
+            rescan, browse, lookup)
 
 
 def add_routes(app: web.Application, mopidy) -> None:
     """Register library/playlist/queue routes. `mopidy` is a
     clients.MopidyRpc (or any object with an async .call(method, params))."""
-    (search, list_pls, create_pl, pl_items, queue, rescan) = _make_handlers(
-        mopidy)
+    (search, list_pls, create_pl, pl_items, queue, rescan,
+     browse, lookup) = _make_handlers(mopidy)
     app.router.add_get("/api/remote/library/search", search)
+    app.router.add_get("/api/remote/library/browse", browse)
+    app.router.add_get("/api/remote/library/lookup", lookup)
     app.router.add_post("/api/remote/library/rescan", rescan)
     app.router.add_get("/api/remote/playlists", list_pls)
     app.router.add_post("/api/remote/playlists", create_pl)
