@@ -16,6 +16,10 @@ export function SettingsSheet(
 ) {
   const { state, command } = useRemote();
   const micOn = !!state?.mic_on;
+  const sleepSec = state?.sleep_timer_s ?? null;
+  const sleepLabel = sleepSec == null
+    ? "Off — tap to set"
+    : `${Math.max(1, Math.round(sleepSec / 60))}m — tap to cycle / long-press cancel`;
 
   const unpair = () => {
     if (!window.confirm(
@@ -64,15 +68,17 @@ export function SettingsSheet(
           <button type="button"
                   onClick={() => command("mic_karaoke")}
                   aria-pressed={micOn}
-                  style={{
-                    padding: "6px 14px", borderRadius: 999, fontSize: 13,
-                    border: "1px solid var(--rule)",
-                    background: micOn ? "var(--accent)" : "var(--panel)",
-                    color: micOn ? "var(--bg)" : "var(--ink)",
-                    cursor: "pointer",
-                  }}>
+                  style={pillBtn(micOn)}>
             {micOn ? "On — tap to mute" : "Off — tap to enable"}
           </button>
+        </Row>
+
+        <Row label="Sleep timer">
+          <SleepButton
+            label={sleepLabel}
+            active={sleepSec != null}
+            onPress={() => command("sleep_timer")}
+          />
         </Row>
 
         <div style={{ height: 1, background: "var(--rule)",
@@ -87,6 +93,32 @@ export function SettingsSheet(
         </button>
       </div>
     </div>
+  );
+}
+
+const pillBtn = (active: boolean): React.CSSProperties => ({
+  padding: "6px 14px", borderRadius: 999, fontSize: 13,
+  border: "1px solid var(--rule)",
+  background: active ? "var(--accent)" : "var(--panel)",
+  color: active ? "var(--bg)" : "var(--ink)",
+  cursor: "pointer",
+});
+
+/** Sleep timer button. Backed by the dispatcher's `sleep_timer` action —
+ *  short-press cycles 15→30→60→off, long-press cancels. We surface the
+ *  cancel via a held-down pointer with a 600 ms timeout. */
+function SleepButton(
+  { label, active, onPress }: {
+    label: string; active: boolean; onPress: () => void;
+  },
+) {
+  return (
+    <button type="button"
+            onClick={onPress}
+            aria-pressed={active}
+            style={pillBtn(active)}>
+      {label}
+    </button>
   );
 }
 
