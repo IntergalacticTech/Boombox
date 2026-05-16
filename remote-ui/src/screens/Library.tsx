@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useApi, ApiError } from "../lib/api";
+import { SkeletonRows } from "../components/Skeleton";
 
 interface Ref {
   uri: string;
@@ -122,7 +123,7 @@ export function Library() {
           Error: {err}
         </div>
       )}
-      {busy && !refs && <div style={{ color: "var(--ink2)" }}>Loading…</div>}
+      {busy && !refs && <SkeletonRows count={8} />}
 
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
         {refs?.map((r) => (

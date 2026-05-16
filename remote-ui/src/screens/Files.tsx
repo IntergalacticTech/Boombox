@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useApi, ApiError } from "../lib/api";
+import { SkeletonRows } from "../components/Skeleton";
 
 interface Entry {
   name: string;
@@ -139,7 +140,7 @@ export function Files() {
         }}>Error: {err}</div>
       )}
 
-      {busy && !data && <div style={{ color: "var(--ink2)" }}>Loading…</div>}
+      {busy && !data && <SkeletonRows count={8} />}
 
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
         {data?.entries.map((e) => (

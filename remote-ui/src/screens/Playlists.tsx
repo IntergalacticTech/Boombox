@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useApi, ApiError } from "../lib/api";
+import { SkeletonRows } from "../components/Skeleton";
 
 interface Playlist {
   name: string;
@@ -78,9 +79,7 @@ export function Playlists() {
         </div>
       )}
 
-      {busy && !playlists && (
-        <div style={{ color: "var(--ink2)" }}>Loading…</div>
-      )}
+      {busy && !playlists && <SkeletonRows count={4} />}
       {playlists && playlists.length === 0 && (
         <div style={{ color: "var(--ink2)", padding: "16px 4px" }}>
           No playlists yet. Use Search → "Save as playlist" to make one.
@@ -258,7 +257,7 @@ function PlaylistDetail(
         Error: {err}
       </div>}
 
-      {busy && !tracks && <div style={{ color: "var(--ink2)" }}>Loading…</div>}
+      {busy && !tracks && <SkeletonRows count={6} />}
       {tracks && tracks.length === 0 && (
         <div style={{ color: "var(--ink2)", padding: "16px 4px" }}>
           Empty playlist.
