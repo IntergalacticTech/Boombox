@@ -185,3 +185,46 @@ async def test_error_message_does_not_leak_auth_params(tmp_path: Path):
     # Helpful diagnostic info SHOULD be there:
     assert "503" in msg
     assert "Service Unavailable" in msg
+
+
+@pytest.mark.asyncio
+async def test_queue_respects_concurrency_limit(tmp_path: Path):
+    from boombox_library.downloader import DownloadQueue
+
+    conn = connect(tmp_path / "l.db"); migrate(conn)
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
+                 "VALUES('ar','X','x',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,"
+                 "duration_s,is_compilation,navidrome_starred,updated_at) "
+                 "VALUES('al','A','a','ar',5,30,0,0,0)")
+    for i in range(5):
+        conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,"
+                     "size_bytes,content_type,navidrome_starred,updated_at) "
+                     "VALUES(?,?,?,?,?,?,?,?,?)",
+                     (f"t{i}", "al", "T", 30, "mp3", 100, "audio/mpeg", 0, 0))
+
+    cache_root = tmp_path / "cache"
+    (cache_root / "audio").mkdir(parents=True)
+    (cache_root / "tmp").mkdir()
+
+    in_flight = 0
+    peak = 0
+
+    async def slow_fetch(url, params, dest):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        dest.write_bytes(b"x")
+        in_flight -= 1
+
+    client = FakeStreamingClient(b"x")
+    queue = DownloadQueue(conn=conn, client=client, cache_root=cache_root,
+                          max_concurrent=2, fetch=slow_fetch)
+    for i in range(5):
+        queue.enqueue(f"t{i}")
+    await queue.drain()
+
+    assert peak <= 2
+    rows = conn.execute("SELECT COUNT(*) FROM cache_state WHERE status='present'").fetchone()
+    assert rows[0] == 5

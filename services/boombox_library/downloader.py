@@ -9,6 +9,7 @@ The queue + concurrency layer (Task 10) wraps this.
 """
 from __future__ import annotations
 
+import asyncio
 import enum
 import logging
 import os
@@ -142,3 +143,57 @@ async def download_track(
         )
         log.warning("download of %s failed: %s", track_id, _safe_error_message(e))
         return DownloadResult.ERROR
+
+
+class DownloadQueue:
+    """In-memory download queue with bounded concurrency.
+
+    Tracks marked QUEUED in cache_state aren't automatically picked up;
+    callers explicitly enqueue() IDs. The queue does not persist across
+    restarts — the catalog sync re-derives what should be downloaded
+    from pin state at startup.
+    """
+
+    def __init__(
+        self,
+        conn: Connection,
+        client: StreamingClient,
+        cache_root: Path,
+        max_concurrent: int = 2,
+        fetch: Fetcher = default_fetch,
+    ) -> None:
+        self.conn = conn
+        self.client = client
+        self.cache_root = cache_root
+        self._sem = asyncio.Semaphore(max_concurrent)
+        self._fetch = fetch
+        self._tasks: set[asyncio.Task] = set()
+
+    def enqueue(self, track_id: str) -> None:
+        """Schedule a download task. Returns immediately."""
+        self.conn.execute(
+            """INSERT INTO cache_state(track_id, status)
+               VALUES (?, 'queued')
+               ON CONFLICT(track_id) DO UPDATE SET
+                  status=CASE WHEN cache_state.status='present'
+                              THEN 'present' ELSE 'queued' END""",
+            (track_id,),
+        )
+        task = asyncio.create_task(self._run_one(track_id))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _run_one(self, track_id: str) -> None:
+        async with self._sem:
+            await download_track(
+                conn=self.conn,
+                client=self.client,
+                track_id=track_id,
+                cache_root=self.cache_root,
+                fetch=self._fetch,
+            )
+
+    async def drain(self) -> None:
+        """Wait for all in-flight + queued tasks to complete."""
+        while self._tasks:
+            await asyncio.gather(*list(self._tasks), return_exceptions=True)
