@@ -3,10 +3,10 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { TabBar } from "./TabBar";
 
 describe("TabBar", () => {
-  it("renders all four tabs and marks the active one pressed", () => {
+  it("renders all five tabs and marks the active one pressed", () => {
     render(<TabBar active="files" onChange={vi.fn()} />);
     const tabs = screen.getAllByRole("button");
-    expect(tabs.length).toBe(4);
+    expect(tabs.length).toBe(5);
     const filesTab = screen.getByRole("button", { name: /files/i });
     expect(filesTab.getAttribute("aria-pressed")).toBe("true");
     expect(

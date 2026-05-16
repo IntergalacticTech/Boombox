@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
 
-export type Tab = "now" | "files" | "playlists" | "search";
+export type Tab = "now" | "library" | "playlists" | "search" | "files";
 
 const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: "now",       label: "Now",       icon: "▶" },
-  { id: "files",     label: "Files",     icon: "📁" },
+  { id: "library",   label: "Library",   icon: "💿" },
   { id: "playlists", label: "Playlists", icon: "≡" },
   { id: "search",    label: "Search",    icon: "⌕" },
+  { id: "files",     label: "Files",     icon: "📁" },
 ];
 
 /** Fixed-position bottom nav. Phones with home-indicator safe-area get
