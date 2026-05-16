@@ -125,6 +125,7 @@ function PlaylistDetail(
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [name, setName] = useState(playlist.name);
 
   const reload = () => {
     setBusy(true);
@@ -139,6 +140,40 @@ function PlaylistDetail(
       .finally(() => setBusy(false));
   };
   useEffect(reload, [playlist.uri]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const rename = async () => {
+    const next = window.prompt("Rename playlist", name);
+    if (!next || !next.trim() || next.trim() === name) return;
+    setToast("Renaming…");
+    try {
+      const r = await api.post<{ ok: boolean; name: string }>(
+        `api/remote/playlists/${encodeURIComponent(playlist.uri)}/rename`,
+        { name: next.trim() },
+      );
+      setName(r.name || next.trim());
+      setToast(`Renamed to "${r.name || next.trim()}".`);
+    } catch (e: unknown) {
+      setToast(
+        e instanceof ApiError ? `Rename failed (${e.status})` : "Rename failed",
+      );
+    }
+  };
+
+  const remove = async () => {
+    if (!window.confirm(`Delete playlist "${name}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      await api.post(
+        `api/remote/playlists/${encodeURIComponent(playlist.uri)}/delete`,
+      );
+      onBack();
+    } catch (e: unknown) {
+      setToast(
+        e instanceof ApiError ? `Delete failed (${e.status})` : "Delete failed",
+      );
+    }
+  };
 
   const playOne = async (uri: string, label: string) => {
     setToast(null);
@@ -179,14 +214,18 @@ function PlaylistDetail(
   return (
     <div style={{ padding: 16, paddingBottom: 96 }}>
       <header style={{ display: "flex", alignItems: "center", gap: 8,
-                       marginBottom: 12 }}>
+                       marginBottom: 12, flexWrap: "wrap" }}>
         <button type="button" onClick={onBack} style={iconBtn}
                 aria-label="Back">‹</button>
         <h2 style={{ margin: 0, fontSize: 20, flex: 1, minWidth: 0,
                      overflow: "hidden", textOverflow: "ellipsis",
                      whiteSpace: "nowrap" }}>
-          {playlist.name}
+          {name}
         </h2>
+        <button type="button" onClick={rename} style={iconBtn}
+                aria-label="Rename playlist">✎</button>
+        <button type="button" onClick={remove} style={iconBtn}
+                aria-label="Delete playlist">🗑</button>
         <button type="button" onClick={playAll}
                 disabled={!tracks || tracks.length === 0}
                 style={smallBtn}>▶ Play all</button>
