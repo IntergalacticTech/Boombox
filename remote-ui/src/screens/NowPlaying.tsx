@@ -46,12 +46,31 @@ export function NowPlaying() {
   const livePosition = state?.track?.position_s ?? 0;
   const [pendingPosition, setPendingPosition] = useState<number | null>(null);
   useEffect(() => { setPendingPosition(null); }, [livePosition]);
+
+  // Client-side position tick. The server pushes state on track / play
+  // changes, not on every second elapsed, so without this the seek bar
+  // would freeze between pushes. Resets whenever a fresh push lands or
+  // the track changes; clamps at duration so it doesn't run past the end.
+  const [tickedPos, setTickedPos] = useState<number>(livePosition);
+  useEffect(() => { setTickedPos(livePosition); }, [livePosition]);
+  const durSec = state?.track?.duration_s ?? 0;
+  useEffect(() => {
+    if (!playing) return;
+    const id = window.setInterval(() => {
+      setTickedPos((p) => Math.min(durSec || Infinity, p + 1));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [playing, trackTitle, durSec]);
+
+  const displayPos = pendingPosition ?? tickedPos;
+
   const commitSeek = (secs: number) => {
     command("seek", secs);
     // Hold pendingPosition for ~1s longer so the state push from the
     // server-side seek doesn't snap the slider back to its pre-seek value
     // during the round-trip.
     setPendingPosition(secs);
+    setTickedPos(secs);  // jump the tick base too so it resumes from here
     window.setTimeout(() => setPendingPosition(null), 1200);
   };
 
@@ -141,14 +160,14 @@ export function NowPlaying() {
                             fontFamily: "var(--mono)", fontSize: 12,
                             color: "var(--ink2)" }}>
                 <span style={{ width: 38, textAlign: "right" }}>
-                  {mmss(pendingPosition ?? track.position_s)}
+                  {mmss(displayPos)}
                 </span>
                 <input
                   aria-label="Seek"
                   type="range" min={0}
                   max={Math.max(1, track.duration_s)}
                   step={1}
-                  value={pendingPosition ?? track.position_s}
+                  value={displayPos}
                   onChange={(e) =>
                     setPendingPosition(Number(e.target.value))}
                   onMouseUp={(e) => commitSeek(
