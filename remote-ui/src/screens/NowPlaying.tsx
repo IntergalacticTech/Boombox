@@ -18,8 +18,13 @@ const SOURCE_LABELS: Record<string, string> = {
   movies: "Movies",
 };
 
-/** The core remote: album art, current track, transport controls, volume. */
-export function NowPlaying() {
+/** The core remote: album art, current track, transport controls, volume.
+ *  `onOpenLibrary` lets the source-chip "Library" double up as a tab
+ *  switcher — without it the chip drives the *boombox screen's* Chromium
+ *  but produces no visible change on the phone. */
+export function NowPlaying(
+  { onOpenLibrary }: { onOpenLibrary?: () => void } = {},
+) {
   const { state, command } = useRemote();
   const api = useApi();
   const track = state?.track ?? null;
@@ -83,8 +88,16 @@ export function NowPlaying() {
     // audio "active source" doesn't necessarily change (e.g. tapping
     // Library while AirPlay is streaming opens the Library view on the
     // boombox but AirPlay keeps playing). Confirm with a toast so the
-    // tap feels alive even when state.source doesn't move.
-    setSourceToast(`${SOURCE_LABELS[s] ?? s} opened on boombox screen.`);
+    // tap feels alive even when state.source doesn't move. Library is a
+    // special case because the PWA has its own browse surface — open it
+    // alongside the kiosk navigate so the chip produces visible action
+    // on the phone too.
+    if (s === "mopidy" && onOpenLibrary) {
+      onOpenLibrary();
+      setSourceToast("Library opened — also on boombox screen.");
+    } else {
+      setSourceToast(`${SOURCE_LABELS[s] ?? s} opened on boombox screen.`);
+    }
     window.setTimeout(() => setSourceToast(null), 2500);
   };
 

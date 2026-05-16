@@ -90,7 +90,7 @@ function Remote(
                 color: "var(--ink2)", fontSize: 18, cursor: "pointer",
                 lineHeight: 1,
               }}>⚙</button>
-      {tab === "now" && <NowPlaying />}
+      {tab === "now" && <NowPlaying onOpenLibrary={() => setTab("library")} />}
       {tab === "library" && <Library />}
       {tab === "playlists" && <Playlists />}
       {tab === "search" && <Search />}
