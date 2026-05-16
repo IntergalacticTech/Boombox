@@ -125,3 +125,54 @@ class SubsonicClient:
     async def ping(self) -> bool:
         await self._call("ping")
         return True
+
+    async def get_artists(self) -> list[dict]:
+        """Return a flat list of all artists (Subsonic returns them in
+        alphabetic index buckets; we flatten)."""
+        sub = await self._call("getArtists")
+        index = sub.get("artists", {}).get("index", [])
+        out: list[dict] = []
+        for bucket in index:
+            out.extend(bucket.get("artist", []))
+        return out
+
+    async def get_album_list(self, offset: int = 0, size: int = 500) -> list[dict]:
+        """Paginated album list (alphabeticalByName ordering)."""
+        sub = await self._call("getAlbumList2", {
+            "type": "alphabeticalByName",
+            "offset": offset,
+            "size": size,
+        })
+        return sub.get("albumList2", {}).get("album", [])
+
+    async def get_album(self, album_id: str) -> dict:
+        """Album detail including all tracks."""
+        sub = await self._call("getAlbum", {"id": album_id})
+        return sub.get("album", {})
+
+    async def get_starred(self) -> dict:
+        """Starred artists/albums/songs."""
+        sub = await self._call("getStarred2")
+        return sub.get("starred2", {"artist": [], "album": [], "song": []})
+
+    async def get_playlists(self) -> list[dict]:
+        sub = await self._call("getPlaylists")
+        return sub.get("playlists", {}).get("playlist", [])
+
+    async def get_playlist(self, playlist_id: str) -> dict:
+        sub = await self._call("getPlaylist", {"id": playlist_id})
+        return sub.get("playlist", {})
+
+    def download_url(self, track_id: str) -> tuple[str, dict]:
+        """Return (url, params) for a track download. Caller streams the
+        response. Auth params are baked in fresh per call."""
+        return (
+            f"{self.base_url}/rest/download.view",
+            {**make_auth_params(self.username, self.password), "id": track_id},
+        )
+
+    def cover_art_url(self, art_id: str, size: int | None = None) -> tuple[str, dict]:
+        params = {**make_auth_params(self.username, self.password), "id": art_id}
+        if size is not None:
+            params["size"] = size
+        return (f"{self.base_url}/rest/getCoverArt.view", params)

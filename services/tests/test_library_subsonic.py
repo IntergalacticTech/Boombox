@@ -147,3 +147,45 @@ async def test_call_generic_error_code_raises_base_error_not_auth():
         with pytest.raises(SubsonicError) as exc_info:
             await client.ping()
         assert not isinstance(exc_info.value, SubsonicAuthError)
+
+
+@pytest.mark.asyncio
+async def test_get_artists_parses_index_buckets():
+    client = SubsonicClient(base_url="http://nav.local:4533",
+                            username="u", password="p")
+    payload = {"subsonic-response": {
+        "status": "ok",
+        "artists": {
+            "index": [
+                {"name": "A", "artist": [
+                    {"id": "1", "name": "ABBA", "albumCount": 6},
+                    {"id": "2", "name": "AC/DC", "albumCount": 31},
+                ]},
+                {"name": "B", "artist": [
+                    {"id": "3", "name": "Beatles", "albumCount": 12},
+                ]},
+            ],
+        },
+    }}
+    with patch.object(client, "_session", MagicMock()) as session:
+        session.get = MagicMock(return_value=_mock_response(payload))
+        artists = await client.get_artists()
+    assert len(artists) == 3
+    assert artists[0]["id"] == "1"
+    assert artists[0]["name"] == "ABBA"
+    assert artists[1]["name"] == "AC/DC"
+    assert artists[2]["name"] == "Beatles"
+
+
+@pytest.mark.asyncio
+async def test_get_album_list_pages():
+    client = SubsonicClient(base_url="http://nav.local:4533",
+                            username="u", password="p")
+    payload = {"subsonic-response": {
+        "status": "ok",
+        "albumList2": {"album": [{"id": "a1"}, {"id": "a2"}]},
+    }}
+    with patch.object(client, "_session", MagicMock()) as session:
+        session.get = MagicMock(return_value=_mock_response(payload))
+        albums = await client.get_album_list(offset=0, size=500)
+    assert len(albums) == 2
