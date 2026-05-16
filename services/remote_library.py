@@ -242,6 +242,48 @@ def _make_handlers(mopidy):
         return web.json_response({"ok": True, "uri": new_uri,
                                   "name": saved.get("name")})
 
+    async def playlist_move_item(request: web.Request) -> web.Response:
+        """Reorder a track within a playlist. Body: {from_index, to_index}.
+        Mopidy has no atomic move-within-playlist; lookup the playlist,
+        splice the tracks list, save. Index-based instead of URI-based so
+        playlists with duplicate URIs reorder cleanly."""
+        target = request.match_info["uri"]
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid_json"},
+                                     status=400)
+        from_idx = (body or {}).get("from_index") \
+            if isinstance(body, dict) else None
+        to_idx = (body or {}).get("to_index") \
+            if isinstance(body, dict) else None
+        if not isinstance(from_idx, int) or not isinstance(to_idx, int):
+            return web.json_response({"ok": False, "error": "bad_args"},
+                                     status=400)
+        looked = await mopidy.call("core.playlists.lookup", {"uri": target})
+        playlist = looked.get("result")
+        if not playlist:
+            return web.json_response({"ok": False, "error": "not_found"},
+                                     status=404)
+        tracks = list(playlist.get("tracks") or [])
+        n = len(tracks)
+        if from_idx < 0 or from_idx >= n:
+            return web.json_response(
+                {"ok": False, "error": "from_index_out_of_range"}, status=400)
+        target_idx = max(0, min(n - 1, to_idx))
+        if target_idx == from_idx:
+            return web.json_response({"ok": True, "noop": True})
+        moved = tracks.pop(from_idx)
+        tracks.insert(target_idx, moved)
+        playlist["tracks"] = tracks
+        saved = (await mopidy.call(
+            "core.playlists.save", {"playlist": playlist})).get("result")
+        if not saved:
+            return web.json_response({"ok": False, "error": "save_failed"},
+                                     status=502)
+        return web.json_response({"ok": True,
+                                   "from": from_idx, "to": target_idx})
+
     async def playlist_remove_item(request: web.Request) -> web.Response:
         """Remove a single track URI from a playlist. Same lookup-splice-save
         pattern as append. Removes ALL occurrences of the URI."""
@@ -402,7 +444,7 @@ def _make_handlers(mopidy):
     return (search, list_playlists, create_playlist, playlist_items, queue,
             rescan, browse, lookup, queue_list, queue_jump, queue_remove,
             queue_clear, playlist_append, playlist_remove_item,
-            playlist_delete, playlist_rename, queue_move)
+            playlist_delete, playlist_rename, queue_move, playlist_move_item)
 
 
 def add_routes(app: web.Application, mopidy) -> None:
@@ -411,7 +453,8 @@ def add_routes(app: web.Application, mopidy) -> None:
     (search, list_pls, create_pl, pl_items, queue, rescan, browse, lookup,
      queue_list, queue_jump, queue_remove, queue_clear,
      playlist_append, playlist_remove_item,
-     playlist_delete, playlist_rename, queue_move) = _make_handlers(mopidy)
+     playlist_delete, playlist_rename, queue_move,
+     playlist_move_item) = _make_handlers(mopidy)
     app.router.add_get("/api/remote/library/search", search)
     app.router.add_get("/api/remote/library/browse", browse)
     app.router.add_get("/api/remote/library/lookup", lookup)
@@ -422,6 +465,8 @@ def add_routes(app: web.Application, mopidy) -> None:
     app.router.add_post("/api/remote/playlists/{uri}/append", playlist_append)
     app.router.add_post("/api/remote/playlists/{uri}/remove_item",
                         playlist_remove_item)
+    app.router.add_post("/api/remote/playlists/{uri}/move_item",
+                        playlist_move_item)
     app.router.add_post("/api/remote/playlists/{uri}/rename", playlist_rename)
     app.router.add_post("/api/remote/playlists/{uri}/delete", playlist_delete)
     app.router.add_post("/api/remote/queue", queue)
