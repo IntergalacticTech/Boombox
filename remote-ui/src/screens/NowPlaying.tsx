@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useRemote } from "../state/store";
 import { IconButton } from "../components/IconButton";
+import { QueueView } from "../components/QueueView";
 
 function mmss(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
@@ -28,6 +29,16 @@ export function NowPlaying() {
   const sources = state?.sources_available ?? [];
   const activeSource = state?.source ?? null;
   const [sourceToast, setSourceToast] = useState<string | null>(null);
+
+  // The queue's a separate REST fetch — kick it on every meaningful state
+  // change (track swap, play/pause) so jumps from another remote propagate
+  // without the user pulling-to-refresh. position_s changes every second
+  // so we deliberately key on title + playing instead of the full track.
+  const trackTitle = state?.track?.title ?? null;
+  const playingFlag = state?.playing ?? false;
+  const [queueRefreshKey, setQueueRefreshKey] = useState(0);
+  useEffect(() => { setQueueRefreshKey((k) => k + 1); },
+            [trackTitle, playingFlag]);
 
   const pickSource = (s: string) => {
     command("source", s);
@@ -170,6 +181,11 @@ export function NowPlaying() {
           {state?.repeat === "one" ? "🔂" : "🔁"}
         </IconButton>
       </div>
+
+      {/* The queue refreshes whenever the current track or play state
+          changes — every state push from the boombox bumps a counter so
+          the inline list re-fetches without a manual reload. */}
+      <QueueView refreshKey={queueRefreshKey} />
     </div>
   );
 }
