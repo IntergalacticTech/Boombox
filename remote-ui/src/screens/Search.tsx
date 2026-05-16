@@ -20,6 +20,34 @@ const FIELD_LABELS: Record<SearchField, string> = {
   any: "Any", artist: "Artist", album: "Album", track: "Track",
 };
 
+const HISTORY_KEY = "boombox.remote.search_history";
+const HISTORY_MAX = 6;
+
+interface HistoryEntry { q: string; field: SearchField; }
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((e): e is HistoryEntry =>
+      typeof e === "object" && e && typeof e.q === "string" &&
+      ["any", "artist", "album", "track"].includes(e.field),
+    );
+  } catch { return []; }
+}
+
+function pushHistory(entry: HistoryEntry, prev: HistoryEntry[]): HistoryEntry[] {
+  const term = entry.q.trim();
+  if (!term) return prev;
+  const next = [{ ...entry, q: term },
+                ...prev.filter((e) => e.q !== term || e.field !== entry.field)]
+    .slice(0, HISTORY_MAX);
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(next)); } catch {}
+  return next;
+}
+
 /** Library search. Hits the consolidated Mopidy search backend; results are
  *  capped server-side at 80 tracks. Each result is individually queue-able,
  *  plus a "Play all" that queues the whole result set + starts playback.
@@ -34,6 +62,7 @@ export function Search() {
   const [err, setErr] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [history, setHistory] = useState<HistoryEntry[]>(loadHistory);
 
   // Track the in-flight query so a rapid-fire type doesn't let an
   // earlier slower response overwrite a later one when it finally lands.
@@ -54,6 +83,11 @@ export function Search() {
       .then((r) => {
         if (mySeq !== reqSeqRef.current) return; // stale
         setTracks(r.tracks);
+        // Only stash queries that actually returned something — keeps
+        // history from filling with typos.
+        if (r.tracks.length > 0) {
+          setHistory((h) => pushHistory({ q: term, field }, h));
+        }
       })
       .catch((e: unknown) => {
         if (mySeq !== reqSeqRef.current) return;
@@ -236,10 +270,41 @@ export function Search() {
       )}
 
       {tracks === null && !busy && (
-        <div style={{ color: "var(--ink2)", fontSize: 13,
-                       padding: "24px 4px", textAlign: "center" }}>
-          Type a query and tap Go. Use the field chips above to scope to
-          Artist, Album, or Track.
+        <div style={{ padding: "16px 4px", textAlign: "center" }}>
+          <div style={{ color: "var(--ink2)", fontSize: 13 }}>
+            Type a query — results appear as you type. Use the field chips
+            above to scope to Artist, Album, or Track.
+          </div>
+          {history.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 11, color: "var(--ink2)",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.06em", marginBottom: 6 }}>
+                Recent
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6,
+                             justifyContent: "center" }}>
+                {history.map((h, i) => (
+                  <button key={i} type="button"
+                          onClick={() => { setField(h.field); setQ(h.q); }}
+                          style={{
+                            padding: "4px 10px", borderRadius: 999,
+                            border: "1px solid var(--rule)",
+                            background: "var(--panel)",
+                            color: "var(--ink2)", fontSize: 12,
+                            cursor: "pointer",
+                          }}>
+                    {h.q}
+                    {h.field !== "any" && (
+                      <span style={{ marginLeft: 6, opacity: 0.6 }}>
+                        · {h.field}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
       {tracks && tracks.length === 0 && (
