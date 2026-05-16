@@ -96,3 +96,30 @@ def test_compute_candidates_excludes_pinned(tmp_path: Path):
     candidates = compute_eviction_candidates(conn)
     ids = [c["track_id"] for c in candidates]
     assert ids == ["t2"]
+
+
+def test_eviction_continues_on_non_oserror_from_delete_callback(tmp_path: Path):
+    """A delete_file callback raising a non-OSError (e.g., a custom wrapper
+    exception) must NOT wedge eviction — it should log and continue."""
+    conn = connect(tmp_path / "l.db"); migrate(conn)
+    _seed(conn, [
+        ("t1", "al1", 100, 1.0),
+        ("t2", "al2", 100, 2.0),
+        ("t3", "al3", 100, 3.0),
+    ])
+
+    def bad_delete(path):
+        if "t1" in path:
+            raise RuntimeError("simulated callback bug")  # NOT an OSError
+
+    freed, leftover = evict_until_fits(conn, need_bytes=300,
+                                       delete_file=bad_delete)
+    # All 3 should be marked absent — the first one's exception didn't wedge
+    statuses = dict(conn.execute("SELECT track_id, status FROM cache_state"))
+    assert statuses["t1"] == "absent"
+    assert statuses["t2"] == "absent"
+    assert statuses["t3"] == "absent"
+    # freed accounts for all three by size (DB truth, even if t1's file may
+    # still exist physically — DB is source of truth for cache state)
+    assert freed == 300
+    assert leftover == 0

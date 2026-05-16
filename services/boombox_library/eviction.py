@@ -54,7 +54,7 @@ def evict_until_fits(
             break
         try:
             delete_file(c["local_path"])
-        except OSError as e:
+        except Exception as e:
             log.warning("could not delete %s: %s", c["local_path"], e)
         conn.execute(
             """UPDATE cache_state
