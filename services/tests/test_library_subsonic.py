@@ -80,3 +80,70 @@ async def test_ping_unreachable_raises():
         session.get = MagicMock(side_effect=aiohttp.ClientConnectionError("nope"))
         with pytest.raises(SubsonicUnreachable):
             await client.ping()
+
+
+@pytest.mark.asyncio
+async def test_ping_http_401_raises_auth_error():
+    """A fronting proxy that returns 401 must surface as SubsonicAuthError,
+    not SubsonicUnreachable."""
+    client = SubsonicClient(base_url="http://nav.local:4533",
+                            username="u", password="p")
+    resp = MagicMock()
+    resp.status = 401
+    resp.json = AsyncMock(return_value={})
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=None)
+    with patch.object(client, "_session", MagicMock()) as session:
+        session.get = MagicMock(return_value=resp)
+        with pytest.raises(SubsonicAuthError):
+            await client.ping()
+
+
+@pytest.mark.asyncio
+async def test_ping_http_403_raises_subsonic_error():
+    """Other non-Subsonic 4xx codes raise the base SubsonicError, NOT
+    SubsonicUnreachable (which would mislead the user about the failure)."""
+    client = SubsonicClient(base_url="http://nav.local:4533",
+                            username="u", password="p")
+    resp = MagicMock()
+    resp.status = 403
+    resp.json = AsyncMock(return_value={})
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=None)
+    with patch.object(client, "_session", MagicMock()) as session:
+        session.get = MagicMock(return_value=resp)
+        with pytest.raises(SubsonicError) as exc_info:
+            await client.ping()
+        # Specifically NOT the auth or unreachable subclass
+        assert not isinstance(exc_info.value, SubsonicAuthError)
+        assert not isinstance(exc_info.value, SubsonicUnreachable)
+
+
+@pytest.mark.asyncio
+async def test_ping_non_subsonic_json_raises():
+    """If base_url is pointed at the wrong server (e.g., Jellyfin), the
+    body parses but isn't a Subsonic envelope. Ping must fail, not lie."""
+    client = SubsonicClient(base_url="http://nav.local:4533",
+                            username="u", password="p")
+    payload = {"jellyfin": "hello"}  # not a Subsonic envelope
+    with patch.object(client, "_session", MagicMock()) as session:
+        session.get = MagicMock(return_value=_mock_response(payload))
+        with pytest.raises(SubsonicError):
+            await client.ping()
+
+
+@pytest.mark.asyncio
+async def test_call_generic_error_code_raises_base_error_not_auth():
+    """Subsonic error codes other than 40/41 raise SubsonicError, not
+    SubsonicAuthError — keeps the auth-vs-other distinction sharp."""
+    client = SubsonicClient(base_url="http://nav.local:4533",
+                            username="u", password="p")
+    payload = {"subsonic-response": {
+        "status": "failed",
+        "error": {"code": 50, "message": "Generic error"},
+    }}
+    with patch.object(client, "_session", MagicMock()) as session:
+        session.get = MagicMock(return_value=_mock_response(payload))
+        with pytest.raises(SubsonicError) as exc_info:
+            await client.ping()
+        assert not isinstance(exc_info.value, SubsonicAuthError)

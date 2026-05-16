@@ -93,12 +93,27 @@ class SubsonicClient:
             async with self._session.get(url, params=params) as resp:
                 if resp.status >= 500:
                     raise SubsonicUnreachable(f"server {resp.status}")
+                if resp.status == 401:
+                    # Fronting proxy / reverse-proxy auth, before any Subsonic
+                    # JSON envelope is produced. Surface as an auth failure.
+                    raise SubsonicAuthError("http 401")
+                if resp.status >= 400:
+                    # Other 4xx from something in front of (or instead of) the
+                    # Subsonic API — body is likely HTML, not a Subsonic
+                    # envelope. Fail before attempting json() to avoid
+                    # masking the real cause as "unreachable".
+                    raise SubsonicError(f"http {resp.status}")
                 body = await resp.json()
         except aiohttp.ClientError as e:
             raise SubsonicUnreachable(str(e)) from e
 
-        sub = body.get("subsonic-response", {})
-        if sub.get("status") == "failed":
+        if "subsonic-response" not in body:
+            raise SubsonicError("malformed response — not a Subsonic API")
+        sub = body["subsonic-response"]
+        status = sub.get("status")
+        if status not in ("ok", "failed"):
+            raise SubsonicError("malformed response — not a Subsonic API")
+        if status == "failed":
             err = sub.get("error", {})
             code = err.get("code")
             msg = err.get("message", "unknown")
