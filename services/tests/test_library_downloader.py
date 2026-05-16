@@ -129,3 +129,59 @@ async def test_download_skips_if_already_present(tmp_path: Path):
     assert result == DownloadResult.SKIPPED
     assert called["n"] == 0
     assert target.read_bytes() == b"existing"
+
+
+@pytest.mark.asyncio
+async def test_error_message_does_not_leak_auth_params(tmp_path: Path):
+    """When a fetch raises an aiohttp.ClientResponseError carrying the
+    full request URL (with merged ?u=...&t=...&s=... auth params), the
+    persisted error_message must NOT contain those secrets."""
+    import aiohttp
+    from yarl import URL
+
+    conn = connect(tmp_path / "l.db"); migrate(conn)
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
+                 "VALUES('ar','X','x',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,"
+                 "duration_s,is_compilation,navidrome_starred,updated_at) "
+                 "VALUES('al','A','a','ar',1,30,0,0,0)")
+    conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,"
+                 "size_bytes,content_type,navidrome_starred,updated_at) "
+                 "VALUES('t1','al','T',30,'mp3',5,'audio/mpeg',0,0)")
+    cache_root = tmp_path / "cache"
+    (cache_root / "audio").mkdir(parents=True)
+    (cache_root / "tmp").mkdir()
+
+    async def leaky_fetch(url, params, dest):
+        # Simulate aiohttp constructing a ClientResponseError with the
+        # full merged URL — this is what raise_for_status would produce.
+        req_info = aiohttp.RequestInfo(
+            url=URL("http://nav/rest/download.view?u=jwc&t=DEADBEEF&s=CAFE&id=t1"),
+            method="GET",
+            headers={},  # type: ignore[arg-type]
+            real_url=URL("http://nav/rest/download.view?u=jwc&t=DEADBEEF&s=CAFE&id=t1"),
+        )
+        raise aiohttp.ClientResponseError(
+            request_info=req_info,
+            history=(),
+            status=503,
+            message="Service Unavailable",
+        )
+
+    client = FakeStreamingClient(b"")
+    result = await download_track(
+        conn=conn, client=client, track_id="t1",
+        cache_root=cache_root, fetch=leaky_fetch,
+    )
+    assert result == DownloadResult.ERROR
+
+    row = conn.execute("SELECT error_message FROM cache_state "
+                       "WHERE track_id='t1'").fetchone()
+    msg = row["error_message"]
+    # Secrets MUST NOT appear in the persisted message:
+    assert "DEADBEEF" not in msg
+    assert "CAFE" not in msg
+    assert "jwc" not in msg
+    # Helpful diagnostic info SHOULD be there:
+    assert "503" in msg
+    assert "Service Unavailable" in msg

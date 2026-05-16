@@ -36,6 +36,25 @@ Fetcher = Callable[[str, dict, Path], Awaitable[None]]
 """(url, params, dest_path) → writes bytes to dest_path."""
 
 
+def _safe_error_message(e: Exception) -> str:
+    """Format an exception for cache_state.error_message without leaking
+    auth params from the request URL.
+
+    aiohttp.ClientResponseError.__str__ includes the merged URL with
+    `?u=USERNAME&t=TOKEN&s=SALT&id=...`. We strip the URL by formatting
+    only type + status + message for that exception type.
+    """
+    if isinstance(e, aiohttp.ClientResponseError):
+        return f"{type(e).__name__}: {e.status} {e.message}"
+    if isinstance(e, aiohttp.ClientError):
+        # Other ClientError subclasses (DNS, connection refused, etc.).
+        # Strip any URL substring just in case.
+        msg = str(e)
+        # crude but bounded: drop anything containing '?'
+        return msg.split('?', 1)[0] if 'http' in msg else msg
+    return f"{type(e).__name__}: {e}"
+
+
 async def default_fetch(url: str, params: dict, dest: Path) -> None:
     """Real aiohttp streaming fetch. Raises on non-2xx."""
     timeout = aiohttp.ClientTimeout(total=600)
@@ -119,7 +138,7 @@ async def download_track(
                VALUES (?, 'error', ?)
                ON CONFLICT(track_id) DO UPDATE SET
                   status='error', error_message=excluded.error_message""",
-            (track_id, str(e)),
+            (track_id, _safe_error_message(e)),
         )
-        log.warning("download of %s failed: %s", track_id, e)
+        log.warning("download of %s failed: %s", track_id, _safe_error_message(e))
         return DownloadResult.ERROR
