@@ -223,10 +223,16 @@ class StateAggregator:
         shuffle = bool((random_info or {}).get("result"))
         repeat_flag = bool((repeat_info or {}).get("result"))
         single_flag = bool((single_info or {}).get("result"))
-        # Resolve cover art via boombox-state's iTunes lookup. Best-effort;
-        # any failure becomes art_url=null and the PWA renders "no art".
+        # Cover art: prefer Mopidy's embedded artwork when available
+        # (matches the actual file the kiosk is playing, no network
+        # lookup required) and fall back to boombox-state's iTunes lookup
+        # when Mopidy doesn't know about the track (streams) or has no
+        # embedded image.
         art_url: str | None = None
-        if track:
+        track_uri = track.get("uri") if track else None
+        if track_uri:
+            art_url = await self._mopidy_art_url(track_uri)
+        if not art_url and track:
             art_url = await self._state.album_art_url(
                 artist=", ".join(a.get("name", "")
                                   for a in track.get("artists") or []) or None,
@@ -251,6 +257,7 @@ class StateAggregator:
             "source": source,
             "playing": playing_state == "playing",
             "track": {
+                "uri":        track.get("uri"),
                 "title":      track.get("name"),
                 "artist":     ", ".join(a.get("name", "") for a in
                                          track.get("artists") or []) or None,
@@ -276,6 +283,33 @@ class StateAggregator:
             "skin":  theme_payload.get("skinId"),
             "theme": theme_payload.get("theme") or {},
         }
+
+    async def _mopidy_art_url(self, track_uri: str) -> str | None:
+        """Ask Mopidy for a track's embedded album art via
+        core.library.get_images. Returns a `/local/...` URL the nginx
+        snippet proxies through to Mopidy on 127.0.0.1:6680, or None if
+        Mopidy doesn't know about the track (streams, AirPlay, etc.).
+
+        We pick the largest available image and let the browser scale —
+        Mopidy occasionally returns multiple sizes per track."""
+        try:
+            res = await self._mopidy.call(
+                "core.library.get_images", {"uris": [track_uri]})
+        except Exception:
+            return None
+        by_uri = (res or {}).get("result") or {}
+        images = by_uri.get(track_uri) or []
+        if not images:
+            return None
+        # Sort by area (largest first); some Mopidy backends omit dims —
+        # those sort last so a known-sized image wins.
+        def _area(im: dict) -> int:
+            w = im.get("width") or 0
+            h = im.get("height") or 0
+            return int(w) * int(h)
+        images = sorted(images, key=_area, reverse=True)
+        url = images[0].get("uri")
+        return url if isinstance(url, str) and url else None
 
     async def _fetch_theme(self) -> dict:
         """Pull the active theme from boombox-state. Returns {} on failure —
