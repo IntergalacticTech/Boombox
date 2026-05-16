@@ -11,11 +11,15 @@ import { Library } from "./screens/Library";
 import { Playlists } from "./screens/Playlists";
 import { Search } from "./screens/Search";
 import { TabBar, type Tab } from "./components/TabBar";
+import { SettingsSheet } from "./components/SettingsSheet";
 
 /** Inside the provider: routes on connection status, then on selected tab. */
-function Remote({ onUnpair }: { onUnpair: () => void }) {
+function Remote(
+  { base, onUnpair }: { base: string; onUnpair: () => void },
+) {
   const { state, status } = useRemote();
   const [tab, setTab] = useState<Tab>("now");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Terminal states always take over — the user has to act before the app
   // is usable again.
@@ -74,12 +78,26 @@ function Remote({ onUnpair }: { onUnpair: () => void }) {
             : "Connection lost — retrying"}
         </div>
       )}
+      <button type="button" aria-label="Settings"
+              onClick={() => setSettingsOpen(true)}
+              style={{
+                position: "fixed", top: 12, right: 12, zIndex: 15,
+                width: 36, height: 36, borderRadius: 18,
+                border: "1px solid var(--rule)", background: "var(--panel)",
+                color: "var(--ink2)", fontSize: 18, cursor: "pointer",
+                lineHeight: 1,
+              }}>⚙</button>
       {tab === "now" && <NowPlaying />}
       {tab === "library" && <Library />}
       {tab === "playlists" && <Playlists />}
       {tab === "search" && <Search />}
       {tab === "files" && <Files />}
       <TabBar active={tab} onChange={setTab} />
+      {settingsOpen && (
+        <SettingsSheet base={base}
+                       onClose={() => setSettingsOpen(false)}
+                       onUnpair={() => { setSettingsOpen(false); onUnpair(); }} />
+      )}
     </>
   );
 }
@@ -104,7 +122,7 @@ export default function App() {
         key={pairing.token}
         transport={makeHttpTransport(pairing.base, pairing.token)}
       >
-        <Remote onUnpair={unpair} />
+        <Remote base={pairing.base} onUnpair={unpair} />
       </TransportProvider>
     </ApiProvider>
   );
