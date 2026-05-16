@@ -37,7 +37,7 @@ describe("Search", () => {
     await waitFor(() =>
       expect(screen.getByText("Heat of the Moment")).toBeTruthy());
     expect(api.get).toHaveBeenCalledWith(
-      "api/remote/library/search?q=Asia",
+      "api/remote/library/search?q=Asia&field=any",
     );
     expect(screen.getByText(/2 results/)).toBeTruthy();
   });

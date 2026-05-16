@@ -28,13 +28,28 @@ def _track_summary(t: dict) -> dict:
 
 
 def _make_handlers(mopidy):
+    # Mopidy field aliases. "track" is the user-facing label but Mopidy
+    # wants "track_name"; we accept either for forgiveness.
+    _SEARCH_FIELDS = {
+        "any":   "any",
+        "artist": "artist",
+        "album":  "album",
+        "track":  "track_name",
+        "track_name": "track_name",
+    }
+
     async def search(request: web.Request) -> web.Response:
         q = (request.query.get("q") or "").strip()
         if not q:
             return web.json_response({"ok": False, "error": "missing_q"},
                                      status=400)
+        raw_field = (request.query.get("field") or "any").strip().lower()
+        field = _SEARCH_FIELDS.get(raw_field)
+        if field is None:
+            return web.json_response({"ok": False, "error": "bad_field"},
+                                     status=400)
         res = await mopidy.call("core.library.search",
-                                {"query": {"any": [q]}})
+                                {"query": {field: [q]}})
         results = res.get("result") or []
         tracks = [_track_summary(t) for group in results
                   for t in (group.get("tracks") or [])][:80]
