@@ -13,6 +13,7 @@ import { Search } from "./screens/Search";
 import { TabBar, type Tab } from "./components/TabBar";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { MiniPlayer } from "./components/MiniPlayer";
+import { InstallBanner } from "./components/InstallBanner";
 
 /** Inside the provider: routes on connection status, then on selected tab. */
 function Remote(
@@ -79,6 +80,7 @@ function Remote(
             : "Connection lost — retrying"}
         </div>
       )}
+      <InstallBanner />
       <button type="button" aria-label="Settings"
               onClick={() => setSettingsOpen(true)}
               style={{
