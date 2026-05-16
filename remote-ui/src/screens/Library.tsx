@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useApi, ApiError } from "../lib/api";
 import { SkeletonRows } from "../components/Skeleton";
+import { PlaylistPicker } from "../components/PlaylistPicker";
 
 interface Ref {
   uri: string;
@@ -35,6 +36,9 @@ export function Library() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // Add-to-playlist picker: pendingRef holds the row whose tracks the
+  // user is about to file into a playlist.
+  const [pendingRef, setPendingRef] = useState<Ref | null>(null);
 
   const here = stack[stack.length - 1];
 
@@ -61,18 +65,18 @@ export function Library() {
   };
   const jump = (i: number) => setStack((s) => s.slice(0, i + 1));
 
+  const resolveTracks = async (r: Ref): Promise<string[]> => {
+    if (r.type === "track") return [r.uri];
+    const looked = await api.get<{ ok: boolean; tracks: { uri: string }[] }>(
+      `api/remote/library/lookup?uri=${encodeURIComponent(r.uri)}`,
+    );
+    return looked.tracks.map((t) => t.uri);
+  };
+
   const play = async (r: Ref, mode: "play" | "queue") => {
     setToast(null);
     try {
-      let uris: string[];
-      if (r.type === "track") {
-        uris = [r.uri];
-      } else {
-        const looked = await api.get<{ ok: boolean; tracks: { uri: string }[] }>(
-          `api/remote/library/lookup?uri=${encodeURIComponent(r.uri)}`,
-        );
-        uris = looked.tracks.map((t) => t.uri);
-      }
+      const uris = await resolveTracks(r);
       if (uris.length === 0) {
         setToast(`${r.name}: no playable tracks.`);
         return;
@@ -83,6 +87,27 @@ export function Library() {
           ? `Playing ${r.name} (${uris.length} track${uris.length === 1 ? "" : "s"}).`
           : `Queued ${r.name} (${uris.length} track${uris.length === 1 ? "" : "s"}).`,
       );
+    } catch (e: unknown) {
+      setToast(e instanceof ApiError ? `Failed (${e.status})` : "Failed");
+    }
+  };
+
+  const addToPlaylist = async (target: { name: string; uri: string }) => {
+    const r = pendingRef;
+    setPendingRef(null);
+    if (!r) return;
+    setToast(`Adding ${r.name} → "${target.name}"…`);
+    try {
+      const uris = await resolveTracks(r);
+      if (uris.length === 0) {
+        setToast(`${r.name}: no playable tracks.`);
+        return;
+      }
+      const res = await api.post<{ ok: boolean; added: number }>(
+        `api/remote/playlists/${encodeURIComponent(target.uri)}/append`,
+        { uris },
+      );
+      setToast(`Added ${res.added ?? uris.length} to "${target.name}".`);
     } catch (e: unknown) {
       setToast(e instanceof ApiError ? `Failed (${e.status})` : "Failed");
     }
@@ -144,7 +169,13 @@ export function Library() {
             {r.type !== "track" && (
               <button type="button"
                       aria-label={`Queue ${r.name}`}
-                      onClick={() => play(r, "queue")} style={smallBtn}>+</button>
+                      onClick={() => play(r, "queue")} style={smallBtn}>+Q</button>
+            )}
+            {r.type !== "playlist" && (
+              <button type="button"
+                      aria-label={`Add ${r.name} to playlist`}
+                      onClick={() => setPendingRef(r)}
+                      style={smallBtn}>＋PL</button>
             )}
           </li>
         ))}
@@ -154,6 +185,13 @@ export function Library() {
           </li>
         )}
       </ul>
+      {pendingRef && (
+        <PlaylistPicker
+          count={pendingRef.type === "track" ? 1 : -1}
+          onPick={addToPlaylist}
+          onCancel={() => setPendingRef(null)}
+        />
+      )}
     </div>
   );
 }
