@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -152,13 +153,16 @@ class StateApi:
         public https URL or None. boombox-state caches lookups in-process
         for 24 h.
 
-        Tries the (artist, album) entity=album query first — that's what
-        the kiosk uses, so we share its cache. If that returns null
-        (common for live albums with "(Disk One)" / "(Remastered)" cruft
-        that iTunes doesn't recognize), fall back to (artist, track) which
-        searches the song entity and matches a much wider swath of the
-        catalog. iTunes failures (timeout, 404, no match) become None and
-        the caller renders the no-art placeholder."""
+        Lookup order:
+          1. (artist, album) — shares the kiosk's cache key
+          2. (artist, album-stripped) — drops a trailing parenthesised
+             qualifier so "AC/DC Live (Disk One)" matches the canonical
+             "AC/DC Live" iTunes entry
+          3. (artist, track) — song-entity search; catches reissues that
+             have unique track names but messy album metadata
+          4. fallback to track-only or artist-only as last resort
+        iTunes failures (timeout, 404, no match) become None and the
+        caller renders the no-art placeholder."""
         if not (artist or album or track):
             return None
 
@@ -179,6 +183,11 @@ class StateApi:
             url = await _lookup({"artist": artist, "album": album})
             if url:
                 return url
+            stripped = _strip_album_qualifier(album)
+            if stripped and stripped != album:
+                url = await _lookup({"artist": artist, "album": stripped})
+                if url:
+                    return url
         if artist and track:
             return await _lookup({"artist": artist, "track": track})
         if track:
@@ -186,6 +195,18 @@ class StateApi:
         if artist:
             return await _lookup({"artist": artist})
         return None
+
+
+_ALBUM_QUALIFIER_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]\s*$")
+
+
+def _strip_album_qualifier(name: str) -> str:
+    """Remove a trailing parenthesised qualifier from an album name so
+    "AC/DC Live (Disk One)" or "Houses of the Holy [Remastered]" match
+    the canonical iTunes catalog entry. Only strips from the END to
+    avoid breaking albums that legitimately open with parens, like
+    "(What's the Story) Morning Glory?"."""
+    return _ALBUM_QUALIFIER_RE.sub("", name).strip()
 
 
 class KioskClient:

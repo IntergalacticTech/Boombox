@@ -19,7 +19,7 @@ export function SettingsSheet(
   const sleepSec = state?.sleep_timer_s ?? null;
   const sleepLabel = sleepSec == null
     ? "Off — tap to set"
-    : `${Math.max(1, Math.round(sleepSec / 60))}m — tap to cycle / long-press cancel`;
+    : `${Math.max(1, Math.round(sleepSec / 60))}m — tap to cycle`;
 
   const unpair = () => {
     if (!window.confirm(
@@ -74,11 +74,21 @@ export function SettingsSheet(
         </Row>
 
         <Row label="Sleep timer">
-          <SleepButton
-            label={sleepLabel}
-            active={sleepSec != null}
-            onPress={() => command("sleep_timer")}
-          />
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end",
+                         flexWrap: "wrap" }}>
+            <SleepButton
+              label={sleepLabel}
+              active={sleepSec != null}
+              onPress={() => command("sleep_timer")}
+            />
+            {sleepSec != null && (
+              <button type="button"
+                      onClick={() => command("sleep_timer_off")}
+                      style={pillBtn(false)}>
+                Cancel
+              </button>
+            )}
+          </div>
         </Row>
 
         <div style={{ height: 1, background: "var(--rule)",

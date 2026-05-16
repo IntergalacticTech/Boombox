@@ -196,6 +196,14 @@ async def _h_sleep_cancel(d: Dispatcher):
         await d.kiosk.emit("sleep-timer", {"minutes": None})
 
 
+# Short-press alias the PWA uses when the user explicitly wants to cancel.
+# (`fire()` only routes short_press, so we can't reach the long_press
+# handler directly from the remote command channel.)
+@_handler("sleep_timer_off")
+async def _h_sleep_off(d: Dispatcher):
+    await _h_sleep_cancel(d)
+
+
 @_handler("record", "short_press")
 async def _h_record(d: Dispatcher):
     if d.recorder is None:
