@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApi, ApiError } from "../lib/api";
 
 interface Track {
@@ -73,6 +73,29 @@ export function Search() {
     }
   };
 
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerUris, setPickerUris] = useState<string[]>([]);
+  const openPicker = (uris: string[]) => {
+    setPickerUris(uris);
+    setPickerOpen(true);
+  };
+  const addToPlaylist = async (target: { name: string; uri: string }) => {
+    setPickerOpen(false);
+    setToast(`Adding to "${target.name}"…`);
+    try {
+      const res = await api.post<{ ok: boolean; added: number }>(
+        `api/remote/playlists/${encodeURIComponent(target.uri)}/append`,
+        { uris: pickerUris },
+      );
+      setToast(`Added ${res.added ?? pickerUris.length} to "${target.name}".`);
+      setSelected(new Set());
+    } catch (e: unknown) {
+      setToast(
+        e instanceof ApiError ? `Add failed (${e.status})` : "Add failed",
+      );
+    }
+  };
+
   const queueOne = async (t: Track, play: boolean) => {
     setToast(null);
     try {
@@ -120,12 +143,19 @@ export function Search() {
               </span>
             )}
           </span>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap",
+                        justifyContent: "flex-end" }}>
             {selected.size > 0 && (
-              <button type="button" style={smallBtn}
-                      onClick={() => saveAsPlaylist(Array.from(selected))}>
-                ＋ Save as playlist
-              </button>
+              <>
+                <button type="button" style={smallBtn}
+                        onClick={() => saveAsPlaylist(Array.from(selected))}>
+                  ＋ Save as playlist
+                </button>
+                <button type="button" style={smallBtn}
+                        onClick={() => openPicker(Array.from(selected))}>
+                  → Add to…
+                </button>
+              </>
             )}
             <button type="button" style={smallBtn}
                     onClick={() => saveAsPlaylist(tracks.map((t) => t.uri))}>
@@ -155,6 +185,15 @@ export function Search() {
         <div style={{ color: "var(--ink2)", padding: "16px 4px" }}>
           No results.
         </div>
+      )}
+
+      {pickerOpen && (
+        <PlaylistPicker
+          count={pickerUris.length}
+          api={api}
+          onPick={addToPlaylist}
+          onCancel={() => setPickerOpen(false)}
+        />
       )}
 
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
@@ -195,6 +234,74 @@ export function Search() {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function PlaylistPicker(
+  { count, api, onPick, onCancel }: {
+    count: number;
+    api: ReturnType<typeof useApi>;
+    onPick: (p: { name: string; uri: string }) => void;
+    onCancel: () => void;
+  },
+) {
+  const [items, setItems] = useState<{ name: string; uri: string }[] | null>(null);
+  useEffect(() => {
+    api.get<{ ok: boolean; playlists: { name: string; uri: string }[] }>(
+      "api/remote/playlists",
+    ).then((r) => setItems(r.playlists))
+      .catch(() => setItems([]));
+  }, [api]);
+  return (
+    <div role="dialog" aria-label="Add to playlist"
+         onClick={onCancel}
+         style={{
+           position: "fixed", inset: 0, zIndex: 100,
+           background: "rgba(0,0,0,0.5)",
+           display: "flex", alignItems: "center", justifyContent: "center",
+           padding: 16,
+         }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        maxWidth: 360, width: "100%", maxHeight: "80vh", overflowY: "auto",
+        background: "var(--panel)", borderRadius: 12,
+        border: "1px solid var(--rule)", padding: 16,
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between",
+                       alignItems: "baseline", marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontSize: 16 }}>
+            Add {count} track{count === 1 ? "" : "s"} to…
+          </h3>
+          <button type="button" onClick={onCancel}
+                  aria-label="Cancel"
+                  style={{ background: "transparent", border: 0,
+                           color: "var(--ink2)", fontSize: 18,
+                           cursor: "pointer" }}>×</button>
+        </div>
+        {!items && <div style={{ color: "var(--ink2)" }}>Loading…</div>}
+        {items && items.length === 0 && (
+          <div style={{ color: "var(--ink2)" }}>
+            No playlists yet. Use "Save as playlist" to create one.
+          </div>
+        )}
+        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {items?.map((p) => (
+            <li key={p.uri}>
+              <button type="button"
+                      onClick={() => onPick(p)}
+                      style={{
+                        display: "block", width: "100%", textAlign: "left",
+                        padding: "10px 4px", fontSize: 15,
+                        background: "transparent",
+                        border: 0, borderBottom: "1px solid var(--rule)",
+                        color: "var(--ink)", cursor: "pointer",
+                      }}>
+                {p.name || p.uri}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
