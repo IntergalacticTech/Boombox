@@ -80,6 +80,18 @@ export function QueueView({ refreshKey }: { refreshKey: number }) {
     load();
   };
 
+  const saveAsPlaylist = async () => {
+    if (!rows || rows.length === 0) return;
+    const name = window.prompt(
+      `Save ${rows.length} queued track${rows.length === 1 ? "" : "s"} as playlist — name?`,
+    );
+    if (!name || !name.trim()) return;
+    try {
+      await api.post("api/remote/playlists",
+                     { name: name.trim(), uris: rows.map((r) => r.uri) });
+    } catch { /* best-effort; user will see the playlist (or not) */ }
+  };
+
   return (
     <section aria-label="Queue" style={{ width: "100%" }}>
       <header style={{
@@ -92,9 +104,15 @@ export function QueueView({ refreshKey }: { refreshKey: number }) {
           Queue {rows && `(${rows.length})`}
         </h3>
         {rows && rows.length > 0 && (
-          <button type="button" onClick={clearAll} style={smallBtn}>
-            Clear
-          </button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button type="button" onClick={saveAsPlaylist}
+                    style={smallBtn}>
+              ＋ Save
+            </button>
+            <button type="button" onClick={clearAll} style={smallBtn}>
+              Clear
+            </button>
+          </div>
         )}
       </header>
       {err && (
