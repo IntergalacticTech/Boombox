@@ -12,6 +12,7 @@ import { Playlists } from "./screens/Playlists";
 import { Search } from "./screens/Search";
 import { TabBar, type Tab } from "./components/TabBar";
 import { SettingsSheet } from "./components/SettingsSheet";
+import { MiniPlayer } from "./components/MiniPlayer";
 
 /** Inside the provider: routes on connection status, then on selected tab. */
 function Remote(
@@ -92,6 +93,7 @@ function Remote(
       {tab === "playlists" && <Playlists />}
       {tab === "search" && <Search />}
       {tab === "files" && <Files />}
+      {tab !== "now" && <MiniPlayer onOpenNow={() => setTab("now")} />}
       <TabBar active={tab} onChange={setTab} />
       {settingsOpen && (
         <SettingsSheet base={base}
