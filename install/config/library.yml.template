@@ -1,0 +1,20 @@
+# /etc/boombox/library.yml — boombox-library service config.
+# The Settings UI rewrites this file atomically; manual edits survive
+# until the next save.
+
+source:
+  url: ""
+  username: ""
+  # Password is encrypted at rest by the service; do not edit by hand.
+  password_encrypted: ""
+
+sync:
+  interval_seconds: 3600
+  starred_auto_pin: true
+  max_concurrent_downloads: 2
+
+cache:
+  marker_filename: ".boombox-cache"
+  search_paths:
+    - /media
+  reserve_bytes: 1073741824  # 1 GB

@@ -116,7 +116,19 @@ sudo apt install -y \
 # Mopidy on Debian Trixie reads its own /usr/lib/python3/dist-packages, so to
 # install Iris where Mopidy can see it we *do* need --break-system-packages.
 # Trade-off accepted: it's a Pi appliance, not a general workstation.
-sudo pip install --break-system-packages Mopidy-Iris
+sudo pip install --break-system-packages Mopidy-Iris Mopidy-Subsonic
+
+# Place default boombox-library config if absent (atomic, idempotent).
+if [ ! -f /etc/boombox/library.yml ]; then
+    sudo mkdir -p /etc/boombox
+    sudo cp "$(dirname "$0")/config/library.yml.template" /etc/boombox/library.yml
+    sudo chown "$USER:$USER" /etc/boombox/library.yml
+    sudo chmod 600 /etc/boombox/library.yml
+fi
+
+# State dir for SQLite catalog
+sudo mkdir -p /opt/boombox/state
+sudo chown "$USER:$USER" /opt/boombox/state
 
 # ---------------------------------------------------------------------------
 # 1.5. Layout migration (must run before anything else touches REPO_DIR)
@@ -388,6 +400,7 @@ USER_UNITS=(
   boombox-kiosk-guard
   boombox-osk
   boombox-updater
+  boombox-library
 )
 for u in "${USER_UNITS[@]}"; do
   systemctl --user enable "$u.service"
