@@ -122,13 +122,13 @@ sudo pip install --break-system-packages Mopidy-Iris Mopidy-Subsonic
 if [ ! -f /etc/boombox/library.yml ]; then
     sudo mkdir -p /etc/boombox
     sudo cp "$(dirname "$0")/config/library.yml.template" /etc/boombox/library.yml
-    sudo chown "$USER:$USER" /etc/boombox/library.yml
+    sudo chown "$BOOMBOX_USER:$BOOMBOX_USER" /etc/boombox/library.yml
     sudo chmod 600 /etc/boombox/library.yml
 fi
 
 # State dir for SQLite catalog
 sudo mkdir -p /opt/boombox/state
-sudo chown "$USER:$USER" /opt/boombox/state
+sudo chown "$BOOMBOX_USER:$BOOMBOX_USER" /opt/boombox/state
 
 # ---------------------------------------------------------------------------
 # 1.5. Layout migration (must run before anything else touches REPO_DIR)
