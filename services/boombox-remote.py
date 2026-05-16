@@ -195,6 +195,9 @@ class StateAggregator:
         self._boombox_name = boombox_name
         self._mopidy = clients.MopidyRpc(session)
         self._state = clients.StateApi(session)
+        # Set externally after construction so we don't have a circular
+        # dep on the dispatcher's SleepTimer at __init__ time.
+        self.sleep_timer: clients.SleepTimer | None = None
 
     async def consolidated_state(self) -> dict:
         # Pull from upstream services in parallel for snappiness.
@@ -263,7 +266,11 @@ class StateAggregator:
             "repeat":   repeat,
             "sources_available": ["mopidy", "airplay", "spotify",
                                    "bluetooth", "movies"],
-            "sleep_timer_s": None,  # in-memory; Phase 2 wires it
+            "sleep_timer_s": (
+                self.sleep_timer.active_minutes * 60
+                if self.sleep_timer and self.sleep_timer.active_minutes
+                else None
+            ),
             "recording":     False,
             "mic_on":        karaoke,
             "skin":  theme_payload.get("skinId"),
@@ -592,8 +599,21 @@ async def main() -> None:
             boombox_id=os.environ.get("BOOMBOX_ID", "boombox-default"),
             boombox_name=os.environ.get("BOOMBOX_NAME", "Boombox"),
         )
+        mopidy_for_dispatch = clients.MopidyRpc(session)
+
+        async def _on_sleep_expire() -> None:
+            try:
+                await mopidy_for_dispatch.call("core.playback.pause")
+            except Exception as exc:
+                log.warning("sleep expire pause failed: %s", exc)
+
+        sleep_t = clients.SleepTimer(on_expire=_on_sleep_expire)
+        # The aggregator reads sleep_t.active_minutes on every state assembly
+        # so the PWA's "Sleep: 30m" indicator updates without us pushing.
+        agg.sleep_timer = sleep_t
+
         dispatcher = actions.Dispatcher(
-            mopidy=clients.MopidyRpc(session),
+            mopidy=mopidy_for_dispatch,
             state=clients.StateApi(session),
             # KioskClient drives the on-Pi Chromium via CDP on :9222 — needed
             # for source overlays (airplay/spotify/bluetooth) and the
@@ -602,7 +622,11 @@ async def main() -> None:
             kiosk=clients.KioskClient(session),
             recorder=None,     # populated alongside boombox-buttons
             display=None,
-            sleep=None,
+            # Per-process SleepTimer — independent from the boombox-buttons
+            # service's instance. Two-clients-with-conflicting-timers is
+            # rare; surfacing _this_ timer's state via the consolidated
+            # response keeps the PWA UI honest about what it can control.
+            sleep=sleep_t,
             disabled=set(),
         )
         app = create_app(aggregator=agg, dispatcher=dispatcher)
