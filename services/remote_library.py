@@ -161,6 +161,72 @@ def _make_handlers(mopidy):
                                      status=502)
         return web.json_response({"ok": True, "added": len(new_uris)})
 
+    async def playlist_delete(request: web.Request) -> web.Response:
+        """Delete a playlist by URI. Mopidy's delete returns True if a
+        backend owned the playlist and removed it; we surface that as
+        ok/error."""
+        target = request.match_info["uri"]
+        res = await mopidy.call("core.playlists.delete", {"uri": target})
+        ok = bool(res.get("result"))
+        if not ok:
+            return web.json_response({"ok": False, "error": "delete_failed"},
+                                     status=502)
+        return web.json_response({"ok": True})
+
+    async def playlist_rename(request: web.Request) -> web.Response:
+        """Rename a playlist. Mopidy's playlist URI for m3u is path-derived,
+        so a "rename" is really save-as-new + delete-old. We try the
+        cleaner path first: save the same playlist with a new name (some
+        backends update in place). If that yields a fresh URI, the old
+        one is removed to keep the list clean."""
+        target = request.match_info["uri"]
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid_json"},
+                                     status=400)
+        new_name = (body or {}).get("name") if isinstance(body, dict) else None
+        if not isinstance(new_name, str) or not new_name.strip():
+            return web.json_response({"ok": False, "error": "name_required"},
+                                     status=400)
+        new_name = new_name.strip()
+
+        looked = await mopidy.call("core.playlists.lookup", {"uri": target})
+        playlist = looked.get("result")
+        if not playlist:
+            return web.json_response({"ok": False, "error": "not_found"},
+                                     status=404)
+        old_uri = playlist.get("uri")
+        tracks = playlist.get("tracks") or []
+
+        # Saving with the new name + the same URI may either rename in
+        # place (older Mopidy) or coin a new URI (m3u backend, where the
+        # filename derives from the name). Either way we end up with a
+        # playlist of the new name. Use create + save to be backend-safe.
+        created = (await mopidy.call(
+            "core.playlists.create",
+            {"name": new_name, "uri_scheme": "m3u"})).get("result")
+        if not created:
+            return web.json_response({"ok": False, "error": "create_failed"},
+                                     status=502)
+        created["tracks"] = tracks
+        saved = (await mopidy.call(
+            "core.playlists.save", {"playlist": created})).get("result")
+        if not saved:
+            return web.json_response({"ok": False, "error": "save_failed"},
+                                     status=502)
+        new_uri = saved.get("uri")
+        if new_uri and new_uri != old_uri:
+            # best-effort cleanup of the old shell — ignore failures so a
+            # half-success still leaves the user with the renamed copy
+            try:
+                await mopidy.call("core.playlists.delete", {"uri": old_uri})
+            except Exception:
+                pass
+        await mopidy.call("core.playlists.refresh", {"uri_scheme": "m3u"})
+        return web.json_response({"ok": True, "uri": new_uri,
+                                  "name": saved.get("name")})
+
     async def playlist_remove_item(request: web.Request) -> web.Response:
         """Remove a single track URI from a playlist. Same lookup-splice-save
         pattern as append. Removes ALL occurrences of the URI."""
@@ -282,7 +348,8 @@ def _make_handlers(mopidy):
 
     return (search, list_playlists, create_playlist, playlist_items, queue,
             rescan, browse, lookup, queue_list, queue_jump, queue_remove,
-            queue_clear, playlist_append, playlist_remove_item)
+            queue_clear, playlist_append, playlist_remove_item,
+            playlist_delete, playlist_rename)
 
 
 def add_routes(app: web.Application, mopidy) -> None:
@@ -290,7 +357,8 @@ def add_routes(app: web.Application, mopidy) -> None:
     clients.MopidyRpc (or any object with an async .call(method, params))."""
     (search, list_pls, create_pl, pl_items, queue, rescan, browse, lookup,
      queue_list, queue_jump, queue_remove, queue_clear,
-     playlist_append, playlist_remove_item) = _make_handlers(mopidy)
+     playlist_append, playlist_remove_item,
+     playlist_delete, playlist_rename) = _make_handlers(mopidy)
     app.router.add_get("/api/remote/library/search", search)
     app.router.add_get("/api/remote/library/browse", browse)
     app.router.add_get("/api/remote/library/lookup", lookup)
@@ -301,6 +369,8 @@ def add_routes(app: web.Application, mopidy) -> None:
     app.router.add_post("/api/remote/playlists/{uri}/append", playlist_append)
     app.router.add_post("/api/remote/playlists/{uri}/remove_item",
                         playlist_remove_item)
+    app.router.add_post("/api/remote/playlists/{uri}/rename", playlist_rename)
+    app.router.add_post("/api/remote/playlists/{uri}/delete", playlist_delete)
     app.router.add_post("/api/remote/queue", queue)
     app.router.add_get("/api/remote/queue", queue_list)
     app.router.add_post("/api/remote/queue/jump", queue_jump)
