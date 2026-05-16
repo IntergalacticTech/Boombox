@@ -95,6 +95,25 @@ async def download_track(
         return DownloadResult.ERROR
     suffix = trow["suffix"] or "bin"
 
+    # Pre-flight: ensure room exists for this track before starting.
+    # We may need to evict streamed (non-pinned) cache items to make room.
+    expected_size = int(trow["size_bytes"] or 0)
+    if expected_size > 0:
+        try:
+            stat = os.statvfs(cache_root)
+            free = stat.f_bavail * stat.f_frsize
+        except OSError:
+            free = expected_size  # can't check; proceed and hope
+        # Read the reserve from config indirectly: we don't have access
+        # here, so use a conservative default. Service entry should pass
+        # this in via a Fetcher closure or similar in Phase 2. For now,
+        # 1 GB matches the default in config.CacheConfig.reserve_bytes.
+        reserve = 1_073_741_824
+        needed = expected_size + reserve - free
+        if needed > 0:
+            from .eviction import evict_until_fits
+            evict_until_fits(conn, needed, lambda p: os.unlink(p) if p else None)
+
     tmp_path = cache_root / "tmp" / f"{track_id}.part"
     final_path = cache_root / "audio" / f"{track_id}.{suffix}"
 

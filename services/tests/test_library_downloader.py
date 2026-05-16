@@ -228,3 +228,58 @@ async def test_queue_respects_concurrency_limit(tmp_path: Path):
     assert peak <= 2
     rows = conn.execute("SELECT COUNT(*) FROM cache_state WHERE status='present'").fetchone()
     assert rows[0] == 5
+
+
+@pytest.mark.asyncio
+async def test_download_triggers_eviction_when_low_on_space(tmp_path: Path, monkeypatch):
+    """When the cache drive is near full, downloading a pinned track
+    must evict streamed (unpinned) tracks first."""
+    conn = connect(tmp_path / "l.db"); migrate(conn)
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
+                 "VALUES('ar','X','x',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,"
+                 "duration_s,is_compilation,navidrome_starred,updated_at) "
+                 "VALUES('al','A','a','ar',2,30,0,0,0)")
+    # Old streamed track in cache
+    conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,"
+                 "size_bytes,content_type,navidrome_starred,updated_at) "
+                 "VALUES('old','al','OLD',30,'mp3',5_000_000,'audio/mpeg',0,0)")
+    conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,"
+                 "downloaded_at) VALUES('old','present','/cache/audio/old.mp3',"
+                 "5_000_000, 1.0)")
+    # New track to download
+    conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,"
+                 "size_bytes,content_type,navidrome_starred,updated_at) "
+                 "VALUES('new','al','NEW',30,'mp3',1_000_000,'audio/mpeg',0,0)")
+
+    cache_root = tmp_path / "cache"
+    (cache_root / "audio").mkdir(parents=True)
+    (cache_root / "tmp").mkdir()
+
+    # Mock statvfs to report critically-low free space
+    def fake_statvfs(path):
+        s = type("S", (), {})()
+        s.f_bavail = 1
+        s.f_frsize = 1
+        s.f_blocks = 10_000_000_000
+        return s
+    monkeypatch.setattr("boombox_library.downloader.os.statvfs", fake_statvfs)
+
+    deleted_paths = []
+    def fake_unlink(p):
+        deleted_paths.append(p)
+    monkeypatch.setattr("boombox_library.downloader.os.unlink", fake_unlink)
+
+    async def fast_fetch(url, params, dest):
+        dest.write_bytes(b"x" * 1_000_000)
+
+    client = FakeStreamingClient(b"x" * 1_000_000)
+    result = await download_track(
+        conn=conn, client=client, track_id="new",
+        cache_root=cache_root, fetch=fast_fetch,
+    )
+    assert result == DownloadResult.OK
+    # The old streamed track should have been evicted
+    old_row = conn.execute("SELECT status FROM cache_state WHERE track_id='old'").fetchone()
+    assert old_row["status"] == "absent"
+    assert "/cache/audio/old.mp3" in deleted_paths

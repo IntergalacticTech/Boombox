@@ -23,6 +23,7 @@ class SubsonicProto(Protocol):
     async def get_album(self, album_id: str) -> dict: ...
     async def get_starred(self) -> dict: ...
     async def get_playlists(self) -> list[dict]: ...
+    async def get_playlist(self, playlist_id: str) -> dict: ...
 
 
 def _upsert_artist(conn: Connection, a: dict, now: float) -> None:
@@ -170,6 +171,21 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
         playlists = await client.get_playlists()
         for pl in playlists:
             _upsert_playlist(conn, pl, now)
+
+        # Fetch each playlist's members to populate playlist_tracks
+        for pl in playlists:
+            detail = await client.get_playlist(pl["id"])
+            songs = detail.get("entry", []) or detail.get("song", [])
+            # Replace all positions for this playlist (atomic-ish within
+            # the surrounding BEGIN/COMMIT transaction).
+            conn.execute("DELETE FROM playlist_tracks WHERE playlist_id=?",
+                         (pl["id"],))
+            for i, song in enumerate(songs):
+                conn.execute(
+                    """INSERT INTO playlist_tracks(playlist_id, track_id, position)
+                       VALUES (?, ?, ?)""",
+                    (pl["id"], song["id"], i),
+                )
 
         conn.execute("COMMIT")
     except Exception:

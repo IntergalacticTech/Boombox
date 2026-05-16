@@ -140,6 +140,9 @@ async def _pin(req: web.Request) -> web.Response:
     mode = body.get("mode", "pin")
     if mode == "pin":
         _pin_fn(ctx.conn, kind, target_id, PinSource.USER)
+        # Kick a sync so downloads start immediately rather than waiting
+        # for the next hourly tick. Sync is no-op if NAS unreachable.
+        await ctx.trigger_sync()
     elif mode == "unpin":
         _unpin_fn(ctx.conn, kind, target_id)
     else:

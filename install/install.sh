@@ -307,7 +307,11 @@ sudo BOOMBOX_VIDEO_DIR="$VIDEO_DIR" python3 \
 
 log "installing /etc/mopidy/mopidy.conf"
 sudo mkdir -p /etc/mopidy
-sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/mopidy.conf" /etc/mopidy/mopidy.conf
+# Install with 0600 + boombox-user ownership so boombox-library can
+# rewrite the [subsonic] block at runtime when the user saves Settings.
+# Mopidy reads the file before dropping privileges so user ownership is fine.
+sudo install -m 0600 -o "$BOOMBOX_USER" -g "$BOOMBOX_USER" \
+    "$ACTIVE_SCRIPT_DIR/config/mopidy.conf" /etc/mopidy/mopidy.conf
 sudo sed -i "s|__MUSIC_DIR__|$MUSIC_DIR|g" /etc/mopidy/mopidy.conf
 
 # Apply the Trixie scan.py compatibility patch (idempotent).

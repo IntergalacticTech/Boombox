@@ -11,8 +11,8 @@ Restart=on-failure
 RestartSec=5
 # The service writes /opt/boombox/state/library.db and reads
 # /etc/boombox/library.yml. It maintains the symlink
-# /opt/boombox/cache-mount and writes /etc/mopidy/mopidy.conf via sudo
-# (granted in /etc/sudoers.d/boombox).
+# /opt/boombox/cache-mount and writes /etc/mopidy/mopidy.conf
+# directly (chowned to the boombox user at install time so no sudo needed).
 
 [Install]
 WantedBy=default.target

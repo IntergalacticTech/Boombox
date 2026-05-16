@@ -172,6 +172,9 @@ async def test_pin_inserts_row(client):
     assert r.status == 200
     rows = list(conn.execute("SELECT * FROM pins"))
     assert len(rows) == 1
+    # Pin must trigger a sync (so downloads start immediately,
+    # not on next hourly tick)
+    assert ctx.synced >= 1
 
 
 @pytest.mark.asyncio
