@@ -116,7 +116,19 @@ sudo apt install -y \
 # Mopidy on Debian Trixie reads its own /usr/lib/python3/dist-packages, so to
 # install Iris where Mopidy can see it we *do* need --break-system-packages.
 # Trade-off accepted: it's a Pi appliance, not a general workstation.
-sudo pip install --break-system-packages Mopidy-Iris
+sudo pip install --break-system-packages Mopidy-Iris Mopidy-Subsonic
+
+# Place default boombox-library config if absent (atomic, idempotent).
+if [ ! -f /etc/boombox/library.yml ]; then
+    sudo mkdir -p /etc/boombox
+    sudo cp "$(dirname "$0")/config/library.yml.template" /etc/boombox/library.yml
+    sudo chown "$BOOMBOX_USER:$BOOMBOX_USER" /etc/boombox/library.yml
+    sudo chmod 600 /etc/boombox/library.yml
+fi
+
+# State dir for SQLite catalog
+sudo mkdir -p /opt/boombox/state
+sudo chown "$BOOMBOX_USER:$BOOMBOX_USER" /opt/boombox/state
 
 # ---------------------------------------------------------------------------
 # 1.5. Layout migration (must run before anything else touches REPO_DIR)
@@ -295,7 +307,11 @@ sudo BOOMBOX_VIDEO_DIR="$VIDEO_DIR" python3 \
 
 log "installing /etc/mopidy/mopidy.conf"
 sudo mkdir -p /etc/mopidy
-sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/mopidy.conf" /etc/mopidy/mopidy.conf
+# Install with 0600 + boombox-user ownership so boombox-library can
+# rewrite the [subsonic] block at runtime when the user saves Settings.
+# Mopidy reads the file before dropping privileges so user ownership is fine.
+sudo install -m 0600 -o "$BOOMBOX_USER" -g "$BOOMBOX_USER" \
+    "$ACTIVE_SCRIPT_DIR/config/mopidy.conf" /etc/mopidy/mopidy.conf
 sudo sed -i "s|__MUSIC_DIR__|$MUSIC_DIR|g" /etc/mopidy/mopidy.conf
 
 # Apply the Trixie scan.py compatibility patch (idempotent).
@@ -388,6 +404,7 @@ USER_UNITS=(
   boombox-kiosk-guard
   boombox-osk
   boombox-updater
+  boombox-library
 )
 for u in "${USER_UNITS[@]}"; do
   systemctl --user enable "$u.service"

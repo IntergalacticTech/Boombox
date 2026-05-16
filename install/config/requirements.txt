@@ -15,6 +15,10 @@ packaging>=24.0
 # not pip; they need GLib/D-Bus headers that won't build cleanly in a venv).
 # The venv is created with --system-site-packages so we can import them.
 
+# services/boombox-library — YAML config + at-rest password encryption
+PyYAML>=6.0
+cryptography>=42
+
 # Dev/test (installed in the venv even on the Pi so /opt/boombox can self-test).
 pytest>=8.0
 pytest-asyncio>=0.23

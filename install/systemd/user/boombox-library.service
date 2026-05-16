@@ -1,0 +1,18 @@
+# install/systemd/user/boombox-library.service
+[Unit]
+Description=Boombox home-library (Navidrome sync + offline cache)
+After=default.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-library.py
+Restart=on-failure
+RestartSec=5
+# The service writes /opt/boombox/state/library.db and reads
+# /etc/boombox/library.yml. It maintains the symlink
+# /opt/boombox/cache-mount and writes /etc/mopidy/mopidy.conf
+# directly (chowned to the boombox user at install time so no sudo needed).
+
+[Install]
+WantedBy=default.target
