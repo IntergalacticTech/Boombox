@@ -26,6 +26,10 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
+    # sync_full holds a single multi-minute write transaction; if any other
+    # service (boombox-rfid) is also writing the DB, wait up to 10 s before
+    # giving up rather than racing the long sync.
+    conn.execute("PRAGMA busy_timeout = 10000")
     conn.row_factory = sqlite3.Row
     return conn
 

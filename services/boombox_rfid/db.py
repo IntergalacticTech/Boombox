@@ -42,6 +42,10 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
+    # The library service holds long sync transactions that can monopolize
+    # the writer lock. Wait up to 10 s for it to release rather than
+    # erroring immediately on the first conflict.
+    conn.execute("PRAGMA busy_timeout = 10000")
     conn.row_factory = sqlite3.Row
     return conn
 
