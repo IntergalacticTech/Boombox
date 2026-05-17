@@ -193,13 +193,14 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
         offset += _ALBUM_PAGE_SIZE
 
     # Tracks: one HTTP call per album → one short txn per album.
-    # An asyncio.sleep(0) between iterations lets the kernel schedule
-    # other processes (notably boombox-rfid, which writes the same DB);
-    # otherwise this loop monopolizes CPU + the SQLite writer lock so
-    # rfid's INSERTs starve out their 10s busy_timeout.
+    # Bumped from sleep(0) to a tiny non-zero sleep so the kernel actually
+    # schedules other processes (notably boombox-rfid bind INSERTs). At
+    # sleep(0) the asyncio loop yielded but the writer lock got reacquired
+    # so fast on the next iteration that rfid still starved out its
+    # 10 s busy_timeout — caught when a card bind took 9 s on the kiosk.
     track_count = 0
     for aid in all_album_ids:
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.005)
         detail = await client.get_album(aid)
         songs = detail.get("song", [])
         if not songs:
