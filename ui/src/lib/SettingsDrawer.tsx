@@ -592,8 +592,8 @@ export function SettingsDrawer({ onClose }: Props) {
 
           {/* Wireless remote pairing — issues a one-time PIN */}
           <SettingRow
-            title="Pair wireless remote"
-            subtitle="Generate a one-time PIN for a CYD or other ESP32 remote"
+            title="Pair a remote"
+            subtitle="Generate a one-time PIN for a phone, CYD or ESP32 remote"
             action={
               <button onClick={() => setShowPair(true)} style={primaryButton("#4fc3f7")}>
                 Pair…
