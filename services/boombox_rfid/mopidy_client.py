@@ -46,6 +46,10 @@ class MopidyClient:
         returns empty — Mopidy 3.4.2 + recent GStreamer has a scanner
         bug that drops http:// URIs at scan time. Track-object form
         bypasses scanning since we already provide the metadata.
+
+        After playing, also issues a resume — observed live: the play
+        call sometimes left Mopidy in a 'paused' state with the right
+        current track. Calling resume() is a no-op when already playing.
         """
         uri_list = list(uris)
         if not uri_list:
@@ -56,5 +60,21 @@ class MopidyClient:
             # Scan failed; retry as bare Track objects so Mopidy skips scanning.
             tracks = [{"__model__": "Track", "uri": u, "name": "Streaming"}
                       for u in uri_list]
-            await self._call("core.tracklist.add", {"tracks": tracks})
-        await self._call("core.playback.play")
+            added = await self._call("core.tracklist.add", {"tracks": tracks})
+        # Play the first track explicitly via tlid so Mopidy doesn't have to
+        # guess what to resume — explicit selection also reliably moves us
+        # out of 'stopped'/'paused' into 'playing'.
+        if isinstance(added, list) and added:
+            first = added[0]
+            tlid = first.get("tlid") if isinstance(first, dict) else None
+            if tlid is not None:
+                await self._call("core.playback.play", {"tlid": tlid})
+            else:
+                await self._call("core.playback.play")
+        else:
+            await self._call("core.playback.play")
+        # Belt and suspenders: if Mopidy somehow landed in paused state,
+        # explicitly resume.
+        state = await self._call("core.playback.get_state")
+        if state == "paused":
+            await self._call("core.playback.resume")
