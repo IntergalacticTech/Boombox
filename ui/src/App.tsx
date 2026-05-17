@@ -85,12 +85,23 @@ function App() {
   }, []);
 
   // RFID bind flow: when RfidBindOverlay starts a bind, open LibraryDrawer
-  // so the user can pick a Home Library item. The drawer itself listens
-  // for the same event to enter bind mode.
+  // and track the UID in App state — passing it to LibraryDrawer as a
+  // prop is the only reliable way (the drawer is unmounted at the moment
+  // the event fires, so a window listener inside it can't catch it).
+  const [bindUid, setBindUid] = useState<string | null>(null);
   useEffect(() => {
-    const onBindStart = () => setLibraryOpen(true);
+    const onBindStart = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { uid: string };
+      setBindUid(detail.uid);
+      setLibraryOpen(true);
+    };
+    const onBindClear = () => setBindUid(null);
     window.addEventListener("boombox:rfid-bind-start", onBindStart);
-    return () => window.removeEventListener("boombox:rfid-bind-start", onBindStart);
+    window.addEventListener("boombox:rfid-bind-clear", onBindClear);
+    return () => {
+      window.removeEventListener("boombox:rfid-bind-start", onBindStart);
+      window.removeEventListener("boombox:rfid-bind-clear", onBindClear);
+    };
   }, []);
 
   // Phase 2: poll for unadopted USB drives. Only prompt while no cache drive
@@ -198,7 +209,12 @@ function App() {
         />
       )}
       {queueOpen && <QueueDrawer onClose={() => setQueueOpen(false)} />}
-      {libraryOpen && <LibraryDrawer onClose={() => setLibraryOpen(false)} />}
+      {libraryOpen && (
+        <LibraryDrawer
+          onClose={() => { setLibraryOpen(false); setBindUid(null); }}
+          bindUid={bindUid}
+        />
+      )}
       {skinPickerOpen && <SkinPickerDrawer activeId={skinId} onClose={() => setSkinPickerOpen(false)} />}
       {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)} />}
       {(sourceOpen || queueOpen || libraryOpen || skinPickerOpen || settingsOpen) && !npbDismissed && (

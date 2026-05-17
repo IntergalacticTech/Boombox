@@ -40,9 +40,9 @@ function relativeTime(ts: number): string {
   return `${day}d ago`;
 }
 
-type Props = { onClose: () => void };
+type Props = { onClose: () => void; bindUid?: string | null };
 
-export function LibraryDrawer({ onClose }: Props) {
+export function LibraryDrawer({ onClose, bindUid: bindUidProp = null }: Props) {
   // Stack of breadcrumbs we've drilled into. Empty = at the top-level menu.
   const [stack, setStack] = useState<Crumb[]>([]);
   const [items, setItems] = useState<Ref[]>(ROOTS);
@@ -54,20 +54,23 @@ export function LibraryDrawer({ onClose }: Props) {
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MopidyTrack[] | null>(null);
   const [searching, setSearching] = useState(false);
-  // Phase RFID-6: when RfidBindOverlay dispatches boombox:rfid-bind-start,
-  // the drawer enters bind mode — the next tap on a home:* album/artist/
-  // playlist row fires boombox:rfid-bind-target instead of playing.
-  const [bindMode, setBindMode] = useState<{ uid: string } | null>(null);
-  const listRef = useRef<HTMLDivElement | null>(null);
-
+  // Phase RFID-6: when App owns bindUid (the drawer is opened by the
+  // RfidBindOverlay), the drawer enters bind mode — the next tap on a
+  // home:* album/artist/playlist row fires boombox:rfid-bind-target
+  // instead of playing/drilling. We mirror the prop to local state so
+  // the explicit CANCEL button can clear it without prop juggling.
+  const [bindMode, setBindMode] = useState<{ uid: string } | null>(
+    bindUidProp ? { uid: bindUidProp } : null
+  );
   useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { uid: string };
-      setBindMode({ uid: detail.uid });
-    };
-    window.addEventListener("boombox:rfid-bind-start", handler as EventListener);
-    return () => window.removeEventListener("boombox:rfid-bind-start", handler as EventListener);
-  }, []);
+    setBindMode(bindUidProp ? { uid: bindUidProp } : null);
+  }, [bindUidProp]);
+  // Auto-navigate to Home Library root when entering bind mode so the
+  // user doesn't have to find the right section.
+  useEffect(() => {
+    if (bindMode) setStack([{ uri: "home:root", name: "Home Library" }]);
+  }, [bindMode]);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   const here = stack.length === 0 ? null : stack[stack.length - 1];
   const hereUri = here?.uri ?? null;
@@ -225,6 +228,9 @@ export function LibraryDrawer({ onClose }: Props) {
   };
 
   const playTrackAt = async (idx: number) => {
+    // In bind mode, suppress playback — Home Library track rows shouldn't
+    // play on tap (the spec says album/artist/playlist detail only).
+    if (bindMode) return;
     if (allTrackUris.length === 0) return;
     const head = allTrackUris[idx];
     const tail = allTrackUris.slice(idx + 1);
@@ -320,7 +326,10 @@ export function LibraryDrawer({ onClose }: Props) {
             }}>
               <span>BIND MODE · pick an album, artist, or playlist for card {bindMode.uid.slice(0, 8)}…</span>
               <button
-                onClick={() => setBindMode(null)}
+                onClick={() => {
+                  setBindMode(null);
+                  window.dispatchEvent(new CustomEvent("boombox:rfid-bind-clear"));
+                }}
                 style={{
                   padding: "4px 10px", background: "rgba(0,0,0,0.15)", color: "#000",
                   border: "1px solid rgba(0,0,0,0.25)", borderRadius: 999,
