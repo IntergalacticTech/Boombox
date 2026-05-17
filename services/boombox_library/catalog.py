@@ -7,6 +7,7 @@ Sync is upsert-based and keeps the FTS5 search index in lockstep.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from sqlite3 import Connection
@@ -192,8 +193,13 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
         offset += _ALBUM_PAGE_SIZE
 
     # Tracks: one HTTP call per album → one short txn per album.
+    # An asyncio.sleep(0) between iterations lets the kernel schedule
+    # other processes (notably boombox-rfid, which writes the same DB);
+    # otherwise this loop monopolizes CPU + the SQLite writer lock so
+    # rfid's INSERTs starve out their 10s busy_timeout.
     track_count = 0
     for aid in all_album_ids:
+        await asyncio.sleep(0)
         detail = await client.get_album(aid)
         songs = detail.get("song", [])
         if not songs:
