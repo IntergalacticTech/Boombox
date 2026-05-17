@@ -141,8 +141,14 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
-      boombox-remote
+      boombox-remote boombox-library boombox-rfid
     )
+    # Enable any unit not yet enabled — handles freshly-added units like
+    # boombox-rfid landing in a deploy after install.sh last ran.
+    for u in "${units[@]}"; do
+      systemctl --user is-enabled --quiet "$u.service" \
+        || systemctl --user enable "$u.service" 2>/dev/null || true
+    done
     for u in "${units[@]}"; do
       systemctl --user restart "$u.service" || true
     done
