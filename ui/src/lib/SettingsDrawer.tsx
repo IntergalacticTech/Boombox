@@ -8,6 +8,8 @@ import { useEffect, useRef, useState } from "react";
 import { ButtonsPanel } from "./ButtonsPanel";
 import { PairOverlay } from "./PairOverlay";
 import { UpdatesPanel } from "./UpdatesPanel";
+import { LibraryPanel } from "./LibraryPanel";
+import { CachePanel } from "./CachePanel";
 import { setSleepMinutes, useSleepTimer } from "./sleepTimer";
 
 type KaraokeMic = { name: string; label: string };
@@ -65,6 +67,7 @@ export function SettingsDrawer({ onClose }: Props) {
   const [usbResult, setUsbResult] = useState<string | null>(null);
   const [showPair, setShowPair] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const libraryAnchor = useRef<HTMLDivElement | null>(null);
   const nudge = (dir: 1 | -1) => {
     const el = scrollRef.current;
     if (!el) return;
@@ -107,8 +110,16 @@ export function SettingsDrawer({ onClose }: Props) {
       refreshKaraoke(); refreshSinks(); refreshRemote(); refreshUsb();
     }, 4000);
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onOpenLibrary = () => {
+      libraryAnchor.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
     window.addEventListener("keydown", onKey);
-    return () => { clearInterval(id); window.removeEventListener("keydown", onKey); };
+    window.addEventListener("boombox:open-settings-library", onOpenLibrary);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("boombox:open-settings-library", onOpenLibrary);
+    };
   }, [onClose]);
 
   const pickSink = async (name: string) => {
@@ -587,6 +598,12 @@ export function SettingsDrawer({ onClose }: Props) {
               </button>
             }
           />
+
+          {/* Home Library (Phase 2) — source config + offline cache */}
+          <div ref={libraryAnchor}>
+            <LibraryPanel />
+            <CachePanel />
+          </div>
 
           {/* Software updates — channel, window, install, rollback */}
           <UpdatesPanel />
