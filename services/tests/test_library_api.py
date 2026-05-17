@@ -24,6 +24,14 @@ class FakeContext:
         self.cache_state = cache_state  # CacheDriveState
         self._ping_ok = ping_ok
         self.synced = 0
+        # Phase 2 additions:
+        self.last_sync_ts: float = 0.0
+        self.syncing: bool = False
+        self.adopted: list[str] = []
+        self.streamed_enqueued: list[str] = []
+        self.cleared_count = 0
+        self._clear_returns = 0
+        self.candidates: list[dict] = []
 
     async def is_online(self) -> bool:
         return self._ping_ok
@@ -39,6 +47,20 @@ class FakeContext:
 
     async def test_source(self, url, username, password) -> tuple[bool, str]:
         return (self._ping_ok, "" if self._ping_ok else "auth failed")
+
+    # Phase 2 hooks consumed by api.py routes
+    async def adopt_cache(self, mount_path: str) -> None:
+        self.adopted.append(mount_path)
+
+    def enqueue_streamed_download(self, track_id: str) -> None:
+        self.streamed_enqueued.append(track_id)
+
+    async def clear_streamed_cache(self) -> int:
+        self.cleared_count += 1
+        return self._clear_returns
+
+    def cache_candidates(self) -> list[dict]:
+        return self.candidates
 
 
 @pytest.fixture
@@ -243,3 +265,58 @@ async def test_source_put_failure_does_not_leak_submitted_password(client, tmp_p
     assert r.status == 400
     body_text = await r.text()
     assert "supersecret-do-not-leak" not in body_text
+
+
+# ----- Phase 2 additions -----
+
+@pytest.mark.asyncio
+async def test_pin_endpoint_accepts_source(client):
+    """POST /api/library/pin with {source:'favorite'} stores source=favorite."""
+    c, ctx, conn = client
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
+                 "VALUES('ar1','X','x',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,"
+                 "duration_s,is_compilation,navidrome_starred,updated_at) "
+                 "VALUES('al1','A','a','ar1',0,0,0,0,0)")
+    r = await c.post("/api/library/pin", json={
+        "kind": "album", "id": "al1", "mode": "pin", "source": "favorite",
+    })
+    assert r.status == 200
+    rows = list(conn.execute("SELECT source FROM pins WHERE target_id='al1'"))
+    assert rows[0]["source"] == "favorite"
+
+
+@pytest.mark.asyncio
+async def test_pin_endpoint_defaults_source_to_user(client):
+    """Omitting source field keeps backwards compat — stores source=user."""
+    c, ctx, conn = client
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
+                 "VALUES('ar1','X','x',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,"
+                 "duration_s,is_compilation,navidrome_starred,updated_at) "
+                 "VALUES('al1','A','a','ar1',0,0,0,0,0)")
+    r = await c.post("/api/library/pin", json={
+        "kind": "album", "id": "al1", "mode": "pin",
+    })
+    assert r.status == 200
+    rows = list(conn.execute("SELECT source FROM pins WHERE target_id='al1'"))
+    assert rows[0]["source"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_unpin_endpoint_accepts_source(client):
+    """POST /api/library/pin with {mode:'unpin', source:'favorite'} respects filter."""
+    c, ctx, conn = client
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
+                 "VALUES('ar1','X','x',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,"
+                 "duration_s,is_compilation,navidrome_starred,updated_at) "
+                 "VALUES('al1','A','a','ar1',0,0,0,0,0)")
+    conn.execute("INSERT INTO pins(target_kind,target_id,source,added_at) "
+                 "VALUES('album','al1','user',0)")
+    r = await c.post("/api/library/pin", json={
+        "kind": "album", "id": "al1", "mode": "unpin", "source": "favorite",
+    })
+    assert r.status == 200
+    rows = list(conn.execute("SELECT * FROM pins WHERE target_id='al1'"))
+    assert len(rows) == 1

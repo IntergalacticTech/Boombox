@@ -138,13 +138,23 @@ async def _pin(req: web.Request) -> web.Response:
     if not target_id:
         return web.json_response({"error": "missing id"}, status=400)
     mode = body.get("mode", "pin")
+    # source defaults to USER for backwards compat with Phase 1 callers.
+    raw_source = body.get("source", "user")
+    try:
+        source = PinSource(raw_source)
+    except ValueError:
+        return web.json_response({"error": "invalid source"}, status=400)
     if mode == "pin":
-        _pin_fn(ctx.conn, kind, target_id, PinSource.USER)
+        _pin_fn(ctx.conn, kind, target_id, source)
         # Kick a sync so downloads start immediately rather than waiting
         # for the next hourly tick. Sync is no-op if NAS unreachable.
         await ctx.trigger_sync()
     elif mode == "unpin":
-        _unpin_fn(ctx.conn, kind, target_id)
+        # If a source was explicitly passed, filter by it; otherwise force-delete.
+        if "source" in body:
+            _unpin_fn(ctx.conn, kind, target_id, source=source)
+        else:
+            _unpin_fn(ctx.conn, kind, target_id)
     else:
         return web.json_response({"error": "invalid mode"}, status=400)
     return web.json_response({"ok": True})

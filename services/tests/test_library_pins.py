@@ -157,3 +157,22 @@ def test_pin_starred_does_not_overwrite_favorite(tmp_path: Path):
     pin(conn, PinKind.ALBUM, "al1", PinSource.STARRED)
     rows = list(conn.execute("SELECT source FROM pins WHERE target_id='al1'"))
     assert rows[0]["source"] == "favorite"
+
+
+def test_unpin_with_source_filter_only_deletes_matching(tmp_path: Path):
+    """Unpinning with source='favorite' must not nuke a user pin."""
+    conn = connect(tmp_path / "l.db"); migrate(conn)
+    _seed_album(conn)
+    pin(conn, PinKind.ALBUM, "al1", PinSource.USER)
+    unpin(conn, PinKind.ALBUM, "al1", source=PinSource.FAVORITE)
+    rows = list(conn.execute("SELECT source FROM pins WHERE target_id='al1'"))
+    assert len(rows) == 1 and rows[0]["source"] == "user"
+
+
+def test_unpin_without_source_filter_deletes_any(tmp_path: Path):
+    """Backwards compat: unpin(kind, id) without source still force-deletes."""
+    conn = connect(tmp_path / "l.db"); migrate(conn)
+    _seed_album(conn)
+    pin(conn, PinKind.ALBUM, "al1", PinSource.USER)
+    unpin(conn, PinKind.ALBUM, "al1")
+    assert list(conn.execute("SELECT * FROM pins")) == []

@@ -83,11 +83,26 @@ def pin(conn: Connection, kind: PinKind, target_id: str, source: PinSource) -> N
         )
 
 
-def unpin(conn: Connection, kind: PinKind, target_id: str) -> None:
-    conn.execute(
-        "DELETE FROM pins WHERE target_kind=? AND target_id=?",
-        (kind.value, target_id),
-    )
+def unpin(
+    conn: Connection,
+    kind: PinKind,
+    target_id: str,
+    source: PinSource | None = None,
+) -> None:
+    """Delete a pin row. If `source` is given, only rows with that source are
+    deleted — so removing a favorite-driven pin doesn't nuke a parallel
+    user-driven pin. Without `source`, force-deletes any pin for (kind, id).
+    """
+    if source is None:
+        conn.execute(
+            "DELETE FROM pins WHERE target_kind=? AND target_id=?",
+            (kind.value, target_id),
+        )
+    else:
+        conn.execute(
+            "DELETE FROM pins WHERE target_kind=? AND target_id=? AND source=?",
+            (kind.value, target_id, source.value),
+        )
 
 
 def all_pinned_track_ids(conn: Connection) -> set[str]:
