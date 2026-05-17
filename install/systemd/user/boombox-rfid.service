@@ -1,0 +1,18 @@
+# install/systemd/user/boombox-rfid.service
+[Unit]
+Description=Boombox RFID reader (USB HID kbd → bound playback)
+After=default.target network-online.target boombox-library.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-rfid.py
+Restart=on-failure
+RestartSec=5
+# Reads /etc/boombox/rfid.yml + /dev/input/by-id/<reader>-event-kbd.
+# Shares the library SQLite DB at /opt/boombox/state/library.db.
+# The kiosk user needs read access to /dev/input — handled by the
+# 'input' group membership added in install.sh.
+
+[Install]
+WantedBy=default.target

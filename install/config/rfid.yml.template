@@ -1,0 +1,20 @@
+# /etc/boombox/rfid.yml — boombox-rfid configuration
+# Copied here on first install. Edit and `systemctl --user restart boombox-rfid`
+# to apply changes. Defaults are baked in so leaving fields blank is fine.
+
+enabled: true
+
+# Device path. Leave empty to auto-detect any /dev/input/by-id/*-event-kbd
+# whose alias contains "IC_Reader" or "RFID".
+device_path: ""
+
+# Same UID won't fire twice within this many ms (debounces accidental
+# double-taps when the user leaves the card on the reader briefly).
+debounce_ms: 1500
+
+# After an unbound tap, /api/rfid/recent keeps the UID available for the UI
+# to show a "bind this card" prompt for this long.
+recent_ttl_ms: 30000
+
+# Mopidy JSON-RPC URL for playback.
+mopidy_rpc: "http://127.0.0.1:6680/mopidy/rpc"

@@ -126,6 +126,21 @@ if [ ! -f /etc/boombox/library.yml ]; then
     sudo chmod 600 /etc/boombox/library.yml
 fi
 
+# Place default boombox-rfid config if absent (atomic, idempotent).
+if [ ! -f /etc/boombox/rfid.yml ]; then
+    sudo mkdir -p /etc/boombox
+    sudo cp "$(dirname "$0")/config/rfid.yml.template" /etc/boombox/rfid.yml
+    sudo chown "$BOOMBOX_USER:$BOOMBOX_USER" /etc/boombox/rfid.yml
+    sudo chmod 644 /etc/boombox/rfid.yml
+fi
+
+# boombox-rfid reads /dev/input/by-id/<reader>-event-kbd; add the
+# kiosk user to the 'input' group so the reader is openable without root.
+if ! id -nG "$BOOMBOX_USER" | tr ' ' '\n' | grep -qx input; then
+    sudo usermod -aG input "$BOOMBOX_USER"
+    echo "[install] added $BOOMBOX_USER to 'input' group (reboot or re-login to take effect)"
+fi
+
 # State dir for SQLite catalog
 sudo mkdir -p /opt/boombox/state
 sudo chown "$BOOMBOX_USER:$BOOMBOX_USER" /opt/boombox/state
@@ -405,6 +420,7 @@ USER_UNITS=(
   boombox-osk
   boombox-updater
   boombox-library
+  boombox-rfid
 )
 for u in "${USER_UNITS[@]}"; do
   systemctl --user enable "$u.service"
