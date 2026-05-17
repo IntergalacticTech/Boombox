@@ -4,6 +4,7 @@ import { RecordIndicator } from "./RecordIndicator";
 import { SourceInstructionOverlay } from "./SourceInstructionOverlay";
 import { ShutdownOverlay } from "./ShutdownOverlay";
 import { CacheAdoptOverlay } from "./CacheAdoptOverlay";
+import { RfidBindOverlay } from "./RfidBindOverlay";
 
 export function OverlayRoot() {
   return (
@@ -14,6 +15,7 @@ export function OverlayRoot() {
       <SourceInstructionOverlay />
       <ShutdownOverlay />
       <CacheAdoptOverlay />
+      <RfidBindOverlay />
     </>
   );
 }

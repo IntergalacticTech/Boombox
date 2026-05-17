@@ -54,7 +54,20 @@ export function LibraryDrawer({ onClose }: Props) {
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MopidyTrack[] | null>(null);
   const [searching, setSearching] = useState(false);
+  // Phase RFID-6: when RfidBindOverlay dispatches boombox:rfid-bind-start,
+  // the drawer enters bind mode — the next tap on a home:* album/artist/
+  // playlist row fires boombox:rfid-bind-target instead of playing.
+  const [bindMode, setBindMode] = useState<{ uid: string } | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { uid: string };
+      setBindMode({ uid: detail.uid });
+    };
+    window.addEventListener("boombox:rfid-bind-start", handler as EventListener);
+    return () => window.removeEventListener("boombox:rfid-bind-start", handler as EventListener);
+  }, []);
 
   const here = stack.length === 0 ? null : stack[stack.length - 1];
   const hereUri = here?.uri ?? null;
@@ -221,6 +234,21 @@ export function LibraryDrawer({ onClose }: Props) {
   };
 
   const enterRef = (r: Ref) => {
+    // RFID bind mode: tapping a home:* album/artist/playlist binds it to the
+    // pending card instead of drilling in.
+    if (bindMode && r.uri.startsWith("home:") && r.type !== "directory") {
+      const colon = r.uri.indexOf(":", 5);
+      const kind = r.uri.slice(5, colon);       // "home:album:X" → "album"
+      const targetId = r.uri.slice(colon + 1);  // → "X"
+      if (kind === "album" || kind === "artist" || kind === "playlist" || kind === "track") {
+        window.dispatchEvent(new CustomEvent("boombox:rfid-bind-target", {
+          detail: { kind, id: targetId, label: r.name },
+        }));
+        setBindMode(null);
+        onClose();
+        return;
+      }
+    }
     if (r.type === "track") {
       // Play this track immediately + queue the rest of the visible track list.
       const idx = items.findIndex(i => i.uri === r.uri);
@@ -277,6 +305,23 @@ export function LibraryDrawer({ onClose }: Props) {
           flexDirection: "column",
           gap: 12,
         }}>
+          {bindMode && (
+            <div style={{
+              background: "#5be7ff", color: "#000", padding: "8px 14px",
+              borderRadius: 8, fontWeight: 700, fontSize: 13, letterSpacing: "0.06em",
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+            }}>
+              <span>BIND MODE · pick an album, artist, or playlist for card {bindMode.uid.slice(0, 8)}…</span>
+              <button
+                onClick={() => setBindMode(null)}
+                style={{
+                  padding: "4px 10px", background: "rgba(0,0,0,0.15)", color: "#000",
+                  border: "1px solid rgba(0,0,0,0.25)", borderRadius: 999,
+                  fontSize: 11, fontWeight: 700, cursor: "pointer",
+                }}
+              >CANCEL</button>
+            </div>
+          )}
           <div style={{display: "flex", alignItems: "center", gap: 12, minHeight: 44}}>
             <button
               onClick={() => stack.length > 0 ? setStack(s => s.slice(0, -1)) : onClose()}

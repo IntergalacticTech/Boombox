@@ -84,6 +84,15 @@ function App() {
     return () => window.removeEventListener("boombox:open-settings-library", onOpenLib);
   }, []);
 
+  // RFID bind flow: when RfidBindOverlay starts a bind, open LibraryDrawer
+  // so the user can pick a Home Library item. The drawer itself listens
+  // for the same event to enter bind mode.
+  useEffect(() => {
+    const onBindStart = () => setLibraryOpen(true);
+    window.addEventListener("boombox:rfid-bind-start", onBindStart);
+    return () => window.removeEventListener("boombox:rfid-bind-start", onBindStart);
+  }, []);
+
   // Phase 2: poll for unadopted USB drives. Only prompt while no cache drive
   // is currently adopted — otherwise plugging a second drive would steal the
   // cache role. CacheAdoptOverlay listens for the dispatched event.
