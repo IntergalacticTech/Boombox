@@ -43,27 +43,36 @@ export function RfidBindOverlay() {
     return () => { cancelled = true; clearInterval(id); };
   }, [phase]);
 
+  // Latest uid (and "have we started a bind already") in refs so the
+  // event handler attached below doesn't see a stale closure when phase
+  // changes mid-render.
+  const uidRef = useRef(uid);
+  uidRef.current = uid;
+  const bindingNow = useRef(false);
+
   // When the LibraryDrawer is in bind mode and the user taps an item,
   // it dispatches this event with {kind, id, label}. We finish the bind.
   useEffect(() => {
     const handler = async (e: Event) => {
-      if (phase !== "picking") return;
+      if (!uidRef.current || bindingNow.current) return;
       const detail = (e as CustomEvent).detail as
         { kind: BindingKind; id: string; label: string };
+      bindingNow.current = true;
       setPhase("binding"); setMsg(null);
       try {
-        await bind(uid, detail.kind, detail.id, detail.label);
+        await bind(uidRef.current, detail.kind, detail.id, detail.label);
         setMsg(`Bound to ${detail.label}`);
         setPhase("done");
-        setTimeout(() => close(), 1800);
+        setTimeout(() => { bindingNow.current = false; close(); }, 1800);
       } catch (err) {
+        bindingNow.current = false;
         setMsg(err instanceof Error ? err.message : String(err));
         setPhase("error");
       }
     };
     window.addEventListener("boombox:rfid-bind-target", handler as EventListener);
     return () => window.removeEventListener("boombox:rfid-bind-target", handler as EventListener);
-  }, [phase, uid]);
+  }, []);
 
   const close = () => {
     dismissed.current.add(uid);
