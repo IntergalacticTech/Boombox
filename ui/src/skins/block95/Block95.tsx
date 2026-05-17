@@ -4,6 +4,7 @@ import React from "react";
 import { Icon, useTicker, vu, mmss } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
 import { ChromeSourceBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
+import { SyncIndicator } from "../../lib/SyncIndicator";
 import { SeekableBar } from "../../lib/SeekableBar";
 import type { ChromeApi } from "../../lib/skinRegistry";
 import type { Track, PlayState } from "../../lib/types";
@@ -49,6 +50,7 @@ function B95Chrome({ children, header = "NOW PLAYING", chrome }: { children: Rea
         {chrome && (
           <>
             <ChromeSourceBtn chrome={chrome} theme={chromeTheme}/>
+            <SyncIndicator />
             <ChromeQueueBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSkinBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSettingsBtn chrome={chrome} theme={chromeTheme}/>
