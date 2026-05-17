@@ -66,6 +66,7 @@ class PinKind(str, Enum):
 
 class PinSource(str, Enum):
     USER = "user"
+    FAVORITE = "favorite"
     STARRED = "starred"
     RFID = "rfid"
 

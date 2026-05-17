@@ -111,3 +111,49 @@ def test_sidecar_round_trip(tmp_path: Path):
     rows = list(conn.execute("SELECT target_id, source FROM pins"))
     assert rows[0]["target_id"] == "al1"
     assert rows[0]["source"] == "user"
+
+
+def test_pin_source_has_favorite_value():
+    """FAVORITE source represents auto-pins from the heart/favorites button."""
+    assert PinSource.FAVORITE.value == "favorite"
+
+
+def test_pin_user_upgrades_favorite(tmp_path: Path):
+    """USER > FAVORITE: pinning with USER over an existing FAVORITE upgrades."""
+    conn = connect(tmp_path / "l.db"); migrate(conn)
+    _seed_album(conn)
+    pin(conn, PinKind.ALBUM, "al1", PinSource.FAVORITE)
+    pin(conn, PinKind.ALBUM, "al1", PinSource.USER)
+    rows = list(conn.execute("SELECT source FROM pins WHERE target_id='al1'"))
+    assert len(rows) == 1
+    assert rows[0]["source"] == "user"
+
+
+def test_pin_favorite_does_not_overwrite_user(tmp_path: Path):
+    """FAVORITE < USER: favoriting after explicit pin leaves source=USER."""
+    conn = connect(tmp_path / "l.db"); migrate(conn)
+    _seed_album(conn)
+    pin(conn, PinKind.ALBUM, "al1", PinSource.USER)
+    pin(conn, PinKind.ALBUM, "al1", PinSource.FAVORITE)
+    rows = list(conn.execute("SELECT source FROM pins WHERE target_id='al1'"))
+    assert rows[0]["source"] == "user"
+
+
+def test_pin_user_upgrades_starred(tmp_path: Path):
+    """USER > STARRED: pinning over a starred-source pin upgrades to user."""
+    conn = connect(tmp_path / "l.db"); migrate(conn)
+    _seed_album(conn)
+    pin(conn, PinKind.ALBUM, "al1", PinSource.STARRED)
+    pin(conn, PinKind.ALBUM, "al1", PinSource.USER)
+    rows = list(conn.execute("SELECT source FROM pins WHERE target_id='al1'"))
+    assert rows[0]["source"] == "user"
+
+
+def test_pin_starred_does_not_overwrite_favorite(tmp_path: Path):
+    """STARRED is the weakest source — never upgrades over FAVORITE or USER."""
+    conn = connect(tmp_path / "l.db"); migrate(conn)
+    _seed_album(conn)
+    pin(conn, PinKind.ALBUM, "al1", PinSource.FAVORITE)
+    pin(conn, PinKind.ALBUM, "al1", PinSource.STARRED)
+    rows = list(conn.execute("SELECT source FROM pins WHERE target_id='al1'"))
+    assert rows[0]["source"] == "favorite"

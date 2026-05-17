@@ -43,14 +43,44 @@ def expand_pin_to_tracks(conn: Connection, kind: PinKind, target_id: str) -> lis
     raise ValueError(f"unknown PinKind {kind}")
 
 
+# Precedence (high → low): USER > FAVORITE > RFID > STARRED.
+# When inserting over an existing pin we upgrade source iff the new source
+# outranks the stored one; we never downgrade. STARRED is weakest so it
+# only takes effect when no pin exists.
+_SOURCE_RANK = {
+    PinSource.USER: 4,
+    PinSource.FAVORITE: 3,
+    PinSource.RFID: 2,
+    PinSource.STARRED: 1,
+}
+
+
 def pin(conn: Connection, kind: PinKind, target_id: str, source: PinSource) -> None:
-    """Insert a pin row; no-op if one already exists for (kind, target_id)."""
-    conn.execute(
-        """INSERT INTO pins(target_kind, target_id, source, added_at)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(target_kind, target_id) DO NOTHING""",
-        (kind.value, target_id, source.value, time.time()),
-    )
+    """Insert or upgrade a pin row.
+
+    Idempotent. If an existing pin's source ranks lower than the new one, the
+    row's source is upgraded; otherwise the existing source is preserved.
+    """
+    existing = conn.execute(
+        "SELECT source FROM pins WHERE target_kind=? AND target_id=?",
+        (kind.value, target_id),
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO pins(target_kind, target_id, source, added_at) "
+            "VALUES (?, ?, ?, ?)",
+            (kind.value, target_id, source.value, time.time()),
+        )
+        return
+    try:
+        existing_src = PinSource(existing["source"])
+    except ValueError:
+        existing_src = PinSource.STARRED  # unknown → lowest rank
+    if _SOURCE_RANK[source] > _SOURCE_RANK[existing_src]:
+        conn.execute(
+            "UPDATE pins SET source=? WHERE target_kind=? AND target_id=?",
+            (source.value, kind.value, target_id),
+        )
 
 
 def unpin(conn: Connection, kind: PinKind, target_id: str) -> None:
