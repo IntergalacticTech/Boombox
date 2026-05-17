@@ -98,6 +98,16 @@ def remove_symlink(symlink_path: Path) -> None:
         pass
 
 
+def _is_writable(path: Path) -> bool:
+    """Probe whether we can create files under `path`. Many auto-mounted
+    USB drives land read-only; the adopt path would fail anyway, so we
+    pre-filter them out."""
+    try:
+        return os.access(str(path), os.W_OK)
+    except OSError:
+        return False
+
+
 def list_candidate_drives(
     search_paths: Iterable[Path],
     marker: str = ".boombox-cache",
@@ -106,7 +116,9 @@ def list_candidate_drives(
 
     The UI uses this to prompt the user to adopt a fresh drive as the cache.
     Already-adopted drives (marker present) are excluded so the prompt
-    doesn't re-fire after the user has chosen.
+    doesn't re-fire after the user has chosen. Read-only mounts (common
+    for vfat USB drives auto-mounted by udisks) are also excluded — the
+    adopt path would fail to write the marker file on them.
     """
     out: list[dict] = []
     for root in search_paths:
@@ -122,6 +134,8 @@ def list_candidate_drives(
             if not child.is_dir():
                 continue
             if (child / marker).exists():
+                continue
+            if not _is_writable(child):
                 continue
             free, total = _disk_usage(child)
             out.append({
