@@ -326,6 +326,76 @@ async def test_health_reports_syncing_true_during_sync(client):
 
 
 @pytest.mark.asyncio
+async def test_cache_adopt_writes_marker(client, tmp_path):
+    """POST /cache/adopt asks the service to bless a drive at the given path."""
+    c, ctx, _ = client
+    drive_path = str(tmp_path / "fake-drive")
+    r = await c.post("/api/library/cache/adopt",
+                     json={"mount_path": drive_path})
+    assert r.status == 200
+    assert ctx.adopted == [drive_path]
+
+
+@pytest.mark.asyncio
+async def test_cache_adopt_rejects_missing_mount_path(client):
+    """Missing mount_path → 400."""
+    c, _, _ = client
+    r = await c.post("/api/library/cache/adopt", json={})
+    assert r.status == 400
+
+
+@pytest.mark.asyncio
+async def test_cache_streamed_enqueues_track(client):
+    """POST /cache/streamed?id=X enqueues a streamed (non-pinned) download."""
+    c, ctx, conn = client
+    r = await c.post("/api/library/cache/streamed?id=t1")
+    assert r.status == 200
+    assert ctx.streamed_enqueued == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_cache_streamed_rejects_missing_id(client):
+    c, _, _ = client
+    r = await c.post("/api/library/cache/streamed")
+    assert r.status == 400
+
+
+@pytest.mark.asyncio
+async def test_cache_clear_calls_service(client):
+    """POST /cache/clear invokes ServiceContext.clear_streamed_cache."""
+    c, ctx, _ = client
+    r = await c.post("/api/library/cache/clear")
+    assert r.status == 200
+    body = await r.json()
+    assert body["ok"] is True
+    assert ctx.cleared_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cache_clear_returns_count(client):
+    """Response includes the number of entries cleared, for UI feedback."""
+    c, ctx, _ = client
+    ctx._clear_returns = 7
+    r = await c.post("/api/library/cache/clear")
+    body = await r.json()
+    assert body["cleared"] == 7
+
+
+@pytest.mark.asyncio
+async def test_cache_candidates_returns_list(client):
+    """GET /cache/candidates exposes mounted-but-unadopted drives."""
+    c, ctx, _ = client
+    ctx.candidates = [{
+        "mount_path": "/media/DRIVE_B", "label": "DRIVE_B",
+        "free_bytes": 230_000_000_000, "total_bytes": 250_000_000_000,
+    }]
+    r = await c.get("/api/library/cache/candidates")
+    assert r.status == 200
+    body = await r.json()
+    assert body["candidates"] == ctx.candidates
+
+
+@pytest.mark.asyncio
 async def test_unpin_endpoint_accepts_source(client):
     """POST /api/library/pin with {mode:'unpin', source:'favorite'} respects filter."""
     c, ctx, conn = client

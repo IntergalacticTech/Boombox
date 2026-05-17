@@ -25,6 +25,7 @@ from boombox_library.api import build_app
 from boombox_library.cache_drive import (
     CacheDriveState, detect_cache_drive,
     update_symlink, remove_symlink,
+    adopt_drive, list_candidate_drives,
     DEFAULT_SYMLINK,
 )
 from boombox_library.catalog import sync_full
@@ -96,6 +97,58 @@ class ServiceContext:
         if self._sync_task and not self._sync_task.done():
             return  # one at a time
         self._sync_task = asyncio.create_task(self._sync_once())
+
+    # ----- Phase 2 hooks consumed by api.py routes -----
+    async def adopt_cache(self, mount_path: str) -> None:
+        """Bless a USB drive as the boombox cache. Writes the marker file and
+        creates required subdirs; cache_poll picks it up on the next tick."""
+        p = Path(mount_path)
+        adopt_drive(p, marker=self.cfg.cache.marker_filename)
+        log.info("adopted cache drive at %s (marker written)", p)
+
+    def enqueue_streamed_download(self, track_id: str) -> None:
+        """Queue an opportunistic streamed-cache download for a track the user
+        is currently streaming. No-op if no cache drive is adopted."""
+        if self._download_queue is None:
+            log.info("no cache drive; skipping streamed-cache enqueue of %s",
+                     track_id)
+            return
+        self._download_queue.enqueue(track_id)
+
+    async def clear_streamed_cache(self) -> int:
+        """Delete every cache_state row whose track is NOT pin-protected, and
+        remove the corresponding files. Returns the number of entries cleared.
+        No-op if no cache drive is adopted.
+        """
+        if not self.cache_state.present or not self.cache_state.mount_path:
+            return 0
+        pinned = all_pinned_track_ids(self.conn)
+        rows = list(self.conn.execute(
+            "SELECT track_id, local_path FROM cache_state WHERE status='present'"
+        ))
+        cleared = 0
+        for r in rows:
+            if r["track_id"] in pinned:
+                continue
+            path = r["local_path"]
+            if path:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except OSError as e:
+                    log.warning("could not delete %s: %s", path, e)
+            self.conn.execute(
+                "UPDATE cache_state SET status='absent', local_path=NULL, "
+                "size_bytes=NULL WHERE track_id=?", (r["track_id"],),
+            )
+            cleared += 1
+        return cleared
+
+    def cache_candidates(self) -> list[dict]:
+        """List drives that could be adopted as the cache (marker absent)."""
+        return list_candidate_drives(
+            [Path(p) for p in self.cfg.cache.search_paths],
+            marker=self.cfg.cache.marker_filename,
+        )
 
     # ----- background loops -----
     async def _sync_once(self) -> None:

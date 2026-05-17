@@ -79,3 +79,31 @@ def test_remove_symlink_idempotent(tmp_path: Path):
     sym.symlink_to(tmp_path)
     remove_symlink(sym)
     assert not sym.exists() and not sym.is_symlink()
+
+
+def test_list_candidate_drives_returns_unadopted(tmp_path: Path):
+    """Drives that are mounted but lack the marker file appear as candidates."""
+    from boombox_library.cache_drive import list_candidate_drives
+    _make_drive(tmp_path, "DRIVE_A", has_marker=True)
+    _make_drive(tmp_path, "DRIVE_B", has_marker=False)
+    out = list_candidate_drives([tmp_path], marker=".boombox-cache")
+    paths = [c["mount_path"] for c in out]
+    assert str(tmp_path / "DRIVE_B") in paths
+    assert str(tmp_path / "DRIVE_A") not in paths
+
+
+def test_list_candidate_drives_includes_disk_usage(tmp_path: Path):
+    """Each candidate has free_bytes + total_bytes (best-effort)."""
+    from boombox_library.cache_drive import list_candidate_drives
+    _make_drive(tmp_path, "DRIVE", has_marker=False)
+    out = list_candidate_drives([tmp_path])
+    assert out[0]["free_bytes"] is not None
+    assert out[0]["total_bytes"] is not None
+    assert out[0]["label"] == "DRIVE"
+
+
+def test_list_candidate_drives_skips_missing_search_root(tmp_path: Path):
+    """Non-existent search paths are silently skipped."""
+    from boombox_library.cache_drive import list_candidate_drives
+    out = list_candidate_drives([tmp_path / "does-not-exist"])
+    assert out == []

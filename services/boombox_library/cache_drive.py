@@ -96,3 +96,38 @@ def remove_symlink(symlink_path: Path) -> None:
             symlink_path.unlink()
     except FileNotFoundError:
         pass
+
+
+def list_candidate_drives(
+    search_paths: Iterable[Path],
+    marker: str = ".boombox-cache",
+) -> list[dict]:
+    """Mounted directories that look like USB drives but lack the marker.
+
+    The UI uses this to prompt the user to adopt a fresh drive as the cache.
+    Already-adopted drives (marker present) are excluded so the prompt
+    doesn't re-fire after the user has chosen.
+    """
+    out: list[dict] = []
+    for root in search_paths:
+        root = Path(root)
+        if not root.exists():
+            continue
+        try:
+            entries = sorted(root.iterdir())
+        except OSError as e:
+            log.warning("could not scan %s: %s", root, e)
+            continue
+        for child in entries:
+            if not child.is_dir():
+                continue
+            if (child / marker).exists():
+                continue
+            free, total = _disk_usage(child)
+            out.append({
+                "mount_path": str(child),
+                "label": child.name,
+                "free_bytes": free,
+                "total_bytes": total,
+            })
+    return out

@@ -54,6 +54,10 @@ def build_app(ctx: Context) -> web.Application:
     app.router.add_post("/api/library/sync/run", _sync_run)
     app.router.add_get("/api/library/track/{track_id}/playback", _resolver)
     app.router.add_get("/api/library/cache/stats", _cache_stats)
+    app.router.add_post("/api/library/cache/adopt", _cache_adopt)
+    app.router.add_post("/api/library/cache/streamed", _cache_streamed)
+    app.router.add_post("/api/library/cache/clear", _cache_clear)
+    app.router.add_get("/api/library/cache/candidates", _cache_candidates)
     return app
 
 
@@ -216,3 +220,33 @@ async def _cache_stats(req: web.Request) -> web.Response:
         "streamed_bytes": streamed_bytes,
         "reserved": ctx.cfg.cache.reserve_bytes,
     })
+
+
+async def _cache_adopt(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    body = await req.json()
+    mount_path = body.get("mount_path")
+    if not mount_path:
+        return web.json_response({"error": "missing mount_path"}, status=400)
+    await ctx.adopt_cache(mount_path)
+    return web.json_response({"ok": True})
+
+
+async def _cache_streamed(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    track_id = req.query.get("id", "").strip()
+    if not track_id:
+        return web.json_response({"error": "missing id"}, status=400)
+    ctx.enqueue_streamed_download(track_id)
+    return web.json_response({"ok": True})
+
+
+async def _cache_clear(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    cleared = await ctx.clear_streamed_cache()
+    return web.json_response({"ok": True, "cleared": cleared})
+
+
+async def _cache_candidates(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    return web.json_response({"candidates": ctx.cache_candidates()})
