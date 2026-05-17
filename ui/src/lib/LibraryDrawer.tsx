@@ -260,6 +260,13 @@ export function LibraryDrawer({ onClose }: Props) {
 
   /** Play every track inside a directory (album/artist) without drilling in. */
   const playRefImmediate = async (r: Ref) => {
+    // BIND MODE: route the tap through enterRef so this play overlay
+    // binds instead of playing. Otherwise tapping the small ▶ on a grid
+    // album in bind mode would start playback instead of binding the card.
+    if (bindMode && r.uri.startsWith("home:") && r.type !== "directory") {
+      enterRef(r);
+      return;
+    }
     try {
       const refs = await browse(r.uri);
       const trackUris = refs.filter(x => x.type === "track").map(x => x.uri);
