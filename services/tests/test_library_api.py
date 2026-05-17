@@ -304,6 +304,28 @@ async def test_pin_endpoint_defaults_source_to_user(client):
 
 
 @pytest.mark.asyncio
+async def test_health_reports_last_sync_ts_and_syncing(client):
+    """UI's SyncIndicator polls /health for last_sync_ts + syncing flag."""
+    c, ctx, _ = client
+    ctx.last_sync_ts = 12345.0
+    ctx.syncing = False
+    r = await c.get("/api/library/health")
+    body = await r.json()
+    assert body["last_sync_ts"] == 12345.0
+    assert body["syncing"] is False
+
+
+@pytest.mark.asyncio
+async def test_health_reports_syncing_true_during_sync(client):
+    """While a sync is in flight syncing=true so the chip can pulse amber."""
+    c, ctx, _ = client
+    ctx.syncing = True
+    r = await c.get("/api/library/health")
+    body = await r.json()
+    assert body["syncing"] is True
+
+
+@pytest.mark.asyncio
 async def test_unpin_endpoint_accepts_source(client):
     """POST /api/library/pin with {mode:'unpin', source:'favorite'} respects filter."""
     c, ctx, conn = client

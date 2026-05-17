@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -62,6 +63,9 @@ class ServiceContext:
         self._online = False
         self._sync_task: asyncio.Task | None = None
         self._download_queue: DownloadQueue | None = None
+        # Phase 2: surfaced through /api/library/health for the UI's SyncIndicator
+        self.last_sync_ts: float = 0.0
+        self.syncing: bool = False
         self._load_sidecar_if_present()
 
     # ----- helpers exposed to api.py -----
@@ -98,24 +102,29 @@ class ServiceContext:
         if not self.cfg.source.url:
             log.info("no source configured; skipping sync")
             return
-        async with SubsonicClient(self.cfg.source.url,
-                                  self.cfg.source.username,
-                                  self.cfg.source.password) as client:
-            try:
-                await client.ping()
-                self._online = True
-            except (SubsonicAuthError, SubsonicUnreachable) as e:
-                log.warning("ping failed: %s", e)
-                self._online = False
-                return
-            try:
-                await sync_full(client, self.conn)
-                if self.cfg.sync.starred_auto_pin:
-                    reconcile_starred(self.conn)
-                self._enqueue_pinned_downloads()
-                self._persist_pins_sidecar()
-            except Exception as e:
-                log.exception("sync failed: %s", e)
+        self.syncing = True
+        try:
+            async with SubsonicClient(self.cfg.source.url,
+                                      self.cfg.source.username,
+                                      self.cfg.source.password) as client:
+                try:
+                    await client.ping()
+                    self._online = True
+                except (SubsonicAuthError, SubsonicUnreachable) as e:
+                    log.warning("ping failed: %s", e)
+                    self._online = False
+                    return
+                try:
+                    await sync_full(client, self.conn)
+                    if self.cfg.sync.starred_auto_pin:
+                        reconcile_starred(self.conn)
+                    self._enqueue_pinned_downloads()
+                    self._persist_pins_sidecar()
+                    self.last_sync_ts = time.time()
+                except Exception as e:
+                    log.exception("sync failed: %s", e)
+        finally:
+            self.syncing = False
 
     async def sync_timer(self) -> None:
         # First-boot immediate sync
