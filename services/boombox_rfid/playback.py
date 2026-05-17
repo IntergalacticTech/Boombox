@@ -2,7 +2,7 @@
 
 Reuses Phase 1's playback resolver: for each track in the bound target we
 ask the boombox-library `resolver.resolve_playback` for the right URI form
-(file:// when cached, subsonic://<id> when streaming).
+(file:// when cached, direct stream.view URL when streaming).
 
 Skips tracks the resolver marks 'offline_miss' (not cached + not online).
 """
@@ -38,14 +38,26 @@ def expand_to_track_ids(conn: Connection, kind: BindingKind, target_id: str) -> 
     raise ValueError(f"unknown BindingKind {kind}")
 
 
-def resolve_uris(conn: Connection, track_ids: list[str], online: bool) -> list[str]:
+def resolve_uris(
+    conn: Connection,
+    track_ids: list[str],
+    online: bool,
+    *,
+    source_url: str = "",
+    source_username: str = "",
+    source_password: str = "",
+) -> list[str]:
     """Map each track id to its playable URI using Phase 1's resolver."""
     # Lazy import — boombox_library lives in a sibling package on sys.path.
     from boombox_library.resolver import resolve_playback, PlaybackSource
 
     out: list[str] = []
     for tid in track_ids:
-        r = resolve_playback(conn, tid, online)
+        r = resolve_playback(
+            conn, tid, online,
+            source_url=source_url, source_username=source_username,
+            source_password=source_password,
+        )
         if r.source == PlaybackSource.OFFLINE_MISS or not r.uri:
             log.debug("skipping offline-miss track %s", tid)
             continue

@@ -183,7 +183,11 @@ async def _resolver(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
     track_id = req.match_info["track_id"]
     online = await ctx.is_online()
-    r = resolve_playback(ctx.conn, track_id, online)
+    src = ctx.cfg.source
+    r = resolve_playback(
+        ctx.conn, track_id, online,
+        source_url=src.url, source_username=src.username, source_password=src.password,
+    )
     return web.json_response({
         "source": r.source.value,
         "uri": r.uri,

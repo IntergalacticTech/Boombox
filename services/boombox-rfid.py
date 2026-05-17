@@ -19,6 +19,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from boombox_library.config import load_config as load_library_config
 from boombox_rfid import __version__
 from boombox_rfid.api import build_app
 from boombox_rfid.bindings import get_binding, record_tap
@@ -87,9 +88,18 @@ class ServiceContext:
             log.warning("binding %s → %s/%s expanded to zero tracks",
                         uid, binding.kind.value, binding.target_id)
             return
-        # Assume online unless we know otherwise — the resolver will only
-        # downgrade to OFFLINE_MISS when both cache absent AND online=false.
-        uris = resolve_uris(self.conn, track_ids, online=True)
+        # Re-read library config every tap so freshly-saved creds take
+        # effect without restarting boombox-rfid. The library service
+        # already encrypts the password at rest; load_config decrypts.
+        lib_cfg = load_library_config()
+        # Assume online — the resolver will downgrade to OFFLINE_MISS when
+        # both cache absent AND no source creds are present.
+        uris = resolve_uris(
+            self.conn, track_ids, online=True,
+            source_url=lib_cfg.source.url,
+            source_username=lib_cfg.source.username,
+            source_password=lib_cfg.source.password,
+        )
         if not uris:
             log.warning("no playable URIs for binding %s (offline?)", uid)
             return

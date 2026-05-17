@@ -1,6 +1,11 @@
-"""Writes the [subsonic] block into mopidy.conf so Mopidy-Subsonic can
-stream from Navidrome. The service rewrites this block whenever the user
-saves new source credentials in Settings, then signals Mopidy to reload.
+"""Writes the [subsonic] block into mopidy.conf.
+
+Historical: was used to configure Mopidy-Subsonic. That plugin turned
+out to be Python-2 bit-rotten and unusable on Py3.13, so streaming now
+goes through Mopidy's built-in stream backend with direct
+/rest/stream.view URLs from boombox_library.resolver. This file is kept
+for back-compat with installs that still have Mopidy-Subsonic on disk
+(harmless when the plugin's disabled).
 """
 from __future__ import annotations
 

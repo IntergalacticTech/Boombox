@@ -116,7 +116,12 @@ sudo apt install -y \
 # Mopidy on Debian Trixie reads its own /usr/lib/python3/dist-packages, so to
 # install Iris where Mopidy can see it we *do* need --break-system-packages.
 # Trade-off accepted: it's a Pi appliance, not a general workstation.
-sudo pip install --break-system-packages Mopidy-Iris Mopidy-Subsonic
+# Mopidy-Iris stays. Mopidy-Subsonic is intentionally NOT installed —
+# the plugin is Python-2 bit-rotten (NameError: 'unicode' is not defined
+# on Py3.13). Streaming works via direct /rest/stream.view URLs that
+# boombox-library's resolver constructs, played by Mopidy's built-in
+# stream backend.
+sudo pip install --break-system-packages Mopidy-Iris
 
 # Place default boombox-library config if absent (atomic, idempotent).
 if [ ! -f /etc/boombox/library.yml ]; then
