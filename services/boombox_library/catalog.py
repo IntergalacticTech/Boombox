@@ -130,9 +130,27 @@ def _upsert_playlist(conn: Connection, pl: dict, now: float) -> None:
     )
 
 
+_TXN_CHUNK = 100  # commit every N items so other writers (boombox-rfid) aren't starved
+
+
+def _chunk_commit(conn: Connection, counter: int) -> int:
+    """Commit + reopen the txn every _TXN_CHUNK items. Returns counter+1."""
+    counter += 1
+    if counter % _TXN_CHUNK == 0:
+        conn.execute("COMMIT")
+        conn.execute("BEGIN")
+    return counter
+
+
 async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
     """Full sync — pulls all artists/albums/tracks/playlists from Navidrome.
-    Returns counts dict. Idempotent (upserts)."""
+    Returns counts dict. Idempotent (upserts).
+
+    Commits every _TXN_CHUNK upserts so we don't monopolize the write lock
+    against boombox-rfid (which writes bindings). Individual album/track
+    upserts remain atomic; cross-album consistency was never guaranteed
+    anyway (the catalog can change upstream mid-sync).
+    """
     now = time.time()
     starred = await client.get_starred()
     starred_album_ids = {a["id"] for a in starred.get("album", [])}
@@ -141,13 +159,16 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
     conn.execute("BEGIN")
     try:
         artists = await client.get_artists()
+        counter = 0
         for a in artists:
             _upsert_artist(conn, a, now)
+            counter = _chunk_commit(conn, counter)
 
         # Albums: paginated
         offset = 0
         album_count = 0
         all_album_ids: list[str] = []
+        counter = 0
         while True:
             page = await client.get_album_list(offset=offset, size=_ALBUM_PAGE_SIZE)
             if not page:
@@ -155,6 +176,7 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
             for al in page:
                 _upsert_album(conn, al, now, starred_album_ids)
                 all_album_ids.append(al["id"])
+                counter = _chunk_commit(conn, counter)
             album_count += len(page)
             if len(page) < _ALBUM_PAGE_SIZE:
                 break
@@ -162,22 +184,26 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
 
         # Tracks: one getAlbum per album (Subsonic shape).
         track_count = 0
+        counter = 0
         for aid in all_album_ids:
             detail = await client.get_album(aid)
             for tr in detail.get("song", []):
                 _upsert_track(conn, tr, aid, now, starred_song_ids)
                 track_count += 1
+            # Commit per ALBUM (not per track) so a track's row lands with
+            # its album's metadata visible together to readers.
+            counter = _chunk_commit(conn, counter)
 
         playlists = await client.get_playlists()
+        counter = 0
         for pl in playlists:
             _upsert_playlist(conn, pl, now)
+            counter = _chunk_commit(conn, counter)
 
         # Fetch each playlist's members to populate playlist_tracks
         for pl in playlists:
             detail = await client.get_playlist(pl["id"])
             songs = detail.get("entry", []) or detail.get("song", [])
-            # Replace all positions for this playlist (atomic-ish within
-            # the surrounding BEGIN/COMMIT transaction).
             conn.execute("DELETE FROM playlist_tracks WHERE playlist_id=?",
                          (pl["id"],))
             for i, song in enumerate(songs):
@@ -186,10 +212,12 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
                        VALUES (?, ?, ?)""",
                     (pl["id"], song["id"], i),
                 )
+            counter = _chunk_commit(conn, counter)
 
         conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        try: conn.execute("ROLLBACK")
+        except Exception: pass
         raise
 
     log.info("sync_full done: %d artists, %d albums, %d tracks, %d playlists",
