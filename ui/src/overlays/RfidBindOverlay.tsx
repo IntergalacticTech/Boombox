@@ -78,7 +78,10 @@ export function RfidBindOverlay() {
     window.dispatchEvent(new CustomEvent("boombox:rfid-bind-start", { detail: { uid } }));
   };
 
-  if (phase === "idle") return null;
+  // While picking, hide the overlay — the LibraryDrawer's "BIND MODE"
+  // banner takes over communicating state, and a full-screen overlay
+  // would occlude the rows the user needs to tap.
+  if (phase === "idle" || phase === "picking") return null;
 
   return (
     <div style={{
@@ -113,14 +116,6 @@ export function RfidBindOverlay() {
               </button>
             </div>
           </>
-        )}
-
-        {phase === "picking" && (
-          <div style={{ fontSize: 15 }}>
-            Pick an album, artist, or playlist in the Home Library.
-            <br/><br/>
-            <button onClick={close} style={btnSecondary}>CANCEL</button>
-          </div>
         )}
 
         {phase === "binding" && (
