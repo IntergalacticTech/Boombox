@@ -67,11 +67,20 @@ class ServiceContext:
                 continue
             self._last_uid_seen = uid
             self._last_uid_at = now
-            await self._handle_tap(uid)
+            # Never let a tap handler crash kill the reader loop.
+            try:
+                await self._handle_tap(uid)
+            except Exception:
+                log.exception("_handle_tap raised for uid %s; continuing", uid)
 
     async def _handle_tap(self, uid: str) -> None:
         log.info("RFID tap: uid=%s", uid)
-        binding = get_binding(self.conn, uid)
+        try:
+            binding = get_binding(self.conn, uid)
+        except Exception:
+            log.exception("get_binding failed for uid %s", uid)
+            return
+        log.info("binding lookup uid=%s → %s", uid, binding)
         if binding is None:
             # Unbound — remember for the UI to prompt the user.
             self.last_unbound_uid = uid
@@ -81,25 +90,35 @@ class ServiceContext:
 
         self.last_tap_uid = uid
         self.last_tap_ts = time.time()
-        record_tap(self.conn, uid)
+        try:
+            record_tap(self.conn, uid)
+        except Exception:
+            log.exception("record_tap failed for uid %s", uid)
 
-        track_ids = expand_to_track_ids(self.conn, binding.kind, binding.target_id)
+        try:
+            track_ids = expand_to_track_ids(self.conn, binding.kind, binding.target_id)
+        except Exception:
+            log.exception("expand_to_track_ids failed for uid %s", uid)
+            return
+        log.info("uid %s expanded to %d track ids", uid, len(track_ids))
         if not track_ids:
             log.warning("binding %s → %s/%s expanded to zero tracks",
                         uid, binding.kind.value, binding.target_id)
             return
         # Re-read library config every tap so freshly-saved creds take
-        # effect without restarting boombox-rfid. The library service
-        # already encrypts the password at rest; load_config decrypts.
+        # effect without restarting boombox-rfid.
         lib_cfg = load_library_config()
-        # Assume online — the resolver will downgrade to OFFLINE_MISS when
-        # both cache absent AND no source creds are present.
-        uris = resolve_uris(
-            self.conn, track_ids, online=True,
-            source_url=lib_cfg.source.url,
-            source_username=lib_cfg.source.username,
-            source_password=lib_cfg.source.password,
-        )
+        try:
+            uris = resolve_uris(
+                self.conn, track_ids, online=True,
+                source_url=lib_cfg.source.url,
+                source_username=lib_cfg.source.username,
+                source_password=lib_cfg.source.password,
+            )
+        except Exception:
+            log.exception("resolve_uris failed for uid %s", uid)
+            return
+        log.info("uid %s resolved %d/%d playable URIs", uid, len(uris), len(track_ids))
         if not uris:
             log.warning("no playable URIs for binding %s (offline?)", uid)
             return
