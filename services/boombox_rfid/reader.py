@@ -66,7 +66,10 @@ async def read_uids(
     """
     while True:
         try:
-            fd = os.open(device_path, os.O_RDONLY | os.O_NONBLOCK)
+            # Blocking open + read; the executor thread handles the wait so
+            # the asyncio loop stays responsive. We intentionally do NOT
+            # pass O_NONBLOCK — that triggers EAGAIN on every empty poll.
+            fd = os.open(device_path, os.O_RDONLY)
         except FileNotFoundError:
             log.warning("device %s not present yet; retrying in 5s", device_path)
             await asyncio.sleep(5)
@@ -91,8 +94,9 @@ async def read_uids(
                     log.warning("read failed (%s); reopening", e)
                     break
                 if not chunk:
-                    await asyncio.sleep(0.05)
-                    continue
+                    # EOF (device unplugged) — let the outer loop reopen.
+                    log.warning("read returned EOF; reopening")
+                    break
                 buf.extend(chunk)
                 while len(buf) >= _EVENT_SIZE:
                     _, _, ev_type, code, value = struct.unpack(
