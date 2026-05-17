@@ -69,6 +69,16 @@ function App() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // Phase 2: SyncIndicator chip in the chrome dispatches this event when
+  // tapped. App must open SettingsDrawer here; the drawer itself then
+  // listens for the same event a second time to scroll to the Library
+  // anchor. (Two-stage dispatch keeps each component self-contained.)
+  useEffect(() => {
+    const onOpenLib = () => setSettingsOpen(true);
+    window.addEventListener("boombox:open-settings-library", onOpenLib);
+    return () => window.removeEventListener("boombox:open-settings-library", onOpenLib);
+  }, []);
+
   // Phase 2: poll for unadopted USB drives. Only prompt while no cache drive
   // is currently adopted — otherwise plugging a second drive would steal the
   // cache role. CacheAdoptOverlay listens for the dispatched event.
