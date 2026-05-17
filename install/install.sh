@@ -123,6 +123,30 @@ sudo apt install -y \
 # stream backend.
 sudo pip install --break-system-packages Mopidy-Iris
 
+# Patch Mopidy 3.4.2's audio/scan.py for compatibility with Debian Trixie's
+# python3-gi (which returns StructureWrapper from Gst.Structure.get_value
+# instead of a Caps with get_name()). Without this, every http:// stream
+# fails at scan time with AttributeError. The original line tries
+# get_name() on the wrapped caps; the patch falls through to get_structure
+# + to_string + None.
+_scan_py=/usr/lib/python3/dist-packages/mopidy/audio/scan.py
+if [[ -f "$_scan_py" ]] && ! grep -q "_mime_caps" "$_scan_py"; then
+  sudo python3 - <<'PYPATCH'
+path = "/usr/lib/python3/dist-packages/mopidy/audio/scan.py"
+with open(path) as f: src = f.read()
+src = src.replace(
+    "mime = msg.get_structure().get_value(\"caps\").get_name()",
+    "_mime_caps = msg.get_structure().get_value(\"caps\")\n                try:\n                    mime = _mime_caps.get_name()\n                except AttributeError:\n                    try:\n                        mime = _mime_caps.get_structure(0).get_name()\n                    except AttributeError:\n                        try:\n                            mime = _mime_caps.to_string().split(\",\", 1)[0].split(\";\", 1)[0].strip()\n                        except AttributeError:\n                            mime = None",
+)
+src = src.replace(
+    "mime = caps.get_structure(0).get_name()",
+    "try:\n                    mime = caps.get_structure(0).get_name()\n                except AttributeError:\n                    mime = None",
+)
+with open(path, "w") as f: f.write(src)
+PYPATCH
+  echo "[install] patched mopidy/audio/scan.py for StructureWrapper compat"
+fi
+
 # Place default boombox-library config if absent (atomic, idempotent).
 if [ ! -f /etc/boombox/library.yml ]; then
     sudo mkdir -p /etc/boombox
