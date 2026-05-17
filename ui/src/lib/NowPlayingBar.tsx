@@ -86,6 +86,10 @@ export function NowPlayingBar({ onDismiss }: Props = {}) {
             {album ? ` · ${album}` : ""}
           </div>
         </button>
+        <SourceBadge
+          uri={externalActive ? null : (m.track?.uri ?? null)}
+          externalLabel={externalActive ? (ext.label ?? ext.source ?? null) : null}
+        />
         <div style={{display: "flex", alignItems: "center", gap: 4}}>
           <TransportBtn
             onClick={() => toggleFavorite(externalActive ? null : (m.track?.uri ?? null))}
@@ -313,5 +317,43 @@ function TransportBtn({ children, onClick, primary, ariaLabel }: {
         flexShrink: 0,
       }}
     >{children}</button>
+  );
+}
+
+// SourceBadge — tiny pill next to the title that tells the user which
+// pipeline is currently delivering audio: cache vs stream vs USB vs an
+// external MPRIS source (AirPlay / Spotify / Bluetooth).
+function SourceBadge({ uri, externalLabel }: { uri: string | null; externalLabel: string | null }) {
+  let glyph = "🎵"; let label = "USB";
+  if (externalLabel) {
+    if (/airplay/i.test(externalLabel))         { glyph = "📱"; label = "AirPlay"; }
+    else if (/spotify/i.test(externalLabel))    { glyph = "🎵"; label = "Spotify"; }
+    else if (/bluetooth/i.test(externalLabel))  { glyph = "🎙"; label = "BT"; }
+    else                                         { glyph = "🎵"; label = externalLabel; }
+  } else if (uri) {
+    if (uri.startsWith("file://"))           { glyph = "⬇"; label = "Cache"; }
+    else if (uri.startsWith("subsonic:"))    { glyph = "⚡"; label = "Stream"; }
+    else if (uri.startsWith("spotify:"))     { glyph = "🎵"; label = "Spotify"; }
+    else if (uri.startsWith("local:"))       { glyph = "🎵"; label = "USB"; }
+  }
+  return (
+    <span
+      title={`Source · ${label}`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 4,
+        padding: "2px 8px",
+        background: "rgba(255,255,255,0.08)",
+        border: "1px solid rgba(255,255,255,0.14)",
+        borderRadius: 999,
+        fontSize: 11,
+        fontFamily: "'JetBrains Mono', monospace",
+        letterSpacing: "0.08em",
+        color: "rgba(255,255,255,0.78)",
+        flexShrink: 0,
+      }}
+    >
+      <span aria-hidden="true">{glyph}</span>
+      <span>{label.toUpperCase()}</span>
+    </span>
   );
 }
