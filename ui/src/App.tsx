@@ -12,6 +12,8 @@ import { VolumeGesture } from "./lib/VolumeGesture";
 import { OverlayRoot } from "./overlays/OverlayRoot";
 import { SKIN_BY_ID, SKINS, type ChromeApi } from "./lib/skinRegistry";
 import { getQueue } from "./lib/library";
+import { getCacheCandidates } from "./lib/libraryApi";
+import { useSyncStatus } from "./lib/homeLibrary";
 import type { SkinId, Track, PlayState } from "./lib/types";
 
 function getActiveSkin(): SkinId {
@@ -66,6 +68,25 @@ function App() {
     const id = setInterval(tick, 4000);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
+
+  // Phase 2: poll for unadopted USB drives. Only prompt while no cache drive
+  // is currently adopted — otherwise plugging a second drive would steal the
+  // cache role. CacheAdoptOverlay listens for the dispatched event.
+  const syncStatus = useSyncStatus();
+  useEffect(() => {
+    if (syncStatus.cachePresent) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const cands = await getCacheCandidates();
+        if (cancelled || cands.length === 0) return;
+        window.dispatchEvent(new CustomEvent("boombox:cache-candidate", { detail: cands[0] }));
+      } catch { /* offline / 404 — quiet */ }
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [syncStatus.cachePresent]);
 
   // Publish the active skin's theme so external surfaces (the LAN upload
   // page, etc.) can match the kiosk's look. Best-effort; offline is fine.
