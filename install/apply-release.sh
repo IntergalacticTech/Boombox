@@ -153,6 +153,31 @@ for mod in ('boombox_updater', 'boombox_buttons'):
       systemctl --user restart "$u.service" || true
     done
     sudo /usr/bin/systemctl reload nginx
+    # Best-effort: reload the kiosk Chromium tab so the freshly-built SPA
+    # is picked up without restarting the long-running browser process.
+    # Uses the DevTools remote-debugging port that boombox-kiosk already
+    # exposes (--remote-debugging-port=9222). Silent failure is fine —
+    # the page will pick up on next manual refresh.
+    python3 - <<'PYRELOAD' 2>/dev/null || true
+import json, urllib.request
+try:
+    from websockets.sync.client import connect
+except ImportError:
+    raise SystemExit(0)
+try:
+    tabs = json.loads(urllib.request.urlopen("http://127.0.0.1:9222/json", timeout=2).read())
+except Exception:
+    raise SystemExit(0)
+for t in tabs:
+    if t.get("url", "").startswith("http://localhost"):
+        try:
+            with connect(t["webSocketDebuggerUrl"], open_timeout=2) as ws:
+                ws.send(json.dumps({"id":1, "method":"Page.reload", "params":{"ignoreCache": True}}))
+                ws.recv()
+        except Exception:
+            pass
+        break
+PYRELOAD
     ;;
 
   verify)
