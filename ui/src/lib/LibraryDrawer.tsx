@@ -10,7 +10,7 @@
 // alone are already a huge UX win over "use your phone".
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { browse, getHistory, lookup, playUris, queueUris, search, ROOTS, RADIO_STATIONS, type Ref, type MopidyTrack, type HistoryEntry, type RadioStation } from "./library";
+import { browse, browseHomeLibrary, getHistory, lookup, playUris, queueUris, search, ROOTS, RADIO_STATIONS, type Ref, type MopidyTrack, type HistoryEntry, type RadioStation } from "./library";
 import { AlbumThumb } from "./AlbumThumb";
 import { getFavorites } from "./favorites";
 
@@ -140,6 +140,16 @@ export function LibraryDrawer({ onClose }: Props) {
               // fall through; we'll render from ref.name only
             }
           }
+        } else if (hereUri.startsWith("home:")) {
+          // Home Library is the Phase 2 Subsonic catalog. It never round-trips
+          // through Mopidy.core.library.browse — we go straight to the
+          // boombox-library service.
+          const refs = await browseHomeLibrary(hereUri);
+          if (cancelled) return;
+          setItems(refs);
+          setHistory(null);
+          setRadio(null);
+          setTracks(null);
         } else {
           const refs = await browse(hereUri);
           if (cancelled) return;

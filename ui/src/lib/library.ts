@@ -109,12 +109,13 @@ export function getCurrentTlid(): Promise<number | null> {
 
 /** Standard top-level browsing roots that the touchscreen UI offers. */
 export const ROOTS: Ref[] = [
-  { uri: "boombox:favorites",           name: "Favorites", type: "directory" },
-  { uri: "boombox:recent",              name: "Recent",  type: "directory" },
-  { uri: "boombox:radio",               name: "Radio",   type: "directory" },
-  { uri: "local:directory?type=album",  name: "Albums",  type: "directory" },
-  { uri: "local:directory?type=artist", name: "Artists", type: "directory" },
-  { uri: "local:directory?type=track",  name: "Tracks",  type: "directory" },
+  { uri: "boombox:favorites",           name: "Favorites",    type: "directory" },
+  { uri: "boombox:recent",              name: "Recent",       type: "directory" },
+  { uri: "home:root",                   name: "Home Library", type: "directory" },
+  { uri: "boombox:radio",               name: "Radio",        type: "directory" },
+  { uri: "local:directory?type=album",  name: "Albums",       type: "directory" },
+  { uri: "local:directory?type=artist", name: "Artists",      type: "directory" },
+  { uri: "local:directory?type=track",  name: "Tracks",       type: "directory" },
 ];
 
 /** Curated internet radio stations. Direct MP3/AAC streams that work via
@@ -193,4 +194,48 @@ export type HistoryEntry = { ts: number; ref: Ref };
 export async function getHistory(): Promise<HistoryEntry[]> {
   const raw = await rpc<Array<[number, Ref]>>("core.history.get_history");
   return (raw ?? []).map(([ts, ref]) => ({ ts, ref }));
+}
+
+// ---- Home Library (Phase 2) ---------------------------------------------
+//
+// Home Library URIs are the boombox's parallel browse tree backed by the
+// Phase 1 service at /api/library/*. They never round-trip through Mopidy's
+// core.library.browse — instead browseHomeLibrary() translates each
+// home:* URI into the matching libraryApi call.
+
+import * as libraryApi from "./libraryApi";
+
+export async function browseHomeLibrary(uri: string): Promise<Ref[]> {
+  if (uri === "home:root") {
+    return [
+      { uri: "home:artists",     name: "Artists",     type: "directory" },
+      { uri: "home:albums",      name: "Albums",      type: "directory" },
+      { uri: "home:playlists",   name: "Playlists",   type: "directory" },
+      { uri: "home:cached-only", name: "Cached only", type: "directory" },
+    ];
+  }
+  if (uri === "home:artists") {
+    const items = await libraryApi.browse("artists");
+    return items.map(a => ({
+      uri: `home:artist:${a.id}`, name: a.name, type: "artist" as const,
+    }));
+  }
+  if (uri === "home:albums" || uri === "home:cached-only") {
+    // Cached-only filter is enforced row-side by the StatusBadge / cache poll
+    // in Phase 2; a dedicated server-side filter lands in Phase 3.
+    const items = await libraryApi.browse("albums");
+    return items.map(a => ({
+      uri: `home:album:${a.id}`, name: a.name, type: "album" as const,
+    }));
+  }
+  if (uri === "home:playlists") {
+    const items = await libraryApi.browse("playlists");
+    return items.map(p => ({
+      uri: `home:playlist:${p.id}`, name: p.name, type: "playlist" as const,
+    }));
+  }
+  // Deeper drilldowns (home:album:X / home:artist:X) need dedicated
+  // /album/<id> / /artist/<id> endpoints — Phase 1 didn't ship them, so
+  // for v1 we leave drilldown empty rather than throwing.
+  return [];
 }
