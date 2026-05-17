@@ -49,3 +49,12 @@ img, svg { -webkit-user-drag: none; user-drag: none; }
   background-clip: content-box;
 }
 
+
+/* Phase 2 home-library animations. */
+@keyframes boombox-pin-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes boombox-sync-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
