@@ -12,6 +12,7 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import type { ChromeApi } from "./skinRegistry";
+import { SyncIndicator } from "./SyncIndicator";
 
 export type ChromeTheme = {
   bg?: string;
@@ -159,6 +160,7 @@ export function ChromeButtons({
   return (
     <div style={{display: "flex", alignItems: "center", gap: 10, justifyContent: justify, width: "100%"}}>
       <ChromeSourceBtn chrome={chrome} theme={t}/>
+      <SyncIndicator />
       {children}
       <div style={{display: "flex", gap: 10}}>
         <ChromeQueueBtn chrome={chrome} theme={t}/>
