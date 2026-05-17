@@ -12,8 +12,8 @@ type Props = {
 
 export function StatusBadge({ cacheStatus, isCurrentTrack, pinned }: Props) {
   // Resolution priority: ⚡ (live stream) > 📌 (pinned, downloading) > ⬇ (cached) > ⚠ (error) > ☁ (catalog).
-  let glyph = "";
-  let title = "";
+  let glyph: string;
+  let title: string;
   if (isCurrentTrack && cacheStatus !== "present") {
     glyph = "⚡"; title = "Streaming";
   } else if (pinned && cacheStatus !== "present") {
