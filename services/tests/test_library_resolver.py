@@ -47,7 +47,7 @@ def test_uncached_online_returns_subsonic_stream(tmp_path: Path):
     r = resolve_playback(conn, "t1", online=True)
     assert r.source == PlaybackSource.STREAM
     # Mopidy-Subsonic URI scheme
-    assert r.uri == "subsonic:track:t1"
+    assert r.uri == "subsonic://t1"
 
 
 def test_uncached_offline_returns_offline_miss(tmp_path: Path):
@@ -87,7 +87,7 @@ def test_cached_status_with_null_local_path_falls_through_to_stream(tmp_path: Pa
                  "NULL, NULL)")
     r_online = resolve_playback(conn, "t1", online=True)
     assert r_online.source == PlaybackSource.STREAM
-    assert r_online.uri == "subsonic:track:t1"
+    assert r_online.uri == "subsonic://t1"
 
     r_offline = resolve_playback(conn, "t1", online=False)
     assert r_offline.source == PlaybackSource.OFFLINE_MISS

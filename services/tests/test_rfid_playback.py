@@ -48,7 +48,7 @@ def test_resolve_uris_streams_when_online(tmp_path: Path):
     conn = lib_connect(tmp_path / "lib.db"); lib_migrate(conn); rfid_migrate(conn)
     _seed(conn)
     uris = resolve_uris(conn, ["t1", "t2"], online=True)
-    assert uris == ["subsonic:track:t1", "subsonic:track:t2"]
+    assert uris == ["subsonic://t1", "subsonic://t2"]
 
 
 def test_resolve_uris_returns_file_when_cached(tmp_path: Path):
@@ -58,7 +58,7 @@ def test_resolve_uris_returns_file_when_cached(tmp_path: Path):
                  "downloaded_at) VALUES('t1','present','/x/audio/t1.mp3',1000,0)")
     uris = resolve_uris(conn, ["t1", "t2"], online=True)
     assert uris[0] == "file:///x/audio/t1.mp3"
-    assert uris[1] == "subsonic:track:t2"
+    assert uris[1] == "subsonic://t2"
 
 
 def test_resolve_uris_skips_offline_miss(tmp_path: Path):

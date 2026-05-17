@@ -32,7 +32,7 @@ def resolve_playback(conn: Connection, track_id: str, online: bool) -> PlaybackR
 
     Rules (from spec):
       cached + (online or offline)  → local:<path>,    source=CACHE
-      not cached + online           → subsonic:track:<id>, source=STREAM
+      not cached + online           → subsonic://<id>,     source=STREAM
       not cached + offline          → uri=None,        source=OFFLINE_MISS
       unknown track                 → uri=None,        source=OFFLINE_MISS
     """
@@ -66,9 +66,12 @@ def resolve_playback(conn: Connection, track_id: str, online: bool) -> PlaybackR
         )
 
     if online:
+        # Mopidy-Subsonic uses the `subsonic://<id>` URI form (the plugin
+        # splits on 'subsonic://' to extract the song id — see its
+        # library.lookup + playback.translate_uri).
         return PlaybackResolution(
             source=PlaybackSource.STREAM,
-            uri=f"subsonic:track:{track_id}",
+            uri=f"subsonic://{track_id}",
             cache_status=cache_status,
         )
 

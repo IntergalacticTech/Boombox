@@ -23,6 +23,7 @@ port = {port}
 username = {username}
 password = {password}
 ssl = {ssl}
+context = rest
 """
 
 

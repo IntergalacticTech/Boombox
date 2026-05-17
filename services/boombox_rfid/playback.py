@@ -2,7 +2,7 @@
 
 Reuses Phase 1's playback resolver: for each track in the bound target we
 ask the boombox-library `resolver.resolve_playback` for the right URI form
-(file:// when cached, subsonic:track:<id> when streaming).
+(file:// when cached, subsonic://<id> when streaming).
 
 Skips tracks the resolver marks 'offline_miss' (not cached + not online).
 """
