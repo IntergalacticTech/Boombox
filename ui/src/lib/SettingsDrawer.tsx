@@ -115,10 +115,12 @@ export function SettingsDrawer({ onClose }: Props) {
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("boombox:open-settings-library", onOpenLibrary);
+    window.addEventListener("boombox:scroll-to-library", onOpenLibrary);
     return () => {
       clearInterval(id);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("boombox:open-settings-library", onOpenLibrary);
+      window.removeEventListener("boombox:scroll-to-library", onOpenLibrary);
     };
   }, [onClose]);
 

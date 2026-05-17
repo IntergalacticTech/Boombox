@@ -70,11 +70,16 @@ function App() {
   }, []);
 
   // Phase 2: SyncIndicator chip in the chrome dispatches this event when
-  // tapped. App must open SettingsDrawer here; the drawer itself then
-  // listens for the same event a second time to scroll to the Library
-  // anchor. (Two-stage dispatch keeps each component self-contained.)
+  // tapped. App opens SettingsDrawer here, then re-fires the event after
+  // the drawer has mounted its own scroll-to-library listener (~120 ms
+  // covers the drawer's initial fetch tick).
   useEffect(() => {
-    const onOpenLib = () => setSettingsOpen(true);
+    const onOpenLib = () => {
+      setSettingsOpen(true);
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("boombox:scroll-to-library"));
+      }, 150);
+    };
     window.addEventListener("boombox:open-settings-library", onOpenLib);
     return () => window.removeEventListener("boombox:open-settings-library", onOpenLib);
   }, []);
