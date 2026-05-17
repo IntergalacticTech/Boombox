@@ -1,4 +1,8 @@
-"""CRUD over the rfid_bindings table + bookkeeping for taps."""
+"""CRUD over the rfid_bindings table + bookkeeping for taps.
+
+Binding a card also creates a Phase 1 pin (source='rfid'), so the bound
+content gets pre-cached for offline play and tap-to-play is fast.
+"""
 from __future__ import annotations
 
 import time
@@ -50,7 +54,12 @@ def bind(
     target_id: str,
     label: Optional[str] = None,
 ) -> None:
-    """Insert or replace a binding. Idempotent over (uid)."""
+    """Insert or replace a binding. Idempotent over (uid).
+
+    Also creates a Phase 1 pin (source='rfid') for the bound target so the
+    library service downloads the audio to the offline cache. Pins are
+    additive: a parallel user pin / favorite pin is unaffected.
+    """
     now = time.time()
     conn.execute(
         """INSERT INTO rfid_bindings(uid, kind, target_id, label, added_at, tap_count)
@@ -61,6 +70,35 @@ def bind(
              label=excluded.label""",
         (uid, kind.value, target_id, label, now),
     )
+    # Auto-pin so the bound album/artist/playlist/track is pre-cached. RFID
+    # is the lowest writer rank — explicit user pins survive a same-target
+    # rebind, and the auto-pin gives way later if the user explicitly pins
+    # USER. Lazy-imported to keep boombox_rfid's hot path independent of
+    # the library package if we ever split the install.
+    try:
+        from boombox_library.models import PinKind, PinSource
+        from boombox_library.pins import pin as _pin
+        _pin(conn, PinKind(kind.value), target_id, PinSource.RFID)
+    except Exception:
+        pass  # if library tables aren't present, the binding still works
+
+
+def unbind_with_pin(conn: Connection, uid: str) -> bool:
+    """Delete a binding AND its rfid-source pin if any. Returns True if
+    the binding existed. The pin is removed source-filtered so a parallel
+    user pin survives."""
+    existing = get_binding(conn, uid)
+    if existing is None:
+        return unbind(conn, uid)  # idempotent false
+    unbind(conn, uid)
+    try:
+        from boombox_library.models import PinKind, PinSource
+        from boombox_library.pins import unpin
+        unpin(conn, PinKind(existing.kind.value), existing.target_id,
+              source=PinSource.RFID)
+    except Exception:
+        pass
+    return True
 
 
 def unbind(conn: Connection, uid: str) -> bool:

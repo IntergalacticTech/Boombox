@@ -40,10 +40,21 @@ class MopidyClient:
         return data.get("result")
 
     async def play_uris(self, uris: Iterable[str]) -> None:
-        """Replace tracklist with the given URIs and start playing."""
+        """Replace tracklist with the given URIs and start playing.
+
+        Falls back to adding Track objects when the simple {uris} form
+        returns empty — Mopidy 3.4.2 + recent GStreamer has a scanner
+        bug that drops http:// URIs at scan time. Track-object form
+        bypasses scanning since we already provide the metadata.
+        """
         uri_list = list(uris)
         if not uri_list:
             return
         await self._call("core.tracklist.clear")
-        await self._call("core.tracklist.add", {"uris": uri_list})
+        added = await self._call("core.tracklist.add", {"uris": uri_list})
+        if isinstance(added, list) and len(added) == 0 and uri_list:
+            # Scan failed; retry as bare Track objects so Mopidy skips scanning.
+            tracks = [{"__model__": "Track", "uri": u, "name": "Streaming"}
+                      for u in uri_list]
+            await self._call("core.tracklist.add", {"tracks": tracks})
         await self._call("core.playback.play")
