@@ -8,6 +8,10 @@ export type Ref = {
   uri: string;
   name: string;
   type: "directory" | "album" | "artist" | "track" | "playlist";
+  /** Subsonic cover-art id. Present on Home Library rows (Navidrome-backed);
+   * absent on legacy Mopidy-Local rows. AlbumThumb uses it to hit the local
+   * art proxy at /api/library/art/<id> instead of iTunes Search. */
+  artId?: string;
 };
 
 export type MopidyTrack = {
@@ -218,6 +222,7 @@ export async function browseHomeLibrary(uri: string): Promise<Ref[]> {
     const items = await libraryApi.browse("artists");
     return items.map(a => ({
       uri: `home:artist:${a.id}`, name: a.name, type: "artist" as const,
+      artId: a.art_id,
     }));
   }
   if (uri === "home:albums" || uri === "home:cached-only") {
@@ -226,6 +231,7 @@ export async function browseHomeLibrary(uri: string): Promise<Ref[]> {
     const items = await libraryApi.browse("albums");
     return items.map(a => ({
       uri: `home:album:${a.id}`, name: a.name, type: "album" as const,
+      artId: a.art_id,
     }));
   }
   if (uri === "home:playlists") {

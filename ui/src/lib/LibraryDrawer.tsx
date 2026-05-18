@@ -563,7 +563,7 @@ export function LibraryDrawer({ onClose, bindUid: bindUidProp = null }: Props) {
                             position: "relative",
                           }}
                         >
-                          <AlbumThumb album={r.name} seed={r.uri} size={140} radius={8}/>
+                          <AlbumThumb album={r.name} artId={r.artId} seed={r.uri} size={140} radius={8}/>
                           {/* Quick-play overlay button — tap to play the whole
                             * album immediately without drilling into tracks. */}
                           <button
@@ -609,6 +609,7 @@ export function LibraryDrawer({ onClose, bindUid: bindUidProp = null }: Props) {
                           <AlbumThumb
                             album={isAlbum ? r.name : undefined}
                             artist={isArtist ? r.name : undefined}
+                            artId={r.artId}
                             seed={r.uri}
                             size={40}
                           />

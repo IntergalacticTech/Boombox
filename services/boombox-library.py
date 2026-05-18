@@ -47,6 +47,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("boombox-library")
 
 DB_PATH = Path("/opt/boombox/state/library.db")
+ART_CACHE_DIR = Path("/opt/boombox/state/art-cache")
 MOPIDY_CONF = Path("/etc/mopidy/mopidy.conf")
 CACHE_POLL_SECONDS = 5
 PORT = 6687
@@ -57,6 +58,7 @@ class ServiceContext:
         self.cfg = load_config()
         self.conn = connect(DB_PATH)
         migrate(self.conn)
+        self.art_cache_dir = ART_CACHE_DIR
         self.cache_state: CacheDriveState = CacheDriveState(
             present=False, mount_path=None,
             free_bytes=None, total_bytes=None,

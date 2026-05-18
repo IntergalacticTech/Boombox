@@ -18,7 +18,8 @@ from boombox_library.models import PinKind, PinSource
 
 class FakeContext:
     """In-memory stand-in for the service's runtime context."""
-    def __init__(self, conn, cfg=None, cache_state=None, ping_ok=True):
+    def __init__(self, conn, cfg=None, cache_state=None, ping_ok=True,
+                 art_cache_dir: Path | None = None):
         self.conn = conn
         self.cfg = cfg or DEFAULT_CONFIG
         self.cache_state = cache_state  # CacheDriveState
@@ -32,6 +33,8 @@ class FakeContext:
         self.cleared_count = 0
         self._clear_returns = 0
         self.candidates: list[dict] = []
+        # Phase 3: album-art proxy
+        self.art_cache_dir = art_cache_dir or Path("/tmp/boombox-art-test")
 
     async def is_online(self) -> bool:
         return self._ping_ok
@@ -66,7 +69,7 @@ class FakeContext:
 @pytest.fixture
 async def client(tmp_path):
     conn = connect(tmp_path / "l.db"); migrate(conn)
-    ctx = FakeContext(conn)
+    ctx = FakeContext(conn, art_cache_dir=tmp_path / "art-cache")
     app = build_app(ctx)
     async with TestClient(TestServer(app)) as c:
         yield c, ctx, conn
@@ -393,6 +396,39 @@ async def test_cache_candidates_returns_list(client):
     assert r.status == 200
     body = await r.json()
     assert body["candidates"] == ctx.candidates
+
+
+@pytest.mark.asyncio
+async def test_art_endpoint_serves_cached_bytes(client, tmp_path):
+    """When the disk cache already has bytes for an art_id, the endpoint
+    serves them directly without touching the network."""
+    c, ctx, _ = client
+    ctx.art_cache_dir.mkdir(parents=True, exist_ok=True)
+    (ctx.art_cache_dir / "al-42.bin").write_bytes(b"\xff\xd8\xff\xe0fake-jpeg")
+    r = await c.get("/api/library/art/al-42")
+    assert r.status == 200
+    assert (await r.read()).startswith(b"\xff\xd8")
+    assert "max-age=31536000" in r.headers.get("Cache-Control", "")
+    assert r.headers.get("ETag") == '"al-42"'
+
+
+@pytest.mark.asyncio
+async def test_art_endpoint_honors_if_none_match(client):
+    """Conditional GETs get a 304, no body — keeps repeat renders cheap."""
+    c, ctx, _ = client
+    ctx.art_cache_dir.mkdir(parents=True, exist_ok=True)
+    (ctx.art_cache_dir / "al-42.bin").write_bytes(b"\xff\xd8x")
+    r = await c.get("/api/library/art/al-42", headers={"If-None-Match": '"al-42"'})
+    assert r.status == 304
+
+
+@pytest.mark.asyncio
+async def test_art_endpoint_404_when_no_cache_and_offline(client):
+    """No cached bytes + no configured source URL → 404 (UI shows gradient)."""
+    c, ctx, _ = client
+    # DEFAULT_CONFIG has source.url == ''. Cache dir is empty.
+    r = await c.get("/api/library/art/missing-id")
+    assert r.status == 404
 
 
 @pytest.mark.asyncio

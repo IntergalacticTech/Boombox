@@ -10,15 +10,18 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from pathlib import Path
 from typing import Protocol
 
 from aiohttp import web
 
 from . import __version__
+from .art import fetch_art
 from .config import LibraryConfig, SourceConfig
 from .models import PinKind, PinSource
 from .pins import pin as _pin_fn, unpin as _unpin_fn
 from .resolver import resolve_playback
+from .subsonic import make_auth_params
 
 log = logging.getLogger("boombox-library.api")
 
@@ -29,6 +32,9 @@ class Context(Protocol):
     # Phase 2 additions for /health, /cache/adopt, /cache/streamed, /cache/clear, /cache/candidates
     last_sync_ts: float
     syncing: bool
+    # Album-art proxy/disk cache (Phase 3). Tests supply a tmp_path; the
+    # service entry point sets it to /opt/boombox/state/art-cache.
+    art_cache_dir: Path
 
     async def is_online(self) -> bool: ...
     async def trigger_sync(self) -> None: ...
@@ -58,6 +64,7 @@ def build_app(ctx: Context) -> web.Application:
     app.router.add_post("/api/library/cache/streamed", _cache_streamed)
     app.router.add_post("/api/library/cache/clear", _cache_clear)
     app.router.add_get("/api/library/cache/candidates", _cache_candidates)
+    app.router.add_get("/api/library/art/{art_id}", _art)
     return app
 
 
@@ -254,3 +261,53 @@ async def _cache_clear(req: web.Request) -> web.Response:
 async def _cache_candidates(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
     return web.json_response({"candidates": ctx.cache_candidates()})
+
+
+async def _art(req: web.Request) -> web.Response:
+    """Proxy + on-disk cache for Navidrome cover-art.
+
+    Path: /api/library/art/<art_id> with optional ?size=N to request a
+    thumbnail size. Once an (art_id, size) is on disk we never re-fetch —
+    Subsonic art_ids are content-stable, so `immutable` Cache-Control is
+    safe and lets the browser cache forever.
+
+    404 when there's no source URL configured, when Navidrome doesn't
+    have art for that id, AND the disk cache has no copy — the UI falls
+    back to its colour-hash gradient.
+    """
+    ctx: Context = req.app["ctx"]
+    art_id = req.match_info["art_id"]
+    size_param = req.query.get("size")
+    size: int | None = None
+    if size_param and size_param.isdigit():
+        size = int(size_param)
+
+    src = ctx.cfg.source
+    auth = make_auth_params(src.username, src.password) if src.username else {}
+    result = await fetch_art(
+        base_url=src.url,
+        auth_params=auth,
+        art_id=art_id,
+        cache_dir=ctx.art_cache_dir,
+        size=size,
+    )
+    if result is None:
+        return web.Response(status=404, text="art unavailable")
+    data, ctype = result
+    etag_parts = [art_id]
+    if size:
+        etag_parts.append(str(size))
+    etag = '"' + "-".join(etag_parts) + '"'
+    if req.headers.get("If-None-Match") == etag:
+        return web.Response(status=304, headers={"ETag": etag})
+    return web.Response(
+        body=data,
+        content_type=ctype,
+        headers={
+            # Subsonic art_ids change when the underlying art changes,
+            # so we can mark these immutable and let the browser keep
+            # them forever.
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": etag,
+        },
+    )
