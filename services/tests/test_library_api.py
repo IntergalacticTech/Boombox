@@ -19,7 +19,8 @@ from boombox_library.models import PinKind, PinSource
 class FakeContext:
     """In-memory stand-in for the service's runtime context."""
     def __init__(self, conn, cfg=None, cache_state=None, ping_ok=True,
-                 art_cache_dir: Path | None = None):
+                 art_cache_dir: Path | None = None,
+                 snapshot_dir: Path | None = None):
         self.conn = conn
         self.cfg = cfg or DEFAULT_CONFIG
         self.cache_state = cache_state  # CacheDriveState
@@ -33,8 +34,9 @@ class FakeContext:
         self.cleared_count = 0
         self._clear_returns = 0
         self.candidates: list[dict] = []
-        # Phase 3: album-art proxy
+        # Phase 3: album-art proxy + browse snapshots
         self.art_cache_dir = art_cache_dir or Path("/tmp/boombox-art-test")
+        self.snapshot_dir = snapshot_dir or Path("/tmp/boombox-snap-test")
 
     async def is_online(self) -> bool:
         return self._ping_ok
@@ -69,7 +71,11 @@ class FakeContext:
 @pytest.fixture
 async def client(tmp_path):
     conn = connect(tmp_path / "l.db"); migrate(conn)
-    ctx = FakeContext(conn, art_cache_dir=tmp_path / "art-cache")
+    ctx = FakeContext(
+        conn,
+        art_cache_dir=tmp_path / "art-cache",
+        snapshot_dir=tmp_path / "snapshots",
+    )
     app = build_app(ctx)
     async with TestClient(TestServer(app)) as c:
         yield c, ctx, conn
@@ -396,6 +402,55 @@ async def test_cache_candidates_returns_list(client):
     assert r.status == 200
     body = await r.json()
     assert body["candidates"] == ctx.candidates
+
+
+@pytest.mark.asyncio
+async def test_browse_serves_snapshot_when_present(client, tmp_path):
+    """When a precomputed snapshot exists, /browse streams it (and ignores SQL)."""
+    c, ctx, conn = client
+    # Seed the DB so the SQL fallback would also work — but we want to
+    # see the SNAPSHOT (which contains synthetic data the DB doesn't).
+    snap_dir = ctx.snapshot_dir
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (snap_dir / "albums.json").write_text(
+        '{"items":[{"id":"snap","name":"FromSnapshot"}]}'
+    )
+    r = await c.get("/api/library/browse", params={"type": "albums"})
+    assert r.status == 200
+    body = await r.json()
+    assert body["items"][0]["name"] == "FromSnapshot"
+    assert r.headers.get("ETag")
+
+
+@pytest.mark.asyncio
+async def test_browse_returns_304_on_matching_etag(client):
+    """Conditional GET with matching If-None-Match skips the body."""
+    c, ctx, _ = client
+    snap_dir = ctx.snapshot_dir
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (snap_dir / "albums.json").write_text('{"items":[]}')
+    r1 = await c.get("/api/library/browse", params={"type": "albums"})
+    etag = r1.headers.get("ETag")
+    assert etag
+    r2 = await c.get(
+        "/api/library/browse",
+        params={"type": "albums"},
+        headers={"If-None-Match": etag},
+    )
+    assert r2.status == 304
+
+
+@pytest.mark.asyncio
+async def test_browse_falls_back_to_sql_before_first_snapshot(client):
+    """First-boot window: no snapshot file yet, but SQL still answers."""
+    c, ctx, conn = client
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
+                 "VALUES('ar1','Zed','zed',1,0)")
+    # Note: snapshot_dir intentionally empty for this test
+    r = await c.get("/api/library/browse", params={"type": "artists"})
+    assert r.status == 200
+    body = await r.json()
+    assert body["items"][0]["name"] == "Zed"
 
 
 @pytest.mark.asyncio

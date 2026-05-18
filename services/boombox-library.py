@@ -38,6 +38,7 @@ from boombox_library.mopidy_config import write_subsonic_block, reload_mopidy
 from boombox_library.pins import (
     all_pinned_track_ids, load_sidecar, reconcile_starred, write_sidecar,
 )
+from boombox_library.snapshots import write_snapshots
 from boombox_library.subsonic import (
     SubsonicAuthError, SubsonicClient, SubsonicUnreachable,
 )
@@ -48,6 +49,7 @@ log = logging.getLogger("boombox-library")
 
 DB_PATH = Path("/opt/boombox/state/library.db")
 ART_CACHE_DIR = Path("/opt/boombox/state/art-cache")
+SNAPSHOT_DIR = Path("/opt/boombox/state/snapshots")
 MOPIDY_CONF = Path("/etc/mopidy/mopidy.conf")
 CACHE_POLL_SECONDS = 5
 PORT = 6687
@@ -59,6 +61,7 @@ class ServiceContext:
         self.conn = connect(DB_PATH)
         migrate(self.conn)
         self.art_cache_dir = ART_CACHE_DIR
+        self.snapshot_dir = SNAPSHOT_DIR
         self.cache_state: CacheDriveState = CacheDriveState(
             present=False, mount_path=None,
             free_bytes=None, total_bytes=None,
@@ -175,6 +178,14 @@ class ServiceContext:
                         reconcile_starred(self.conn)
                     self._enqueue_pinned_downloads()
                     self._persist_pins_sidecar()
+                    # Materialise the browse snapshots while the sync is
+                    # fresh — the API serves these instead of querying
+                    # SQLite on every browse.
+                    try:
+                        write_snapshots(self.conn, self.snapshot_dir)
+                    except Exception:
+                        log.exception("snapshot write failed; "
+                                      "browse will fall back to SQLite")
                     self.last_sync_ts = time.time()
                 except Exception as e:
                     log.exception("sync failed: %s", e)

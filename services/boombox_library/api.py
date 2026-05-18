@@ -21,6 +21,7 @@ from .config import LibraryConfig, SourceConfig
 from .models import PinKind, PinSource
 from .pins import pin as _pin_fn, unpin as _unpin_fn
 from .resolver import resolve_playback
+from .snapshots import compute_etag, snapshot_path
 from .subsonic import make_auth_params
 
 log = logging.getLogger("boombox-library.api")
@@ -35,6 +36,10 @@ class Context(Protocol):
     # Album-art proxy/disk cache (Phase 3). Tests supply a tmp_path; the
     # service entry point sets it to /opt/boombox/state/art-cache.
     art_cache_dir: Path
+    # Precomputed browse-response JSON snapshots. The service writes them
+    # after every sync; the API serves them with ETag in lieu of querying
+    # SQLite on every browse.
+    snapshot_dir: Path
 
     async def is_online(self) -> bool: ...
     async def trigger_sync(self) -> None: ...
@@ -123,11 +128,37 @@ _BROWSE_QUERIES = {
 
 
 async def _browse(req: web.Request) -> web.Response:
+    """Serve the precomputed JSON snapshot when present, fall back to a
+    live SQLite query otherwise.
+
+    The snapshot is rewritten by ServiceContext._sync_once after every
+    successful sync; on first boot (no sync yet) we still answer correctly
+    via the SQL fallback, but the response is materialised on every call.
+    """
     ctx: Context = req.app["ctx"]
     t = req.query.get("type", "artists")
     sql = _BROWSE_QUERIES.get(t)
     if not sql:
         return web.json_response({"error": f"unknown type {t}"}, status=400)
+
+    snap = snapshot_path(ctx.snapshot_dir, t)
+    if snap.exists():
+        etag = compute_etag(snap)
+        if req.headers.get("If-None-Match") == etag:
+            return web.Response(status=304, headers={"ETag": etag})
+        body = snap.read_bytes()
+        return web.Response(
+            body=body,
+            content_type="application/json",
+            headers={
+                "ETag": etag,
+                # Browser revalidates on every navigation but the ETag
+                # match returns a 304 with no body, so the round-trip is
+                # cheap and the user always sees fresh post-sync data.
+                "Cache-Control": "no-cache",
+            },
+        )
+
     rows = list(ctx.conn.execute(sql))
     return web.json_response({"items": [dict(r) for r in rows]})
 
