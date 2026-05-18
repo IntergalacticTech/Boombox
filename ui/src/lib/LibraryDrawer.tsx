@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { browse, browseHomeLibrary, getHistory, lookup, playUris, queueUris, search, ROOTS, RADIO_STATIONS, type Ref, type MopidyTrack, type HistoryEntry, type RadioStation } from "./library";
 import { AlbumThumb } from "./AlbumThumb";
 import { getFavorites } from "./favorites";
+import { useIncrementalRender } from "./useIncrementalRender";
 
 type Crumb = { uri: string | null; name: string };
 
@@ -211,6 +212,13 @@ export function LibraryDrawer({ onClose, bindUid: bindUidProp = null }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [stack, onClose]);
+
+  // Incremental render so a 9 k-album browse doesn't lock the touchscreen
+  // for seconds on mount. Only kicks in past the initial slice; under 100
+  // items there's no slicing and no IntersectionObserver overhead.
+  const { visible: visibleCount, sentinelRef } = useIncrementalRender(
+    items.length, 100, 100,
+  );
 
   const allTrackUris = useMemo(() => {
     if (searchActive && searchResults) return searchResults.map(t => t.uri);
@@ -540,83 +548,95 @@ export function LibraryDrawer({ onClose, bindUid: bindUidProp = null }: Props) {
                   ))
                 : (items.length > 0 && items.every(r => r.type === "album"))
                 ? (
-                    <div style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-                      gap: 12,
-                      padding: 12,
-                      justifyItems: "center",
-                    }}>
-                      {items.map(r => (
-                        <div
-                          key={r.uri}
-                          onClick={() => enterRef(r)}
-                          style={{
-                            cursor: "pointer",
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "center",
-                            gap: 8,
-                            textAlign: "center",
-                            width: "100%",
-                            maxWidth: 160,
-                            position: "relative",
-                          }}
-                        >
-                          <AlbumThumb album={r.name} artId={r.artId} seed={r.uri} size={140} radius={8}/>
-                          {/* Quick-play overlay button — tap to play the whole
-                            * album immediately without drilling into tracks. */}
-                          <button
-                            onClick={(e) => { e.stopPropagation(); void playRefImmediate(r); }}
-                            aria-label={`Play ${r.name}`}
+                    <>
+                      <div style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+                        gap: 12,
+                        padding: 12,
+                        justifyItems: "center",
+                      }}>
+                        {items.slice(0, visibleCount).map(r => (
+                          <div
+                            key={r.uri}
+                            onClick={() => enterRef(r)}
                             style={{
-                              position: "absolute",
-                              right: 8, top: 8,
-                              width: 38, height: 38,
-                              borderRadius: 999,
-                              background: "rgba(0,0,0,0.65)",
-                              backdropFilter: "blur(6px)",
-                              border: "1px solid rgba(255,255,255,0.25)",
-                              color: "#fff",
                               cursor: "pointer",
-                              fontSize: 14,
-                              fontWeight: 700,
-                              display: "grid",
-                              placeItems: "center",
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              gap: 8,
+                              textAlign: "center",
+                              width: "100%",
+                              maxWidth: 160,
+                              position: "relative",
                             }}
-                          >▶</button>
-                          <div style={{
-                            fontSize: 13, fontWeight: 600,
-                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                            paddingInline: 4,
-                            width: "100%",
-                          }}>{r.name}</div>
-                        </div>
-                      ))}
-                    </div>
+                          >
+                            <AlbumThumb album={r.name} artId={r.artId} seed={r.uri} size={140} radius={8}/>
+                            {/* Quick-play overlay button — tap to play the whole
+                              * album immediately without drilling into tracks. */}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); void playRefImmediate(r); }}
+                              aria-label={`Play ${r.name}`}
+                              style={{
+                                position: "absolute",
+                                right: 8, top: 8,
+                                width: 38, height: 38,
+                                borderRadius: 999,
+                                background: "rgba(0,0,0,0.65)",
+                                backdropFilter: "blur(6px)",
+                                border: "1px solid rgba(255,255,255,0.25)",
+                                color: "#fff",
+                                cursor: "pointer",
+                                fontSize: 14,
+                                fontWeight: 700,
+                                display: "grid",
+                                placeItems: "center",
+                              }}
+                            >▶</button>
+                            <div style={{
+                              fontSize: 13, fontWeight: 600,
+                              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                              paddingInline: 4,
+                              width: "100%",
+                            }}>{r.name}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {visibleCount < items.length && (
+                        <div ref={sentinelRef} style={{ height: 1 }} />
+                      )}
+                    </>
                   )
-                : items.map(r => {
-                    const isAlbum = r.type === "album";
-                    const isArtist = r.type === "artist";
-                    return (
-                      <Row
-                        key={r.uri}
-                        title={r.name}
-                        subtitle={r.type === "album" ? "Album" : r.type === "artist" ? "Artist" : r.type === "track" ? "Track" : "Folder"}
-                        onClick={() => enterRef(r)}
-                        icon={r.type === "track" ? "▶" : "›"}
-                        thumb={(isAlbum || isArtist) ? (
-                          <AlbumThumb
-                            album={isAlbum ? r.name : undefined}
-                            artist={isArtist ? r.name : undefined}
-                            artId={r.artId}
-                            seed={r.uri}
-                            size={40}
+                : (
+                    <>
+                      {items.slice(0, visibleCount).map(r => {
+                        const isAlbum = r.type === "album";
+                        const isArtist = r.type === "artist";
+                        return (
+                          <Row
+                            key={r.uri}
+                            title={r.name}
+                            subtitle={r.type === "album" ? "Album" : r.type === "artist" ? "Artist" : r.type === "track" ? "Track" : "Folder"}
+                            onClick={() => enterRef(r)}
+                            icon={r.type === "track" ? "▶" : "›"}
+                            thumb={(isAlbum || isArtist) ? (
+                              <AlbumThumb
+                                album={isAlbum ? r.name : undefined}
+                                artist={isArtist ? r.name : undefined}
+                                artId={r.artId}
+                                seed={r.uri}
+                                size={40}
+                              />
+                            ) : null}
                           />
-                        ) : null}
-                      />
-                    );
-                  })}
+                        );
+                      })}
+                      {visibleCount < items.length && (
+                        <div ref={sentinelRef} style={{ height: 1 }} />
+                      )}
+                    </>
+                  )}
               {searchActive && !searching && (searchResults?.length ?? 0) === 0 && (
                 <div style={{padding: 24, fontFamily: "'JetBrains Mono', monospace", color: "rgba(255,255,255,0.5)"}}>
                   No matches for “{query}”.
