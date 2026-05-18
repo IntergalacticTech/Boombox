@@ -58,7 +58,6 @@ describe("useIncrementalRender", () => {
     // sentinelRef.current synchronously inside the effect, so we set it
     // before the effect re-runs.
     act(() => {
-      // @ts-expect-error — ref shape is intentional
       result.current.sentinelRef.current = document.createElement("div");
     });
     // Force the effect to re-run by triggering a state update path —
