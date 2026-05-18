@@ -110,6 +110,103 @@ async def test_sync_full_marks_starred(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_sync_full_skips_unchanged_albums_on_resync(tmp_path: Path):
+    """Steady-state sync: when track counts already match, get_album is
+    NOT called. This is the per-album HTTP fan-out that dominated the
+    previous ~10 min full-sync wall clock."""
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    client = FakeSubsonic(
+        artists=[{"id": "ar1", "name": "X", "albumCount": 1}],
+        albums=[{"id": "al1", "name": "A", "artistId": "ar1",
+                 "songCount": 1, "duration": 30}],
+        tracks_per_album={"al1": [
+            {"id": "t1", "title": "T", "duration": 30, "suffix": "mp3",
+             "size": 100, "contentType": "audio/mpeg"},
+        ]},
+    )
+
+    # Wrap get_album so we can count calls without losing behaviour.
+    real_get_album = client.get_album
+    calls: list[str] = []
+    async def counting_get_album(aid):
+        calls.append(aid)
+        return await real_get_album(aid)
+    client.get_album = counting_get_album
+
+    await sync_full(client, db)
+    first_call_count = len(calls)
+    assert first_call_count == 1  # first sync fetches the album detail
+    calls.clear()
+
+    # Second sync: the album hasn't changed; no detail fetch should fire.
+    result = await sync_full(client, db)
+    assert calls == []
+    assert result.get("albums_fetched") == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_full_refetches_when_song_count_changes(tmp_path: Path):
+    """If Navidrome reports a different songCount, the per-album HTTP
+    call is re-issued — picks up retags / new track uploads."""
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    client = FakeSubsonic(
+        artists=[{"id": "ar1", "name": "X", "albumCount": 1}],
+        albums=[{"id": "al1", "name": "A", "artistId": "ar1",
+                 "songCount": 1, "duration": 30}],
+        tracks_per_album={"al1": [
+            {"id": "t1", "title": "T", "duration": 30, "suffix": "mp3",
+             "size": 100, "contentType": "audio/mpeg"},
+        ]},
+    )
+    await sync_full(client, db)
+
+    # Album grew from 1 → 2 tracks upstream.
+    client._albums[0]["songCount"] = 2
+    client._tracks["al1"].append({
+        "id": "t2", "title": "T2", "duration": 30, "suffix": "mp3",
+        "size": 100, "contentType": "audio/mpeg",
+    })
+    result = await sync_full(client, db)
+    assert result.get("albums_fetched") == 1
+    assert db.execute("SELECT COUNT(*) FROM tracks WHERE album_id='al1'").fetchone()[0] == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_full_reaps_removed_albums(tmp_path: Path):
+    """An album removed from Navidrome between syncs is deleted locally
+    (tracks cascade via the FK), so the UI doesn't show orphans."""
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    client = FakeSubsonic(
+        artists=[{"id": "ar1", "name": "X", "albumCount": 2}],
+        albums=[
+            {"id": "al1", "name": "A1", "artistId": "ar1",
+             "songCount": 1, "duration": 30},
+            {"id": "al2", "name": "A2", "artistId": "ar1",
+             "songCount": 1, "duration": 30},
+        ],
+        tracks_per_album={
+            "al1": [{"id": "t1", "title": "T1", "duration": 30,
+                     "suffix": "mp3", "size": 1, "contentType": "audio/mpeg"}],
+            "al2": [{"id": "t2", "title": "T2", "duration": 30,
+                     "suffix": "mp3", "size": 1, "contentType": "audio/mpeg"}],
+        },
+    )
+    await sync_full(client, db)
+    assert db.execute("SELECT COUNT(*) FROM albums").fetchone()[0] == 2
+
+    # Drop al2 upstream.
+    client._albums = [client._albums[0]]
+    await sync_full(client, db)
+    rows = [r["id"] for r in db.execute("SELECT id FROM albums")]
+    assert rows == ["al1"]
+    # Tracks cascaded.
+    assert db.execute("SELECT COUNT(*) FROM tracks WHERE album_id='al2'").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
 async def test_sync_full_populates_playlist_tracks(tmp_path: Path):
     db = connect(tmp_path / "library.db")
     migrate(db)

@@ -169,10 +169,12 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
         except Exception: pass
         raise
 
-    # Albums: each HTTP page → one short txn.
+    # Albums: each HTTP page → one short txn. We capture each album's
+    # expected songCount so the next loop can skip the per-album HTTP
+    # call when our local track count already matches.
     offset = 0
     album_count = 0
-    all_album_ids: list[str] = []
+    all_albums_seen: list[tuple[str, int]] = []
     while True:
         page = await client.get_album_list(offset=offset, size=_ALBUM_PAGE_SIZE)
         if not page:
@@ -181,7 +183,7 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
         try:
             for al in page:
                 _upsert_album(conn, al, now, starred_album_ids)
-                all_album_ids.append(al["id"])
+                all_albums_seen.append((al["id"], int(al.get("songCount", 0))))
             conn.execute("COMMIT")
         except Exception:
             try: conn.execute("ROLLBACK")
@@ -193,13 +195,30 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
         offset += _ALBUM_PAGE_SIZE
 
     # Tracks: one HTTP call per album → one short txn per album.
+    # Skip the call when our existing track count for that album_id
+    # already matches what getAlbumList2 reports. This is the steady-state
+    # optimisation — on a hourly sync of an unchanged catalog, every
+    # album short-circuits and we issue zero getAlbum requests. Only
+    # albums whose song count drifted (new uploads, retag) — or are
+    # entirely new — get the expensive detail fetch.
+    #
     # Bumped from sleep(0) to a tiny non-zero sleep so the kernel actually
     # schedules other processes (notably boombox-rfid bind INSERTs). At
     # sleep(0) the asyncio loop yielded but the writer lock got reacquired
     # so fast on the next iteration that rfid still starved out its
     # 10 s busy_timeout — caught when a card bind took 9 s on the kiosk.
+    existing_track_counts: dict[str, int] = {
+        row[0]: row[1] for row in conn.execute(
+            "SELECT album_id, COUNT(*) FROM tracks GROUP BY album_id"
+        )
+    }
     track_count = 0
-    for aid in all_album_ids:
+    fetched_albums = 0
+    for aid, expected in all_albums_seen:
+        have = existing_track_counts.get(aid, 0)
+        if expected > 0 and have == expected:
+            track_count += have
+            continue
         await asyncio.sleep(0.005)
         detail = await client.get_album(aid)
         songs = detail.get("song", [])
@@ -211,6 +230,7 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
                 _upsert_track(conn, tr, aid, now, starred_song_ids)
                 track_count += 1
             conn.execute("COMMIT")
+            fetched_albums += 1
         except Exception:
             try: conn.execute("ROLLBACK")
             except Exception: pass
@@ -248,7 +268,36 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
             except Exception: pass
             raise
 
-    log.info("sync_full done: %d artists, %d albums, %d tracks, %d playlists",
-             len(artists), album_count, track_count, len(playlists))
+    # Reap albums that disappeared from Navidrome since the last sync.
+    # Tracks cascade via the FK. Only run after we've walked the full
+    # source-of-truth list — if the walk above raised, the whole
+    # sync_full caller catches it and we never reach here, so a partial
+    # walk can never drive a destructive delete.
+    seen_album_ids = {aid for aid, _ in all_albums_seen}
+    if seen_album_ids:
+        conn.execute("BEGIN")
+        try:
+            conn.execute("CREATE TEMP TABLE IF NOT EXISTS _seen_albums "
+                         "(id TEXT PRIMARY KEY)")
+            conn.execute("DELETE FROM _seen_albums")
+            conn.executemany("INSERT INTO _seen_albums(id) VALUES (?)",
+                             ((aid,) for aid in seen_album_ids))
+            cursor = conn.execute(
+                "DELETE FROM albums WHERE id NOT IN (SELECT id FROM _seen_albums)"
+            )
+            removed = cursor.rowcount or 0
+            conn.execute("COMMIT")
+            if removed:
+                log.info("sync_full reaped %d removed albums", removed)
+        except Exception:
+            try: conn.execute("ROLLBACK")
+            except Exception: pass
+            raise
+
+    log.info("sync_full done: %d artists, %d albums (%d fetched, %d skipped), "
+             "%d tracks, %d playlists",
+             len(artists), album_count, fetched_albums,
+             album_count - fetched_albums, track_count, len(playlists))
     return {"artists": len(artists), "albums": album_count,
-            "tracks": track_count, "playlists": len(playlists)}
+            "tracks": track_count, "playlists": len(playlists),
+            "albums_fetched": fetched_albums}
