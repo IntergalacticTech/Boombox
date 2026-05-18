@@ -12,7 +12,7 @@ from pathlib import Path
 
 log = logging.getLogger("boombox-library.db")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -121,6 +121,13 @@ _MIGRATIONS = [
     CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
         content_type, id UNINDEXED, title, body
     );
+    """,
+    # v2 — sort_name indexes. /api/library/browse orders by sort_name on
+    # ~8.7 k albums; without the index this is a full table scan + in-memory
+    # sort on every browse. Indexed it's an index-ordered range scan.
+    """
+    CREATE INDEX IF NOT EXISTS idx_albums_sort_name ON albums(sort_name);
+    CREATE INDEX IF NOT EXISTS idx_artists_sort_name ON artists(sort_name);
     """,
 ]
 

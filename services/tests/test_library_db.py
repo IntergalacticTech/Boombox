@@ -56,3 +56,15 @@ def test_foreign_keys_enabled(tmp_path: Path):
     migrate(conn)
     fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     assert fk == 1
+
+
+def test_sort_name_indexes_present(tmp_path: Path):
+    """Browse path orders by sort_name; without indexes it's a full scan."""
+    db_path = tmp_path / "library.db"
+    conn = connect(db_path)
+    migrate(conn)
+    indexes = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'"
+    )}
+    assert "idx_albums_sort_name" in indexes
+    assert "idx_artists_sort_name" in indexes
