@@ -3,8 +3,9 @@
 A touchscreen-driven retro boombox built on Raspberry Pi 5 + HiFiBerry-class
 I²S DAC. Mopidy handles local + streaming music; a React kiosk UI runs in
 Chromium; a small fleet of Python services unifies Bluetooth / AirPlay /
-Spotify Connect playback, drives GPIO buttons, runs a live audio visualizer,
-and keeps the kiosk pinned to its UI.
+Spotify Connect playback, drives GPIO buttons + RFID taps, syncs a Navidrome
+"home library" to a USB cache drive for offline play, runs a live audio
+visualizer, and keeps the kiosk pinned to its UI.
 
 ```
                     ┌─────────────────────────────┐
@@ -18,10 +19,15 @@ and keeps the kiosk pinned to its UI.
    ──────────                ────────────                 ────────
    HiFiBerry I²S DAC         17 GPIO buttons + encoder    nginx localhost:80
    PipeWire mixer            touchscreen                  ├─ / (built SPA)
-   Mopidy + Iris             playerctl / MPRIS            ├─ /mopidy/*       → 6680
-   shairport-sync (AirPlay)  AVRCP volume (BT)            ├─ /api/*          → 6681
-   raspotify (Spotify)       boombox-orchestrator         ├─ /audio/ws       → 6682
-   bluez A2DP sink           kiosk overlay events         ├─ /api/buttons/*  → 6684
+   Mopidy + Iris             USB HID RFID reader          ├─ /mopidy/*        → 6680
+   shairport-sync (AirPlay)  playerctl / MPRIS            ├─ /api/*           → 6681
+   raspotify (Spotify)       AVRCP volume (BT)            ├─ /audio/ws        → 6682
+   bluez A2DP sink           boombox-orchestrator         ├─ /api/buttons/*   → 6684
+   Navidrome (Home Library)  kiosk overlay events         ├─ /api/remote/*    → 6685
+                                                          ├─ /api/update/*    → 6686
+                                                          ├─ /api/library/*   → 6687
+                                                          ├─ /api/rfid/*      → 6688
+                                                          ├─ /remote/   (PWA — no auth)
                                                           └─ LAN :8090 requires auth
 ```
 
@@ -129,19 +135,25 @@ folder will publish the latest site.
 | `boombox-audio`       | 6682 | PipeWire monitor → FFT/VU → WebSocket at `/audio/ws` |
 | `boombox-orchestrator`| —    | Watches PipeWire; pauses other sources when a new one starts |
 | `boombox-buttons`     | 6684 | 17 GPIO buttons + rotary encoder; routes to Mopidy / state API / kiosk overlays; `/api/buttons/` config + learn + test |
+| `boombox-remote`      | 6685 | Phone PWA + wireless-remote API: state, command, WebSocket, album art, file/library/queue/video, PIN pairing |
+| `boombox-updater`     | 6686 | GitHub release poller + scheduled A/B installer; `/api/update/*` config, status, install, rollback |
+| `boombox-library`     | 6687 | Navidrome (Subsonic) catalog sync to a USB cache drive; `/api/library/*` browse, search, pin, sync, resolver, art proxy |
+| `boombox-rfid`        | 6688 | USB HID RFID reader → bound playback; `/api/rfid/*` bindings CRUD + recent-tap polling |
 | `boombox-resume`      | —    | Snapshots Mopidy state, restores after reboot |
 | `boombox-bt-volume`   | —    | AVRCP absolute-volume → `bluez_input` node |
 | `boombox-kiosk-guard` | —    | DevTools-driven watchdog that keeps Chromium on `http://localhost/` |
-| `boombox-updater`     | 6685 | GitHub release poller + scheduled A/B installer; `/api/update/*` config, status, install, rollback |
+| `boombox-osk`         | —    | Wayland on-screen keyboard, summoned by focus events from the kiosk |
 
-All eight `boombox-*` services run as **user** systemd units (they need the
-desktop session's PipeWire / Wayland / BlueZ). `nginx` and `mopidy` are
-system services.
+All `boombox-*` services run as **user** systemd units (they need the
+desktop session's PipeWire / Wayland / BlueZ / `/dev/input`). `nginx` and
+`mopidy` are system services.
 
 ## Docs
 
 - **[ARCHITECTURE.md](./docs/ARCHITECTURE.md)** — one-screen picture of how everything fits together
 - **[SERVICES.md](./docs/SERVICES.md)** — per-service reference: what each daemon does and how to debug it
+- **[HOME-LIBRARY.md](./docs/HOME-LIBRARY.md)** — Navidrome catalog sync, USB cache drive, pinning, offline play
+- **[RFID.md](./docs/RFID.md)** — bind a card to an album/artist/playlist; tap to play
 - **[BUTTONS.md](./docs/BUTTONS.md)** — wire 17 panel buttons + an encoder, bind pins from the Settings panel, troubleshoot
 - **[SKINS.md](./docs/SKINS.md)** — end-to-end guide to creating a new touchscreen skin
 - **[ACCESS.md](./docs/ACCESS.md)** — authenticated LAN web access, remote/upload page, SMB share, and USB auto-mount

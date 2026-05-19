@@ -20,7 +20,11 @@ repo organises itself in your head.
           │            │  │ /api/         :6681 │  │     └────────────────────┘
    GPIO   │            │  │ /audio/ws     :6682 │  │
    buttons│            │  │ /api/buttons/ :6684 │  │
+   + RFID │            │  │ /api/remote/  :6685 │  │
           │            │  │ /api/update/  :6686 │  │
+          │            │  │ /api/library/ :6687 │  │
+          │            │  │ /api/rfid/    :6688 │  │
+          │            │  │ /remote/   (PWA)    │  │
           │            │  └─────────────────────┘  │
           │            │  LAN :8090 → Basic auth   │
           │            └───────────────────────────┘
@@ -39,12 +43,17 @@ repo organises itself in your head.
    └──────┬───────┘       └─────────────────────────────────────────┘
           │                        │              │             │
           ▼                  AirPlay receiver  Spotify Connect  Phone (BT)
-   ┌──────────────┐
-   │ HiFiBerry DAC│
-   │ (I²S)        │
-   └──────┬───────┘
-          ▼
-       speakers
+   ┌──────────────┐         ┌──────────────────────────────────────────┐
+   │ HiFiBerry DAC│         │   boombox-library  ⟷  Navidrome (LAN)    │
+   │ (I²S)        │         │   :6687  + SQLite catalog + USB cache    │
+   └──────┬───────┘         └────────────────────┬─────────────────────┘
+          ▼                                      │
+       speakers                                  ▼
+                                       ┌────────────────────┐
+                                       │   boombox-rfid     │
+                                       │   :6688            │
+                                       │   /dev/input/*-kbd │
+                                       └────────────────────┘
 ```
 
 ---
@@ -71,6 +80,8 @@ repo organises itself in your head.
 | `boombox-updater` | user | 6686 | Polls GitHub Releases; runs scheduled A/B release installs with auto-rollback. See [Updates](#updates). |
 | `boombox-remote` | user | 6685 | Boot-enabled. The consolidated phone + wireless-remote API (`/api/remote/`): state, commands, WebSocket, album art, file/library/queue/video surfaces, PIN pairing. Gated by a `remote_enabled` toggle, off by default. See [ACCESS.md](./ACCESS.md). |
 | `boombox-usb-mount@<dev>` | system (template) | — | Triggered by udev. Mounts USB drives R/O under `/media/boombox/<id>` and symlinks them into the Mopidy library at `~/Music/.usb/<id>`. |
+| `boombox-library` | user | 6687 | Navidrome (Subsonic) catalog sync, USB cache drive management, pin manager, FIFO eviction, playback resolver, art proxy with on-disk cache. SQLite catalog at `/opt/boombox/state/library.db`. See [HOME-LIBRARY.md](./HOME-LIBRARY.md). |
+| `boombox-rfid` | user | 6688 | USB HID-keyboard RFID reader → bind lookup → Mopidy playback. Grabs the input device exclusively (EVIOCGRAB) so card UID digits don't leak to Chromium. Bindings table lives in the shared library DB. See [RFID.md](./RFID.md). |
 
 **System vs user.** `nginx`, `mopidy`, `smbd`, `shairport-sync`, `bluetoothd`,
 `raspotify` are system-wide and start before login. The `boombox-*` services
@@ -131,6 +142,73 @@ paused" loops.
 
 ---
 
+## Data flow: Home Library tap-to-play
+
+`boombox-rfid` reads `/dev/input/by-id/usb-IC_Reader_*-event-kbd` (any
+USB HID-keyboard RFID reader). It calls `EVIOCGRAB` so the digits the
+reader types don't leak through to Chromium, accumulates digit
+keystrokes until `KEY_ENTER`, and yields the UID string.
+
+For each tap:
+
+1. `bindings.get_binding(uid)` checks the `rfid_bindings` table in
+   `library.db`.
+2. **Unbound** → set `last_unbound_uid`; the kiosk + PWA poll
+   `/api/rfid/recent` and surface a "New card detected — bind it"
+   overlay. Tapping an album/artist/playlist in Home Library completes
+   the bind via `POST /api/rfid/bind`.
+3. **Bound** → `expand_to_track_ids(kind, target_id)` resolves the
+   binding to an ordered track list, then
+   `boombox_library.resolver.resolve_playback` decides each track's
+   playable form: `file://<cache-path>` when cached, a direct
+   `/rest/stream.view?…` URL with token+salt auth when online,
+   `offline_miss` otherwise. The URI list goes to Mopidy via
+   `core.tracklist.clear`/`add` + `core.playback.play({tlid})` plus a
+   `resume` belt-and-suspenders.
+
+Binding a card also writes a Phase 1 pin row with `source='rfid'`, so
+the bound content is queued for offline download by
+`boombox-library`'s downloader. Unbinding source-filters the matching
+rfid pin only, leaving any parallel user/favorite pin in place.
+
+---
+
+## Data flow: Navidrome sync + offline cache
+
+`boombox-library` runs an hourly (default) Subsonic sync against the
+configured Navidrome URL:
+
+1. Pulls `getArtists` / `getAlbumList` / `getAlbum` / `getPlaylists` /
+   `getPlaylist` into a local SQLite catalog (`artists`, `albums`,
+   `tracks`, `playlists`, `playlist_tracks`, `cache_state`, `pins`,
+   `rfid_bindings`, FTS5 `search_index`). Every section is a short
+   BEGIN/COMMIT — the writer lock is never held across a Subsonic HTTP
+   await, so other writers (RFID bind, pin toggle) aren't starved.
+2. Reconciles Navidrome's "starred" set with `pins` rows of
+   `source='starred'`. User/favorite/RFID pins are untouched.
+3. The downloader streams pinned tracks to the USB cache drive at
+   `/opt/boombox/cache-mount/audio/<track-id>.<suffix>` (an atomic
+   `.part` → rename) and updates `cache_state.status`. Streamed (i.e.
+   non-pinned) tracks can also be cached opportunistically via
+   `POST /api/library/cache/streamed?id=…`; FIFO eviction frees the
+   oldest streamed entries when the drive nears full, never touching
+   pinned content.
+4. The kiosk and the PWA hit `/api/library/browse?type=…` for the
+   parallel Home Library browse tree. Responses are pre-rendered as
+   ETag-tagged JSON snapshots after every sync so navigation never
+   blocks on a SQLite scan; nginx gzip cuts the wire size by ~10×.
+
+The cache drive is identified by a `.boombox-cache` marker file at its
+root. The service polls `/media` for marker presence; a fresh USB drive
+with no marker is offered to the user via the `CacheAdoptOverlay`
+("New drive detected — use as cache?"). The overlay only surfaces
+writable mounts (read-only auto-mounts are filtered out). A small
+symlink at `/opt/boombox/cache-mount` always points at the active
+drive so playback URLs and album-art lookups stay stable as drives
+come and go.
+
+---
+
 ## Data flow: visualizer
 
 `boombox-audio` runs `parec` against the default PipeWire sink's `.monitor`
@@ -172,6 +250,12 @@ default sink and a fresh `parec` invocation.
 /etc/asound.conf
 /etc/boombox/buttons.json
 /etc/boombox/updater.json      ← update channel / window / auto toggle
+/etc/boombox/library.yml       ← Navidrome URL + encrypted password
+/etc/boombox/rfid.yml          ← RFID device path + debounce + recent TTL
+/opt/boombox/state/library.db  ← SQLite catalog + rfid_bindings + cache_state
+/opt/boombox/state/art-cache/  ← cover-art on-disk proxy cache
+/opt/boombox/state/snapshots/  ← precomputed browse JSON (ETag-served)
+/opt/boombox/cache-mount       ← symlink → adopted USB cache drive root
 /boot/firmware/usercfg.txt     ← DAC overlay
 
 ~/.config/systemd/user/boombox-*.service

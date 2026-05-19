@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Boombox is an open-source Raspberry Pi touchscreen stereo appliance with local music, streaming sources, remote control, SMB sharing, and video support."
+      content="Boombox is an open-source Raspberry Pi touchscreen stereo appliance: local + streaming music, Navidrome home library with USB offline cache, RFID tap-to-play, phone PWA remote, 17 GPIO buttons + encoder, SMB sharing, and Jellyfin video."
     >
     <meta property="og:title" content="Boombox">
     <meta
       property="og:description"
-      content="An open-source touchscreen stereo appliance for Raspberry Pi."
+      content="An open-source touchscreen stereo appliance for Raspberry Pi — with offline-cached home library, RFID tap-to-play, and a phone PWA remote."
     >
     <meta property="og:type" content="website">
     <meta property="og:image" content="assets/tapeshift.png">
@@ -57,7 +57,8 @@
             a HiFiBerry-class I2S DAC, and a 5-inch display into a complete
             local music, streaming, remote-control, and video machine — with
             a full panel of physical buttons and a rotary encoder for the
-            hardware-feel things a touchscreen cannot do.
+            hardware-feel things a touchscreen cannot do, an offline-cached
+            Navidrome home library, and RFID tap-to-play for the kids.
           </p>
           <div class="hero-actions" aria-label="Project actions">
             <a class="button button-primary" href="https://github.com/IntergalacticTech/Boombox">
@@ -71,8 +72,8 @@
               <dd>buttons &amp; encoder</dd>
             </div>
             <div>
-              <dt>8090</dt>
-              <dd>auth LAN UI</dd>
+              <dt>1 tap</dt>
+              <dd>RFID to play</dd>
             </div>
             <div>
               <dt>5&quot;</dt>
@@ -88,9 +89,11 @@
           <h2>A real appliance, not a browser demo.</h2>
           <p>
             Boombox boots into a Chromium kiosk UI, routes audio through PipeWire,
-            exposes Mopidy and system state through small Python services, and keeps
-            the physical screen focused on playback while the web UI handles richer
-            tasks like playlist management and file transfer.
+            and exposes Mopidy plus a handful of small Python services — a home-library
+            catalog sync, a USB cache drive, an RFID reader, a state aggregator, a
+            visualizer, a phone remote backend — through nginx. The physical screen
+            stays focused on playback while a paired phone PWA handles richer tasks
+            like playlist editing, library search, and file transfer.
           </p>
         </div>
       </section>
@@ -114,18 +117,28 @@
             </article>
             <article class="feature-card reveal">
               <span class="feature-mark feature-mark-magenta" aria-hidden="true"></span>
-              <h3>Skinnable touchscreen</h3>
-              <p>The 5-inch interface ships with retro-inspired skins and a documented path for designing new ones.</p>
-            </article>
-            <article class="feature-card reveal">
-              <span class="feature-mark feature-mark-green" aria-hidden="true"></span>
-              <h3>Remote-friendly workflows</h3>
-              <p>Playlist editing, uploads, deletes, SMB access, and machine controls live on the browser UI where a keyboard helps.</p>
+              <h3>Home library + offline cache</h3>
+              <p>Sync your Navidrome (Subsonic) catalog to a USB stick. Pin an album and it downloads for offline play; the rest streams on demand. A sync chip in the chrome and a source badge on the now-playing bar always say what's live.</p>
             </article>
             <article class="feature-card reveal">
               <span class="feature-mark feature-mark-yellow" aria-hidden="true"></span>
+              <h3>RFID tap-to-play</h3>
+              <p>Bind a card to an album, artist, or playlist. Tap the card on a USB RFID reader and the boombox starts playing — bound content auto-pins for offline-first, kid-safe operation.</p>
+            </article>
+            <article class="feature-card reveal">
+              <span class="feature-mark feature-mark-green" aria-hidden="true"></span>
+              <h3>Phone remote + skinnable touchscreen</h3>
+              <p>A PWA at <code>/remote/</code> for playlist editing, uploads, library search, video transport, and album-art browsing — paired to the boombox with a 6-digit PIN. The 5-inch kiosk ships with retro-inspired skins.</p>
+            </article>
+            <article class="feature-card reveal">
+              <span class="feature-mark feature-mark-cyan" aria-hidden="true"></span>
               <h3>Physical control surface</h3>
               <p>17 GPIO buttons and a rotary encoder cover transport, source switching, sleep timer, recording, and a soft-power shutdown. Pins are hot-reloadable and editable from the touchscreen Settings panel.</p>
+            </article>
+            <article class="feature-card reveal">
+              <span class="feature-mark feature-mark-magenta" aria-hidden="true"></span>
+              <h3>Auto-updating appliance</h3>
+              <p>Devices poll GitHub hourly and install new releases overnight with smoke-test + automatic rollback. The boombox stays current without anyone SSH'ing in.</p>
             </article>
           </div>
         </div>
@@ -171,15 +184,19 @@
           <div class="architecture-grid">
             <article class="architecture-panel reveal">
               <h3>Audio path</h3>
-              <p>HiFiBerry-class I2S DAC, PipeWire mixer, Mopidy, shairport-sync, raspotify, and BlueZ A2DP sink.</p>
+              <p>HiFiBerry-class I2S DAC, PipeWire mixer, Mopidy, shairport-sync, raspotify, and BlueZ A2DP sink. Stream URLs flow through Mopidy's built-in stream backend straight from Navidrome.</p>
             </article>
             <article class="architecture-panel reveal">
               <h3>Control path</h3>
-              <p>Touchscreen, 17 GPIO buttons with a rotary encoder, MPRIS, playerctl, AVRCP volume, and the boombox source orchestrator. The button pin map is hot-reloadable JSON.</p>
+              <p>Touchscreen, 17 GPIO buttons with a rotary encoder, USB HID RFID reader, MPRIS, playerctl, AVRCP volume, and the boombox source orchestrator. The button pin map is hot-reloadable JSON.</p>
+            </article>
+            <article class="architecture-panel reveal">
+              <h3>Home library + cache</h3>
+              <p>A small Python service syncs your Navidrome catalog to local SQLite (FTS5 search, ETag-tagged JSON snapshots) and manages a USB cache drive with pin-aware FIFO eviction.</p>
             </article>
             <article class="architecture-panel reveal">
               <h3>UI and web</h3>
-              <p>Chromium kiosk on localhost, authenticated LAN web access, remote API, audio WebSocket, SMB, and Jellyfin video mode.</p>
+              <p>Chromium kiosk on localhost, authenticated LAN web access, phone PWA at <code>/remote/</code> with PIN pairing, audio WebSocket, SMB, and Jellyfin video mode.</p>
             </article>
           </div>
         </div>
@@ -224,6 +241,14 @@ sudo reboot</code></pre>
             <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/SERVICES.md">
               <span>Services</span>
               <small>Per-daemon reference and debugging</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/HOME-LIBRARY.md">
+              <span>Home library</span>
+              <small>Navidrome sync, USB cache, pinning, offline play</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/RFID.md">
+              <span>RFID</span>
+              <small>Bind a card to an album, tap to play</small>
             </a>
             <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/ACCESS.md">
               <span>Access</span>

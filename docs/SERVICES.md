@@ -395,6 +395,118 @@ reference — see [ACCESS.md](./ACCESS.md).
   `BOOMBOX_REMOTE_PAIR_TTL_S` (default `120`),
   `BOOMBOX_REMOTE_BLE` (default `1`; set `0` to disable the BLE peripheral).
 
+### `boombox-library` — Navidrome catalog sync + USB offline cache
+
+**Listens on `127.0.0.1:6687`, proxied as `/api/library/` by nginx.**
+
+Pulls the user's Navidrome (Subsonic) catalog into a local SQLite cache
+(`/opt/boombox/state/library.db`), manages a USB-stick offline cache,
+and resolves playback URIs (`file://` when a track is on the cache
+drive, a direct Navidrome `/rest/stream.view?…` URL when only available
+online).
+
+The kiosk's **Settings → Home Library** + **Settings → Offline Cache**
+panels are the user surface; the touchscreen also gets a sync-status
+chip in the chrome, a per-track "source badge" on the NowPlayingBar,
+and a Home Library root inside the LibraryDrawer with pin/favorite
+buttons and offline-miss CTAs.
+
+| Endpoint | Used by |
+|----------|---------|
+| `GET  /api/library/health` | UI: sync indicator (`navidrome_reachable`, `cache_present`, `last_sync_ts`, `syncing`) |
+| `GET  /api/library/source` / `PUT` / `POST /source/test` | Settings → Home Library: source config + Test/Save |
+| `GET  /api/library/browse?type=artists\|albums\|playlists` | LibraryDrawer Home Library root; served from precomputed ETag-tagged JSON snapshots when present, falls back to SQLite |
+| `GET  /api/library/search?q=` | Search bar; FTS5-backed |
+| `POST /api/library/pin` | `{kind, id, mode: pin\|unpin, source?: user\|favorite}` — schedules downloads and is the auto-coupling target for the favorite heart |
+| `POST /api/library/sync/run` | Settings → "Sync now" |
+| `GET  /api/library/track/{id}/playback` | Resolver: decide cache vs stream vs offline-miss for a given Subsonic track id |
+| `GET  /api/library/cache/stats` | CachePanel: stacked-bar of reserved / pinned / streamed / free |
+| `GET  /api/library/cache/candidates` | App polling: surfaces newly-plugged USB drives (writable only) for the adopt overlay |
+| `POST /api/library/cache/adopt` | CacheAdoptOverlay: bless a mount as the cache drive (writes the `.boombox-cache` marker + creates audio/meta/tmp subdirs) |
+| `POST /api/library/cache/streamed?id=` | UI: enqueue an opportunistic streamed-cache download |
+| `POST /api/library/cache/clear` | CachePanel: delete every cache_state row whose track is NOT pin-protected, plus the matching files |
+| `GET  /api/library/art/{art_id}` | Album-art proxy with on-disk cache at `/opt/boombox/state/art-cache/` |
+
+**Sync semantics.** `sync_full` is the cold-boot path: full catalog
+upsert + FTS5 index rebuild. Hourly resyncs use the same path but skip
+the per-album `getAlbum` HTTP fan-out when the local song count already
+matches Navidrome's. Cross-section consistency is intentionally NOT
+guaranteed (the upstream catalog can change mid-sync); each
+BEGIN/COMMIT brackets one section's local SQLite work only and never
+spans an HTTP await, so concurrent writers (rfid bind, pin toggle) get
+the lock in well under a second.
+
+**Pin sources** rank USER > FAVORITE > RFID > STARRED; pinning over an
+existing weaker source upgrades it. Unpin with a source filter only
+removes rows of that source — so unfavoriting a track that's also
+explicitly pinned does NOT wipe the user pin. The Navidrome "starred"
+state is reconciled on every sync (added pins for newly-starred items,
+removed pins for unstarred ones, source-filtered to `starred`).
+
+**Offline cache.** A drive is the cache iff it carries a
+`.boombox-cache` marker file at its root. `cache_drive.detect_cache_drive`
+polls `/media/*` every 5 s; the first match wins. `adopt_drive` writes
+the marker and creates `audio/`, `meta/`, `tmp/` subdirs.
+`/opt/boombox/cache-mount` is a stable symlink Mopidy and the resolver
+can rely on. FIFO eviction over `cache_state` rows where
+`status='present'` AND the track isn't pin-protected.
+
+- **Code:** [`services/boombox-library.py`](../services/boombox-library.py) (entry point); package at [`services/boombox_library/`](../services/boombox_library/)
+- **Config:** `/etc/boombox/library.yml` (URL + username + encrypted password, sync interval, cache reserve bytes). Password is Fernet-encrypted with a key derived from `/etc/machine-id`, so a disk image copied to a different Pi won't decrypt it.
+- **Logs:** `journalctl --user -u boombox-library -f`
+- **Pin sidecar:** `<cache-mount>/meta/pins.json` is written after every sync as a write-ahead JSON backup; on startup, if the SQLite `pins` table is empty but the sidecar exists, it's reloaded.
+- **User guide:** see [HOME-LIBRARY.md](./HOME-LIBRARY.md).
+
+### `boombox-rfid` — RFID tap → bound playback
+
+**Listens on `127.0.0.1:6688`, proxied as `/api/rfid/` by nginx.**
+
+Reads a USB HID-keyboard RFID reader (vendor 'IC Reader IC Reader' and
+similar; auto-detected from `/dev/input/by-id/*-event-kbd` whose alias
+contains `IC_Reader` or `RFID`), looks up the UID in the
+`rfid_bindings` table, and plays the bound target through Mopidy.
+Unbound taps surface via `/api/rfid/recent` so the kiosk + PWA can
+prompt the user to bind the card.
+
+The reader is grabbed exclusively with `EVIOCGRAB` so the UID digits
+the reader types don't leak through to Chromium's focused element.
+Digits are accumulated until KEY_ENTER, then yielded as a UID string.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET  /api/rfid/status` | Service version + device path + last-tap state |
+| `GET  /api/rfid/recent` | Last unbound UID + timestamp (TTL ~30 s) — polled by the bind overlay |
+| `GET  /api/rfid/bindings` | All bindings (UID, kind, target_id, label, added_at, last_tap_ts, tap_count) |
+| `POST /api/rfid/bind` | `{uid, kind: album\|artist\|playlist\|track, target_id, label?}` — idempotent; also writes a Phase 1 pin with `source='rfid'` |
+| `DELETE /api/rfid/bind/{uid}` | Removes the binding (and only the rfid-source pin, source-filtered) |
+
+**Tap-to-play.** `expand_to_track_ids(kind, target_id)` resolves the
+binding to an ordered list of track IDs (album: by disc/track number;
+artist: across all albums by year/sort/disc/track; playlist: by
+position). `resolve_uris` then asks `boombox_library.resolver` for the
+playable URI per track — file:// when cached, direct stream URL when
+online with credentials, skipped when offline-miss. MopidyClient
+issues `core.tracklist.clear`/`add` then `core.playback.play(tlid=…)`
++ a `resume` belt-and-suspenders because Mopidy 3.4.2 occasionally
+lands in `paused` after a fresh add.
+
+**Mopidy compatibility patch.** Mopidy 3.4.2 + Debian Trixie
+`python3-gi` return a `StructureWrapper` from
+`Gst.Structure.get_value("caps")` instead of a Gst.Caps, so the audio
+scanner crashes on every http:// stream URL. `install.sh` patches
+`mopidy/audio/scan.py` at install time (idempotent, guarded by a
+sentinel string) so the scanner falls through to `caps.to_string()`
+when the original `get_name` path fails. Symptom without the patch:
+file:// (cached) tracks play but stream URLs silently drop from the
+tracklist.
+
+- **Code:** [`services/boombox-rfid.py`](../services/boombox-rfid.py) (entry point); package at [`services/boombox_rfid/`](../services/boombox_rfid/)
+- **Config:** `/etc/boombox/rfid.yml` (device path override or auto-detect, debounce ms, recent-tap TTL, Mopidy RPC URL).
+- **Hardware:** any USB HID-keyboard RFID reader that types the UID + Enter when a card is presented. Tested with generic ID-by `ffff:0035 IC Reader IC Reader` units (cheap on Amazon for $10–20).
+- **Permissions:** the desktop user must be in the `input` group to open `/dev/input/*` — `install.sh` `usermod -aG input "$BOOMBOX_USER"`.
+- **Logs:** `journalctl --user -u boombox-rfid -f`
+- **User guide:** see [RFID.md](./RFID.md).
+
 ### `boombox-usb-mount@.service` — USB auto-mount (system template)
 
 Instantiated by udev when a removable filesystem appears. Mounts under
@@ -434,7 +546,8 @@ journalctl --user -f -u 'boombox-*'
 # Restart the whole user-side stack
 systemctl --user restart boombox-state boombox-audio \
     boombox-orchestrator boombox-buttons boombox-resume \
-    boombox-bt-volume boombox-kiosk-guard boombox-updater
+    boombox-bt-volume boombox-kiosk-guard boombox-updater \
+    boombox-remote boombox-library boombox-rfid
 
 # From your laptop
 ./pi status            # one-screen summary
