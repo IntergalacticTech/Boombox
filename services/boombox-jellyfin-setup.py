@@ -55,7 +55,7 @@ def auth_header(token: str | None = None) -> str:
     """The X-Emby-Authorization header Jellyfin expects on every call."""
     parts = [
         f'Client="{CLIENT}"',
-        f'Device="installer"',
+        'Device="installer"',
         f'DeviceId="{DEVICE_ID}"',
         'Version="0.1"',
     ]

@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Optional
 
 from aiohttp import ClientSession, web
-
 from boombox_updater import __version__
 from boombox_updater.api import build_app
 from boombox_updater.config import CONFIG_PATH, load_config

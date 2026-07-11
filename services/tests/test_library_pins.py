@@ -1,20 +1,17 @@
 """Tests for boombox_library.pins — pin/unpin, cascade, reconciliation, sidecar."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
-
-import pytest
 
 from boombox_library.db import connect, migrate
 from boombox_library.models import PinKind, PinSource
 from boombox_library.pins import (
     expand_pin_to_tracks,
-    pin,
-    unpin,
-    reconcile_starred,
-    write_sidecar,
     load_sidecar,
+    pin,
+    reconcile_starred,
+    unpin,
+    write_sidecar,
 )
 
 

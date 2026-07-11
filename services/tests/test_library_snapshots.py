@@ -6,7 +6,9 @@ from pathlib import Path
 
 from boombox_library.db import connect, migrate
 from boombox_library.snapshots import (
-    compute_etag, snapshot_path, write_snapshots,
+    compute_etag,
+    snapshot_path,
+    write_snapshots,
 )
 
 
@@ -58,7 +60,7 @@ def test_compute_etag_changes_when_snapshot_changes(tmp_path: Path):
     # Bump mtime explicitly in case the test runs on a filesystem with
     # coarse 1 s mtime granularity (HFS+, some NFS) — content alone
     # would otherwise give the same etag.
-    import os, time
+    import os
     new_mtime = p.stat().st_mtime + 5
     os.utime(p, (new_mtime, new_mtime))
     write_snapshots(conn, tmp_path / "snap")

@@ -16,6 +16,7 @@ from .config import (
     validate,
 )
 from .state import AttemptResult, State, StateStore
+from .version import valid_ref
 
 
 class Runner(Protocol):
@@ -80,8 +81,13 @@ def build_app(*, config_path: Path, state_store: StateStore,
 
     async def post_install(request: web.Request) -> web.Response:
         body = await request.json() if request.can_read_body else {}
+        ref = body.get("ref")
+        # A caller-supplied ref reaches `rm -rf`/`git clone` in the shell —
+        # reject anything that isn't a version tag or SHA before it gets there.
+        if ref is not None and not valid_ref(str(ref)):
+            return web.json_response({"error": "invalid ref"}, status=400)
         result = await runner.install_now(
-            ref=body.get("ref"), force=bool(body.get("force", False)),
+            ref=ref, force=bool(body.get("force", False)),
         )
         return web.json_response({"result": result.value})
 

@@ -7,19 +7,22 @@ small surface for recording taps and querying the last unbound UID.
 from __future__ import annotations
 
 import logging
+import sqlite3
 from typing import Protocol
 
 from aiohttp import web
 
 from . import __version__
-from .bindings import bind as _bind_fn, get_binding, list_bindings, unbind as _unbind_fn
+from .bindings import bind as _bind_fn
+from .bindings import list_bindings
+from .bindings import unbind as _unbind_fn
 from .models import BindingKind
 
 log = logging.getLogger("boombox-rfid.api")
 
 
 class Context(Protocol):
-    conn: object  # sqlite3.Connection
+    conn: sqlite3.Connection
     last_unbound_uid: str
     last_unbound_ts: float
     last_tap_uid: str

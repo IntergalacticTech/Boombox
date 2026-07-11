@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import hashlib
-import json as _json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from boombox_library.subsonic import (
     SubsonicAuthError,
     SubsonicClient,

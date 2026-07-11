@@ -1,0 +1,116 @@
+name: CI
+
+# Gate every push and PR on the checks that already pass locally: Python
+# lint (ruff) + types (mypy) + the 300+ test suite, and both React apps'
+# typecheck + tests + production build. The Pi pulls releases via the
+# on-device updater, so this is the only pre-merge gate in front of a device.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python (ruff · mypy · pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        # Explicit test subset of install/config/requirements.txt. We omit the
+        # Pi-only hardware deps that won't build on a CI runner: gpiod (needs
+        # libgpiod, imported lazily and untested) and dbus-python/PyGObject
+        # (apt-provided via --system-site-packages on the Pi, no tests import
+        # them). Keep this in sync with requirements.txt when a *tested*
+        # dependency is added.
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            "aiohttp>=3.9" "websockets>=12.0" "numpy>=1.26" "packaging>=24.0" \
+            "PyYAML>=6.0" "cryptography>=42" "zeroconf>=0.130" "Pillow>=10.0" \
+            "pytest>=8.0" "pytest-asyncio>=0.23" "pytest-aiohttp>=1.0" \
+            "watchdog>=4.0" ruff mypy
+      - name: Ruff (lint)
+        run: ruff check .
+      - name: Mypy (types)
+        run: mypy
+        env:
+          MYPYPATH: services
+      - name: Pytest
+        run: pytest
+        env:
+          PYTHONPATH: services
+
+  shellcheck:
+    name: Shell (shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Shellcheck installer + release scripts
+        # Advisory for now: the shell drives the destructive install/update ops
+        # and isn't yet clean. Surface issues without blocking the merge; drop
+        # continue-on-error once the scripts are lint-clean.
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          find install bin -name '*.sh' -not -path '*/legacy/*' -print0 \
+            | xargs -0 shellcheck --severity=warning
+
+  ui:
+    name: Kiosk UI (tsc · vitest · build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc -b
+      - name: Test
+        run: npx vitest run
+      - name: Build
+        run: npx vite build
+      - name: Lint (advisory)
+        # ESLint's react-hooks compiler rules currently flag a handful of items
+        # in working, tested components. Surface them without blocking; remove
+        # continue-on-error once they're resolved.
+        continue-on-error: true
+        run: npx eslint .
+
+  remote-ui:
+    name: Remote UI (tsc · vitest · build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: remote-ui
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: remote-ui/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc -b
+      - name: Test
+        run: npx vitest run
+      - name: Build
+        run: npx vite build

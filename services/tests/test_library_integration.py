@@ -13,7 +13,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from boombox_library.catalog import sync_full
 from boombox_library.db import connect, migrate
 from boombox_library.subsonic import SubsonicClient

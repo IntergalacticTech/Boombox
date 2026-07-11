@@ -192,7 +192,7 @@
             </article>
             <article class="architecture-panel reveal">
               <h3>Home library + cache</h3>
-              <p>A small Python service syncs your Navidrome catalog to local SQLite (FTS5 search, ETag-tagged JSON snapshots) and manages a USB cache drive with pin-aware FIFO eviction.</p>
+              <p>A small Python service syncs your Navidrome catalog to local SQLite (FTS5 search, ETag-tagged JSON snapshots) and manages a USB cache drive with pin-aware FIFO eviction. Navidrome and Jellyfin can run on the device, a home server, or a cloud VPS reached over a Cloudflare Tunnel or TLS — so the boombox plays away from home, while pinned albums still play with no server at all.</p>
             </article>
             <article class="architecture-panel reveal">
               <h3>UI and web</h3>
@@ -206,11 +206,14 @@
         <div class="container install-layout">
           <div class="install-copy reveal">
             <p class="section-kicker">Run it from GitHub</p>
-            <h2>Install on Raspberry Pi OS, then update from main.</h2>
+            <h2>Install on Raspberry Pi OS or DietPi, then update from main.</h2>
             <p>
-              The installer is idempotent. It configures packages, systemd units,
-              nginx, the UI build, and service wiring so a Pi can stay current with
-              the public repository.
+              The installer is idempotent and auto-detects its base OS — Raspberry
+              Pi OS or DietPi, with a <code>BOOMBOX_OS</code> override. It configures
+              packages, systemd units, nginx, the UI build, and service wiring so a
+              Pi can stay current with the public repository. The
+              <a href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/FRESH-PI-INSTALL.md">fresh-install
+              guide</a> walks a blank SD card all the way to a running kiosk.
             </p>
           </div>
           <div class="terminal reveal" aria-label="Installation commands">
@@ -238,6 +241,10 @@ sudo reboot</code></pre>
               <span>Architecture</span>
               <small>Processes, ports, and data flow</small>
             </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/FRESH-PI-INSTALL.md">
+              <span>Fresh Pi install</span>
+              <small>Blank SD card to running kiosk, RPi OS or DietPi</small>
+            </a>
             <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/SERVICES.md">
               <span>Services</span>
               <small>Per-daemon reference and debugging</small>
@@ -245,6 +252,10 @@ sudo reboot</code></pre>
             <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/HOME-LIBRARY.md">
               <span>Home library</span>
               <small>Navidrome sync, USB cache, pinning, offline play</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/HOME-SERVERS.md">
+              <span>Home servers</span>
+              <small>Run Navidrome + Jellyfin off-device, reachable away from home</small>
             </a>
             <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/RFID.md">
               <span>RFID</span>

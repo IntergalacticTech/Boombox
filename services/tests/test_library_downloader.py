@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from boombox_library.db import connect, migrate
-from boombox_library.downloader import download_track, DownloadResult
+from boombox_library.downloader import DownloadResult, download_track
 
 
 class FakeStreamingClient:
@@ -243,14 +241,14 @@ async def test_download_triggers_eviction_when_low_on_space(tmp_path: Path, monk
     # Old streamed track in cache
     conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,"
                  "size_bytes,content_type,navidrome_starred,updated_at) "
-                 "VALUES('old','al','OLD',30,'mp3',5_000_000,'audio/mpeg',0,0)")
+                 "VALUES('old','al','OLD',30,'mp3',5000000,'audio/mpeg',0,0)")
     conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,"
                  "downloaded_at) VALUES('old','present','/cache/audio/old.mp3',"
-                 "5_000_000, 1.0)")
+                 "5000000, 1.0)")
     # New track to download
     conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,"
                  "size_bytes,content_type,navidrome_starred,updated_at) "
-                 "VALUES('new','al','NEW',30,'mp3',1_000_000,'audio/mpeg',0,0)")
+                 "VALUES('new','al','NEW',30,'mp3',1000000,'audio/mpeg',0,0)")
 
     cache_root = tmp_path / "cache"
     (cache_root / "audio").mkdir(parents=True)

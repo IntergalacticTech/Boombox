@@ -23,7 +23,7 @@ const ALBUMS = {
 
 function mockApi(): RemoteApi {
   return {
-    base: "http://test/",
+    base: "http://localhost/",
     get: vi.fn().mockImplementation(async (path: string) => {
       if (path === "api/remote/library/browse") return ROOT;
       if (path.startsWith("api/remote/library/browse?uri=local%3Adirectory%3Ftype%3Dalbum")) return ALBUMS;

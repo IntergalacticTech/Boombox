@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from boombox_library.db import connect, migrate
 from boombox_library.eviction import compute_eviction_candidates, evict_until_fits
 from boombox_library.models import PinKind, PinSource

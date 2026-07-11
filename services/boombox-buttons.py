@@ -20,11 +20,15 @@ from copy import deepcopy
 from pathlib import Path
 
 import aiohttp
-
+from actions import _HANDLERS, Dispatcher, fire, shutdown_sequence  # noqa: F401
 from clients import (
-    MopidyRpc, StateApi, KioskClient, Display, SleepTimer, Recorder,
+    Display,
+    KioskClient,
+    MopidyRpc,
+    Recorder,
+    SleepTimer,
+    StateApi,
 )
-from actions import Dispatcher, _HANDLERS, fire, shutdown_sequence  # noqa: F401
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("boombox-buttons")
@@ -237,9 +241,10 @@ async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event,
     "result": None|<pin>}. While `t_ms < until` and `action` is set, the next
     falling-edge button press is captured into `result` instead of dispatched.
     """
-    import gpiod
     from datetime import timedelta
-    from gpiod.line import Direction, Bias, Edge
+
+    import gpiod
+    from gpiod.line import Bias, Direction, Edge
 
     if learn_state is None:
         learn_state = {"action": None, "until": 0, "result": None}
@@ -300,7 +305,10 @@ async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event,
                 log.exception("gpiod reader thread crashed; signalling stop")
                 loop.call_soon_threadsafe(stop.set)
 
-        reader_fut = loop.run_in_executor(None, reader)
+        # Fire-and-forget: the blocking gpiod reader runs in the default
+        # executor for the life of the service; on a crash it sets `stop` so
+        # systemd restarts us. We deliberately don't hold the future.
+        loop.run_in_executor(None, reader)
 
         async def tick():
             while not stop.is_set():
@@ -404,8 +412,8 @@ async def main() -> None:
                                       sleep_t)
 
         # Wrap the loop so we can rebuild it on config change.
-        from watchdog.observers import Observer
         from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
 
         reload_event = asyncio.Event()
         loop_ref = asyncio.get_running_loop()

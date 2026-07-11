@@ -5,6 +5,9 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
+# Optional: supplies JELLYFIN_API_KEY and (for an off-device Jellyfin)
+# BOOMBOX_JELLYFIN_BASE. The leading '-' makes it a no-op when absent.
+EnvironmentFile=-/etc/boombox/jellyfin.env
 ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-remote.py
 Restart=on-failure
 RestartSec=3

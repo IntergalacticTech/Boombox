@@ -28,15 +28,16 @@ import asyncio
 import hmac
 import json
 import logging
-import os
 import secrets
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from bless import (
-    BlessServer, BlessGATTCharacteristic,
-    GATTCharacteristicProperties, GATTAttributePermissions,
+    BlessGATTCharacteristic,
+    BlessServer,
+    GATTAttributePermissions,
+    GATTCharacteristicProperties,
 )
 
 log = logging.getLogger("boombox-remote-ble")

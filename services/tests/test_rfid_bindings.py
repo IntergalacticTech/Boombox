@@ -1,10 +1,11 @@
 """CRUD over rfid_bindings."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
-from boombox_rfid.db import connect, migrate
 from boombox_rfid.bindings import bind, get_binding, list_bindings, record_tap, unbind
+from boombox_rfid.db import connect, migrate
 from boombox_rfid.models import BindingKind
 
 
@@ -63,7 +64,7 @@ def test_record_tap_bumps_counter(tmp_path: Path):
 def test_list_bindings_orders_by_added_desc(tmp_path: Path):
     conn = _setup(tmp_path)
     bind(conn, "0001", BindingKind.ALBUM, "al1")
-    import time; time.sleep(0.01)
+    time.sleep(0.01)
     bind(conn, "0002", BindingKind.ALBUM, "al2")
     rows = list_bindings(conn)
     assert [r.uid for r in rows] == ["0002", "0001"]

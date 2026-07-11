@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from clients import Display, KioskClient, MopidyRpc, StateApi
+from jellyfin_env import jellyfin_base
 
 log = logging.getLogger("boombox-buttons")
 
@@ -252,7 +253,9 @@ async def _h_movies(d: Dispatcher):
     if d.mopidy:
         await d.mopidy.call("core.playback.pause")
     if d.kiosk:
-        await d.kiosk.navigate("http://localhost:8096/web/index.html#/home")
+        # Navigate the kiosk to the configured Jellyfin — on-device by default,
+        # or a home-server / VPS when BOOMBOX_JELLYFIN_BASE is set.
+        await d.kiosk.navigate(f"{jellyfin_base()}/web/index.html#/home")
 
 
 @_handler("web", "short_press")

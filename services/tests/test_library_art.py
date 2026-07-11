@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from aiohttp import web
-
 from boombox_library.art import _safe_filename, fetch_art
 
 

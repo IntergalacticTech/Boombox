@@ -23,16 +23,15 @@ import sys
 import time
 from pathlib import Path
 
+import actions
 import aiohttp as aiohttp_client_lib
+import clients
+import remote_access
+import remote_files
 from aiohttp import web
 from PIL import Image
 from zeroconf import IPVersion, ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
-
-import actions
-import clients
-import remote_access
-import remote_files
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
