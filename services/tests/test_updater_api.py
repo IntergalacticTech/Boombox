@@ -6,9 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
-from aiohttp import web
-from aiohttp.test_utils import TestClient, TestServer
-
+from aiohttp.test_utils import TestClient
 from boombox_updater.api import build_app
 from boombox_updater.config import (
     DEFAULT_CONFIG,
@@ -120,6 +118,26 @@ async def test_post_install_with_force(setup, aiohttp_client) -> None:
     body = await r.json()
     assert body["result"] == "ok"
     assert runner.installed == ["latest"]
+
+
+async def test_post_install_rejects_bad_ref(setup, aiohttp_client) -> None:
+    # A path-traversal ref must be rejected before it reaches the shell, and
+    # the runner must never be invoked.
+    app, _, _, runner = setup
+    client: TestClient = await aiohttp_client(app)
+    r = await client.post(
+        "/api/update/install", json={"ref": "../../home/boombox/.config"}
+    )
+    assert r.status == 400
+    assert runner.installed == []
+
+
+async def test_post_install_accepts_valid_ref(setup, aiohttp_client) -> None:
+    app, _, _, runner = setup
+    client: TestClient = await aiohttp_client(app)
+    r = await client.post("/api/update/install", json={"ref": "v0.4.2"})
+    assert r.status == 200
+    assert runner.installed == ["v0.4.2"]
 
 
 async def test_post_rollback(setup, aiohttp_client) -> None:

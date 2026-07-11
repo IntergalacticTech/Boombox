@@ -9,10 +9,23 @@ that the locally-stored short sha can be compared to GitHub's long sha.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
 from packaging.version import InvalidVersion, Version
+
+# A ref is interpolated by apply-release.sh into `rm -rf "$RELEASES/$ref"` and
+# `git clone --branch "$ref"`. Constrain it to a version tag or a git SHA so it
+# can never contain a path separator, `..`, or a leading `-` that would escape
+# the releases tree or smuggle git-clone options. The shell re-checks this, but
+# rejecting here gives the API a clean 400 instead of a step failure.
+_VALID_REF_RE = re.compile(r"^(v[0-9A-Za-z][0-9A-Za-z._-]*|[0-9a-f]{7,40})$")
+
+
+def valid_ref(ref: str) -> bool:
+    """True if `ref` is a safe release identifier (version tag or commit SHA)."""
+    return bool(_VALID_REF_RE.match(ref))
 
 
 @dataclass(frozen=True)

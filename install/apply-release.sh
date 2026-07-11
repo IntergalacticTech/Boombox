@@ -33,6 +33,18 @@ log()  { printf '\033[1;36m[apply]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[apply]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[apply]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# A ref names a release directory under $RELEASES and is interpolated into
+# `rm -rf "$RELEASES/$ref"` and `git clone --branch "$ref"`. Restrict it to a
+# git tag / short-or-full SHA so it can never contain a path separator or `..`
+# that would escape the releases tree, and so it can't smuggle git-clone
+# options. The Python updater validates too; this is the last line of defence
+# for any caller (CLI, manual) that reaches the shell directly.
+require_valid_ref() {
+  local ref="$1"
+  [[ "$ref" =~ ^(v[0-9A-Za-z][0-9A-Za-z._-]*|[0-9a-f]{7,40})$ ]] \
+    || fail "invalid ref '$ref' (must be a version tag like v1.2.3 or a commit SHA)"
+}
+
 usage() {
   sed -n '2,/^$/p' "$0" >&2
   exit 64
@@ -45,6 +57,7 @@ shift || true
 case "$cmd" in
   fetch)
     ref="${1:?ref required}"
+    require_valid_ref "$ref"
     log "fetch $ref → $RELEASES/$ref"
     mkdir -p "$RELEASES"
     rm -rf "$RELEASES/$ref"
@@ -59,6 +72,7 @@ case "$cmd" in
 
   build)
     ref="${1:?ref required}"
+    require_valid_ref "$ref"
     log "build $ref"
     [[ -d "$RELEASES/$ref" ]] || fail "$RELEASES/$ref missing — run fetch first"
     "$VENV/bin/pip" install -r "$RELEASES/$ref/install/config/requirements.txt"
@@ -83,6 +97,7 @@ case "$cmd" in
 
   preflight)
     ref="${1:?ref required}"
+    require_valid_ref "$ref"
     log "preflight $ref"
     [[ -f "$RELEASES/$ref/ui/dist/index.html" ]] || fail "ui/dist/index.html missing"
     [[ -f "$RELEASES/$ref/remote-ui/dist/index.html" ]] || fail "remote-ui/dist/index.html missing"
@@ -100,6 +115,7 @@ for mod in ('boombox_updater', 'boombox_buttons'):
 
   swap)
     ref="${1:?ref required}"
+    require_valid_ref "$ref"
     log "swap → $ref"
     [[ -d "$RELEASES/$ref" ]] || fail "$RELEASES/$ref missing"
     # Capture current target as the new previous, atomically.
@@ -186,7 +202,7 @@ PYRELOAD
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
-      boombox-remote
+      boombox-remote boombox-library boombox-rfid
     )
     while (( $(date +%s) < deadline )); do
       ok=1
@@ -214,6 +230,12 @@ PYRELOAD
     probe http://localhost/api/state         "/api/state"
     # /api/buttons/ has no index handler — probe a real GET endpoint.
     probe http://localhost/api/buttons/config "/api/buttons/config"
+    # Data-plane services: the catalog/streaming resolver and the RFID reader.
+    # Both run their HTTP server regardless of whether a USB cache drive or a
+    # reader is attached, so these probes are safe on hardware-less devices and
+    # a release that breaks the core music path now fails verify → auto-rollback.
+    probe http://localhost/api/library/health "/api/library/health"
+    probe http://localhost/api/rfid/status    "/api/rfid/status"
     ;;
 
   revert)
@@ -232,7 +254,7 @@ PYRELOAD
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
-      boombox-remote
+      boombox-remote boombox-library boombox-rfid
     )
     for u in "${units[@]}"; do
       systemctl --user restart "$u.service" || true
@@ -242,6 +264,7 @@ PYRELOAD
 
   cleanup)
     ref="${1:?ref required}"
+    require_valid_ref "$ref"
     log "cleanup $RELEASES/$ref"
     rm -rf "$RELEASES/$ref"
     ;;
