@@ -4,12 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-import pytest
-
 from boombox_updater.installer import (
-    InstallOutcome,
-    InstallStep,
     Installer,
+    InstallStep,
     StepResult,
 )
 from boombox_updater.state import AttemptResult

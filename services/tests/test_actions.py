@@ -1,9 +1,8 @@
 """Tests for the action dispatcher's high-level fire() entry point."""
 from __future__ import annotations
 
-import pytest
-
 import actions
+import pytest
 
 
 def _make_dispatcher(mopidy=None, state=None, kiosk=None,

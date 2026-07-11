@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from boombox_library.db import connect, migrate
-from boombox_library.downloader import download_track, DownloadResult
+from boombox_library.downloader import DownloadResult, download_track
 
 
 class FakeStreamingClient:

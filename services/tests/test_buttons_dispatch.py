@@ -1,8 +1,8 @@
 """Action dispatcher: routes transport actions through Mopidy or state-API based on current source."""
 from __future__ import annotations
 
-import pytest
 import boombox_buttons as bb
+import pytest
 
 
 class FakeMopidy:

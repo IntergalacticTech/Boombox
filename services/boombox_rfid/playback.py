@@ -49,7 +49,7 @@ def resolve_uris(
 ) -> list[str]:
     """Map each track id to its playable URI using Phase 1's resolver."""
     # Lazy import — boombox_library lives in a sibling package on sys.path.
-    from boombox_library.resolver import resolve_playback, PlaybackSource
+    from boombox_library.resolver import PlaybackSource, resolve_playback
 
     out: list[str] = []
     for tid in track_ids:

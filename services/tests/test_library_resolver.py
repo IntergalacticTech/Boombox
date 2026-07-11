@@ -3,10 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from boombox_library.db import connect, migrate
-from boombox_library.resolver import resolve_playback, PlaybackSource
+from boombox_library.resolver import PlaybackSource, resolve_playback
 
 
 def _seed_track(conn, track_id="t1", cached_path=None):

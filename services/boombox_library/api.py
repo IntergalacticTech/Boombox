@@ -9,6 +9,7 @@ hard-depend on the runtime wiring (keeps tests fast).
 from __future__ import annotations
 
 import logging
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
@@ -19,7 +20,8 @@ from . import __version__
 from .art import fetch_art
 from .config import LibraryConfig, SourceConfig
 from .models import PinKind, PinSource
-from .pins import pin as _pin_fn, unpin as _unpin_fn
+from .pins import pin as _pin_fn
+from .pins import unpin as _unpin_fn
 from .resolver import resolve_playback
 from .snapshots import compute_etag, snapshot_path
 from .subsonic import make_auth_params
@@ -28,7 +30,7 @@ log = logging.getLogger("boombox-library.api")
 
 
 class Context(Protocol):
-    conn: object  # sqlite3.Connection
+    conn: sqlite3.Connection
     cfg: LibraryConfig
     # Phase 2 additions for /health, /cache/adopt, /cache/streamed, /cache/clear, /cache/candidates
     last_sync_ts: float

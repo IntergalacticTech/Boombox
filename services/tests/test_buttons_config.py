@@ -5,8 +5,6 @@ import importlib
 import json
 from pathlib import Path
 
-import pytest
-
 buttons = importlib.import_module("boombox-buttons".replace("-", "_"))
 # Service file is `boombox-buttons.py`; importlib can't import hyphenated
 # names directly. The service ships a symlink-friendly name via conftest's

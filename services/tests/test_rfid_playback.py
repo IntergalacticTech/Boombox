@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from boombox_library.db import connect as lib_connect, migrate as lib_migrate
+from boombox_library.db import connect as lib_connect
+from boombox_library.db import migrate as lib_migrate
 from boombox_rfid.db import migrate as rfid_migrate
 from boombox_rfid.models import BindingKind
 from boombox_rfid.playback import expand_to_track_ids, resolve_uris

@@ -15,32 +15,40 @@ import asyncio
 import logging
 import signal
 import time
-from dataclasses import replace
 from pathlib import Path
 
 from aiohttp import web
-
 from boombox_library import __version__
 from boombox_library.api import build_app
 from boombox_library.cache_drive import (
-    CacheDriveState, detect_cache_drive,
-    update_symlink, remove_symlink,
-    adopt_drive, list_candidate_drives,
     DEFAULT_SYMLINK,
+    CacheDriveState,
+    adopt_drive,
+    detect_cache_drive,
+    list_candidate_drives,
+    remove_symlink,
+    update_symlink,
 )
 from boombox_library.catalog import sync_full
 from boombox_library.config import (
-    CONFIG_PATH, LibraryConfig, load_config, save_config,
+    LibraryConfig,
+    load_config,
+    save_config,
 )
 from boombox_library.db import connect, migrate
 from boombox_library.downloader import DownloadQueue
-from boombox_library.mopidy_config import write_subsonic_block, reload_mopidy
+from boombox_library.mopidy_config import reload_mopidy, write_subsonic_block
 from boombox_library.pins import (
-    all_pinned_track_ids, load_sidecar, reconcile_starred, write_sidecar,
+    all_pinned_track_ids,
+    load_sidecar,
+    reconcile_starred,
+    write_sidecar,
 )
 from boombox_library.snapshots import write_snapshots
 from boombox_library.subsonic import (
-    SubsonicAuthError, SubsonicClient, SubsonicUnreachable,
+    SubsonicAuthError,
+    SubsonicClient,
+    SubsonicUnreachable,
 )
 
 logging.basicConfig(level=logging.INFO,

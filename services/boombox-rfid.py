@@ -15,10 +15,8 @@ import asyncio
 import logging
 import signal
 import time
-from pathlib import Path
 
 from aiohttp import web
-
 from boombox_library.config import load_config as load_library_config
 from boombox_rfid import __version__
 from boombox_rfid.api import build_app

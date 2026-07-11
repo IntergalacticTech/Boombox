@@ -4,17 +4,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import pytest
-
 from boombox_library.config import (
+    DEFAULT_CONFIG,
     LibraryConfig,
     SourceConfig,
-    SyncConfig,
-    CacheConfig,
-    DEFAULT_CONFIG,
+    _derive_key,
     load_config,
     save_config,
-    _derive_key,
 )
 
 
@@ -249,6 +245,7 @@ def test_write_mopidy_subsonic_block_sets_owner_only_perms_on_create(tmp_path: P
     create it with 0o600 perms — the file contains the plaintext
     Subsonic password and shouldn't be world-readable."""
     import stat as _stat
+
     from boombox_library.mopidy_config import write_subsonic_block
 
     mopidy_conf = tmp_path / "mopidy.conf"  # does not exist

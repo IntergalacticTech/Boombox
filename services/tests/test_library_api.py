@@ -1,19 +1,17 @@
 """Tests for boombox_library.api — HTTP routes."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-
 from boombox_library.api import build_app
 from boombox_library.config import (
-    LibraryConfig, SourceConfig, SyncConfig, CacheConfig, DEFAULT_CONFIG,
+    DEFAULT_CONFIG,
+    LibraryConfig,
+    SourceConfig,
 )
 from boombox_library.db import connect, migrate
-from boombox_library.models import PinKind, PinSource
 
 
 class FakeContext:

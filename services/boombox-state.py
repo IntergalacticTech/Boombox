@@ -535,8 +535,8 @@ async def lyrics(request: web.Request) -> web.Response:
     # with slashes (`AC/DC`) but accepts dashes (`AC-DC`); also strip
     # parenthetical "(feat. X)" / "(2003 Remaster)" from titles for better
     # match rates.
-    from urllib.parse import quote
     import re
+    from urllib.parse import quote
     artist_variants: list[str] = [artist]
     if "/" in artist:
         artist_variants.append(artist.replace("/", "-"))
@@ -611,7 +611,10 @@ async def mopidy_restart(_request: web.Request) -> web.Response:
         # Fallback: try systemctl --user (some setups host Mopidy as user unit)
         rc2, _ = await run("systemctl", "--user", "restart", "mopidy", timeout=10)
         if rc2 != 0:
-            return web.json_response({"ok": False, "error": "restart failed (sudo and --user both rejected)"}, status=502)
+            return web.json_response(
+                {"ok": False, "error": "restart failed (sudo and --user both rejected)"},
+                status=502,
+            )
     # Best-effort: bounce the resume service so its startup-restore logic runs
     # against the freshly-booted Mopidy. We don't fail the request if it isn't
     # installed.

@@ -1,12 +1,9 @@
 """Tests for boombox_library.db — schema, migrations, FTS5 setup."""
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
-import pytest
-
-from boombox_library.db import connect, migrate, SCHEMA_VERSION
+from boombox_library.db import SCHEMA_VERSION, connect, migrate
 
 
 def test_migrate_creates_all_tables(tmp_path: Path):

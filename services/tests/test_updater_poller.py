@@ -7,7 +7,6 @@ from typing import Awaitable, Callable, Union
 
 import pytest
 from aiohttp import web
-
 from boombox_updater.poller import GitHubPoller, PollResult
 
 Handler = Union[web.Response, Callable[[web.Request], Awaitable[web.Response]]]

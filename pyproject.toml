@@ -3,3 +3,42 @@ testpaths = ["services/tests"]
 python_files = ["test_*.py"]
 addopts = "-q"
 asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+# The service scripts live at services/*.py alongside packages; check both.
+extend-exclude = ["node_modules", "install/legacy"]
+
+[tool.ruff.lint]
+# Pyflakes (F) catches real bugs — unused imports/vars, undefined names.
+# pycodestyle errors (E/W) and isort (I) keep imports tidy. We deliberately
+# skip the multi-statement-per-line rules: several services use one-line
+# `def do_x(self): return self._run(...)` dispatch tables and lazy imports
+# on purpose, and reformatting them would hurt readability, not help it.
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E701",  # multiple statements on one line (colon) — dispatch one-liners
+    "E702",  # multiple statements on one line (semicolon)
+    "E401",  # multiple imports on one line
+    "E402",  # module import not at top — used for lazy hardware imports
+    "E741",  # ambiguous variable name
+]
+
+[tool.ruff.lint.per-file-ignores]
+"services/tests/*" = ["E501"]  # test data lines can run long
+
+[tool.mypy]
+python_version = "3.11"
+# The Pi imports apt-provided gpiod/dbus/gi that have no stubs, and aiohttp's
+# own typing is partial — don't fail on third-party import gaps.
+ignore_missing_imports = true
+# Scope strict-ish checking to the cleanly-typed newer packages; the older
+# single-file services predate the type discipline and are checked loosely.
+files = [
+    "services/boombox_updater",
+    "services/boombox_library",
+    "services/boombox_rfid",
+]
+check_untyped_defs = true
+warn_unused_ignores = true

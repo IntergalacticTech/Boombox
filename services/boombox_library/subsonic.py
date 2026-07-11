@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
-from typing import Any, Optional
+from typing import Optional
 
 import aiohttp
 
@@ -89,6 +89,9 @@ class SubsonicClient:
         if extra_params:
             params.update(extra_params)
         url = f"{self.base_url}/rest/{endpoint}.view"
+        # _call only runs inside `async with SubsonicClient(...)`, which creates
+        # the session in __aenter__; assert the invariant so the type narrows.
+        assert self._session is not None
         try:
             async with self._session.get(url, params=params) as resp:
                 if resp.status >= 500:

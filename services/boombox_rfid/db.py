@@ -10,7 +10,6 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-
 _DDL = """
 CREATE TABLE IF NOT EXISTS _schema_version_rfid (
     version INTEGER PRIMARY KEY

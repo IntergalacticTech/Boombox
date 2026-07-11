@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import pytest
-
 from boombox_updater.config import UpdaterConfig
 from boombox_updater.scheduler import (
     InstallDecision,

@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from boombox_updater.config import (
     DEFAULT_CONFIG,
     UpdaterConfig,

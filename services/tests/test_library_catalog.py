@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
-
 from boombox_library.catalog import sync_full
 from boombox_library.db import connect, migrate
 

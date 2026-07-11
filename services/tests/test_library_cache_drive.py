@@ -3,14 +3,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from boombox_library.cache_drive import (
-    CacheDriveState,
-    detect_cache_drive,
     adopt_drive,
-    update_symlink,
+    detect_cache_drive,
     remove_symlink,
+    update_symlink,
 )
 
 
@@ -43,7 +40,7 @@ def test_detect_picks_drive_with_marker(tmp_path: Path):
 
 def test_detect_first_wins_on_multiple_markers(tmp_path: Path):
     a = _make_drive(tmp_path, "a-cache", has_marker=True)
-    b = _make_drive(tmp_path, "b-cache", has_marker=True)
+    _make_drive(tmp_path, "b-cache", has_marker=True)  # second marked drive; "a" should still win
     state = detect_cache_drive(search_paths=[tmp_path], marker=".boombox-cache")
     # Sorted iteration → "a-cache" wins
     assert state.mount_path == a

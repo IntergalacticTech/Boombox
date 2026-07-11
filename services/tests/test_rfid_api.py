@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-
 from boombox_rfid.api import build_app
 from boombox_rfid.db import connect, migrate
 
