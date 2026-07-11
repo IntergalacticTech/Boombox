@@ -14,6 +14,7 @@ import urllib.parse
 from pathlib import Path
 
 from aiohttp import web
+from jellyfin_env import jellyfin_base, jellyfin_token
 
 log = logging.getLogger("boombox-remote")
 
@@ -42,8 +43,6 @@ MAX_FILE_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB cap per file (movies)
 # request.multipart() does NOT consult aiohttp's client_max_size, so the
 # size limit lives here, not on the web.Application.
 SCAN_TRIGGER_URL = "http://127.0.0.1:6681/library/scan"
-JELLYFIN_KEY_FILE = Path(os.environ.get(
-    "BOOMBOX_JELLYFIN_KEY", "/etc/boombox/jellyfin-api-key"))
 
 
 def safe_filename(name: str) -> str:
@@ -163,16 +162,17 @@ async def _trigger_scan() -> None:
 
 
 async def _trigger_jellyfin_scan() -> None:
-    try:
-        token = JELLYFIN_KEY_FILE.read_text().strip()
-    except (FileNotFoundError, OSError):
-        return
+    # Refreshes whichever Jellyfin BOOMBOX_JELLYFIN_BASE points at (local or
+    # remote). When Jellyfin is remote, this only surfaces the new file if the
+    # server can see it — i.e. the upload dir is a share/mount the server also
+    # reads. See docs/HOME-SERVERS.md for the video-storage models.
+    token = jellyfin_token()
     if not token:
         return
     try:
         import aiohttp
         async with aiohttp.ClientSession() as s:
-            await s.post("http://127.0.0.1:8096/Library/Refresh",
+            await s.post(f"{jellyfin_base()}/Library/Refresh",
                          headers={"X-MediaBrowser-Token": token},
                          timeout=aiohttp.ClientTimeout(total=3))
     except Exception as e:

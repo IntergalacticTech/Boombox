@@ -4,6 +4,9 @@ After=default.target
 
 [Service]
 Type=simple
+# Optional: BOOMBOX_JELLYFIN_BASE lets the WATCH button open an off-device
+# Jellyfin. The leading '-' makes it a no-op when the file is absent.
+EnvironmentFile=-/etc/boombox/jellyfin.env
 ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-buttons.py
 Restart=on-failure
 RestartSec=3

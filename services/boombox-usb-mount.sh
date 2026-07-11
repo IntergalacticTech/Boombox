@@ -76,12 +76,22 @@ trigger_scan() {
   # present; otherwise we skip. Jellyfin's "real-time monitoring" picks
   # up the new symlinks on its own within ~10s anyway.
   local key_file=/etc/boombox/jellyfin-api-key
+  # Point at the configured Jellyfin (local by default, or a home-server / VPS).
+  # This unit is udev-triggered as root and inherits no user env, so read the
+  # base from /etc/boombox/jellyfin.env if present.
+  local jellyfin_base="http://127.0.0.1:8096"
+  if [[ -r /etc/boombox/jellyfin.env ]]; then
+    # shellcheck disable=SC1091
+    local env_base
+    env_base=$(. /etc/boombox/jellyfin.env 2>/dev/null; printf '%s' "${BOOMBOX_JELLYFIN_BASE:-}")
+    [[ -n "$env_base" ]] && jellyfin_base="${env_base%/}"
+  fi
   if [[ -r "$key_file" ]]; then
     local key
     key=$(cat "$key_file")
     curl -fsS -m 3 -X POST \
       -H "X-MediaBrowser-Token: $key" \
-      "http://127.0.0.1:8096/Library/Refresh" >/dev/null 2>&1 || true
+      "$jellyfin_base/Library/Refresh" >/dev/null 2>&1 || true
   fi
 }
 

@@ -17,18 +17,13 @@ Jellyfin API reference used here:
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
 
 import aiohttp
 from aiohttp import web
+from jellyfin_env import jellyfin_base, jellyfin_token
 
 log = logging.getLogger("boombox-remote")
 
-JELLYFIN_BASE = os.environ.get("BOOMBOX_JELLYFIN_BASE",
-                               "http://127.0.0.1:8096")
-JELLYFIN_KEY_FILE = Path(os.environ.get(
-    "BOOMBOX_JELLYFIN_KEY", "/etc/boombox/jellyfin-api-key"))
 _TICKS_PER_SECOND = 10_000_000
 
 # action → (HTTP path suffix under /Sessions/{id}/Playing, or "Command")
@@ -48,10 +43,7 @@ class JellyfinClient:
         self._sess = session
 
     def _token(self) -> str | None:
-        try:
-            return JELLYFIN_KEY_FILE.read_text().strip() or None
-        except (FileNotFoundError, OSError):
-            return None
+        return jellyfin_token()
 
     def _headers(self) -> dict | None:
         tok = self._token()
@@ -68,7 +60,7 @@ class JellyfinClient:
             return None
         try:
             async with self._sess.get(
-                    f"{JELLYFIN_BASE}/Sessions", headers=headers,
+                    f"{jellyfin_base()}/Sessions", headers=headers,
                     timeout=aiohttp.ClientTimeout(total=2)) as r:
                 if r.status != 200:
                     return None
@@ -114,7 +106,7 @@ class JellyfinClient:
         if s is None:
             return {"ok": False, "error": "no_session"}
         sid = s.get("Id")
-        base = f"{JELLYFIN_BASE}/Sessions/{sid}"
+        base = f"{jellyfin_base()}/Sessions/{sid}"
         try:
             if action in _PLAYING_ACTIONS:
                 url = f"{base}/Playing/{_PLAYING_ACTIONS[action]}"
