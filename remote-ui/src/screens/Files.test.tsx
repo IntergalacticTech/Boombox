@@ -15,7 +15,7 @@ const sample = {
 
 function mockApi(overrides: Partial<RemoteApi> = {}): RemoteApi {
   return {
-    base: "http://test/",
+    base: "http://localhost/",
     get: vi.fn().mockResolvedValue(sample),
     post: vi.fn().mockResolvedValue({ deleted: "x" }),
     uploadFiles: vi.fn().mockResolvedValue({ saved: ["uploads/foo.mp3"] }),

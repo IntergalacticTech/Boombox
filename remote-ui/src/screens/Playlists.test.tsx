@@ -13,7 +13,7 @@ const samplePls = {
 
 function mockApi(overrides: Partial<RemoteApi> = {}): RemoteApi {
   return {
-    base: "http://test/",
+    base: "http://localhost/",
     get: vi.fn().mockImplementation(async (path: string) => {
       if (path === "api/remote/playlists") return samplePls;
       if (path.endsWith("/items")) {

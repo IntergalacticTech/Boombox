@@ -8,7 +8,7 @@ import type { RemoteState } from "../transport/types";
 // NowPlaying now mounts QueueView, which calls useApi(). Tests don't care
 // what the queue does — give it a stub that resolves with an empty list.
 const stubApi: RemoteApi = {
-  base: "http://test/",
+  base: "http://localhost/",
   get: vi.fn().mockResolvedValue({ ok: true, tracks: [] }),
   post: vi.fn().mockResolvedValue({ ok: true }),
   uploadFiles: vi.fn(),
