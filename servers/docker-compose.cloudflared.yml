@@ -1,0 +1,38 @@
+# OPTIONAL overlay: Cloudflare Tunnel sidecar.
+#
+# This is ONE of the two supported ways to reach the servers from outside your
+# home (the other is a router port-forward to a reverse proxy — see
+# docs/HOME-SERVERS.md). Use this file ONLY if you chose Cloudflare Tunnel.
+# Users who port-forward instead should NOT run it.
+#
+# What it does: cloudflared dials OUT to Cloudflare and holds an outbound
+# tunnel, so you expose Navidrome + Jellyfin publicly WITHOUT opening any
+# inbound port on your router. Cloudflare terminates TLS at the edge and
+# forwards to the containers over the internal Docker network.
+#
+# Prerequisites (one-time, in the Cloudflare Zero Trust dashboard):
+#   1. Networks → Tunnels → Create a tunnel (choose "Cloudflared").
+#   2. Copy the tunnel TOKEN → put it in .env as CLOUDFLARE_TUNNEL_TOKEN.
+#   3. Add two Public Hostnames on the tunnel:
+#        music.example.com  →  Service: http://navidrome:4533
+#        video.example.com  →  Service: http://jellyfin:8096
+#      (Use the Docker service names above — cloudflared shares this network.)
+#   4. Strongly recommended: add a Cloudflare Access policy in front of each
+#      hostname (see the Security section of docs/HOME-SERVERS.md).
+#
+# Bring the whole stack up WITH the tunnel:
+#   docker compose -f docker-compose.yml -f docker-compose.cloudflared.yml up -d
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: boombox-cloudflared
+    restart: unless-stopped
+    # Token-based (remotely-managed) tunnel: hostname → service mappings live
+    # in the Cloudflare dashboard, not in a local config file.
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}"
+    depends_on:
+      - navidrome
+      - jellyfin
