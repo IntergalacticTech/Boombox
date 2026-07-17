@@ -579,6 +579,21 @@ async def lyrics(request: web.Request) -> web.Response:
     return web.json_response({"lyrics": None, "source": "none"})
 
 
+def _env_value(path: str, key: str) -> str | None:
+    """Read a single KEY=value from an env file, fresh each call. Returns None
+    when the file is absent or the key isn't set."""
+    try:
+        for line in Path(path).read_text().splitlines():
+            line = line.strip()
+            if line.startswith(f"{key}="):
+                val = line.split("=", 1)[1].strip()
+                if val:
+                    return val
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def _boombox_name(fallback: str) -> str:
     """The device's friendly name, as set by the setup wizard.
 
@@ -586,16 +601,17 @@ def _boombox_name(fallback: str) -> str:
     without restarting boombox-state. Falls back to the hostname when the
     file is absent (pre-wizard installs) or has no BOOMBOX_NAME.
     """
-    try:
-        for line in Path("/etc/boombox/boombox.env").read_text().splitlines():
-            line = line.strip()
-            if line.startswith("BOOMBOX_NAME="):
-                val = line.split("=", 1)[1].strip()
-                if val:
-                    return val
-    except (OSError, ValueError):
-        pass
-    return fallback
+    return _env_value("/etc/boombox/boombox.env", "BOOMBOX_NAME") or fallback
+
+
+def _jellyfin_base() -> str:
+    """The browser-reachable Jellyfin base URL for the WATCH button.
+
+    Read fresh from /etc/boombox/jellyfin.env so pointing the setup wizard at
+    an off-device server repoints WATCH too. Defaults to the built-in server.
+    """
+    return _env_value("/etc/boombox/jellyfin.env", "BOOMBOX_JELLYFIN_BASE") \
+        or "http://localhost:8096"
 
 
 async def info(_request: web.Request) -> web.Response:
@@ -620,6 +636,7 @@ async def info(_request: web.Request) -> web.Response:
         "airplay_name": name,
         "spotify_name": name,
         "bluetooth_name": name,
+        "jellyfin_base": _jellyfin_base(),
     })
 
 

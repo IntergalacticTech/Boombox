@@ -30,6 +30,7 @@ type SystemInfo = {
   airplay_name: string;
   spotify_name: string;
   bluetooth_name: string;
+  jellyfin_base?: string;
 };
 
 type Sink = { name: string; label: string; default: boolean; state: string };
@@ -353,8 +354,10 @@ export function SettingsDrawer({ onClose }: Props) {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "core.playback.pause" }),
                   }).catch(() => { /* fine */ });
-                  // Navigate the same window so the kiosk swaps over.
-                  window.location.href = "http://localhost:8096/";
+                  // Navigate the same window so the kiosk swaps over. Honor a
+                  // wizard-configured off-device Jellyfin (BOOMBOX_JELLYFIN_BASE,
+                  // surfaced via /api/info) and fall back to the built-in server.
+                  window.location.href = info?.jellyfin_base || "http://localhost:8096/";
                 }}
                 style={primaryButton("#9bf2c0")}
               >WATCH</button>
