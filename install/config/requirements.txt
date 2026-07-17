@@ -22,6 +22,12 @@ cryptography>=42
 # services/boombox-remote — mDNS advertisement of the remote API
 zeroconf>=0.130
 
+# services/ble_peripheral — BLE transport for the wireless remote.
+# boombox-remote degrades gracefully without it, but install it so BLE
+# pairing works out of the box. (Was hand-installed on boombox1 and
+# missing from here — drift caught bringing up boombox2.)
+bless>=0.2
+
 # services/boombox-library art proxy — cover-art transcode/resize
 Pillow>=10.0
 
