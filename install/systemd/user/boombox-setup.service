@@ -1,0 +1,18 @@
+[Unit]
+Description=Boombox first-run setup wizard backend (HTTP API)
+After=graphical-session.target boombox-state.service boombox-library.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# LAN web port (for the QR URL shown on the kiosk). Optional; defaults to 8090.
+EnvironmentFile=-/etc/boombox/web-auth.env
+ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-setup.py
+Restart=on-failure
+RestartSec=3
+# Listens on 127.0.0.1:6689 — exposed to the kiosk (:80) and the LAN (:8090)
+# by nginx as /api/setup/ with auth_basic off; mutating routes are gated by a
+# setup token minted on the kiosk (shown as a QR) or a localhost origin.
+
+[Install]
+WantedBy=default.target

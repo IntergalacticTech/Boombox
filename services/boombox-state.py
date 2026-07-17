@@ -579,6 +579,25 @@ async def lyrics(request: web.Request) -> web.Response:
     return web.json_response({"lyrics": None, "source": "none"})
 
 
+def _boombox_name(fallback: str) -> str:
+    """The device's friendly name, as set by the setup wizard.
+
+    Read fresh from /etc/boombox/boombox.env each call so a rename lands
+    without restarting boombox-state. Falls back to the hostname when the
+    file is absent (pre-wizard installs) or has no BOOMBOX_NAME.
+    """
+    try:
+        for line in Path("/etc/boombox/boombox.env").read_text().splitlines():
+            line = line.strip()
+            if line.startswith("BOOMBOX_NAME="):
+                val = line.split("=", 1)[1].strip()
+                if val:
+                    return val
+    except (OSError, ValueError):
+        pass
+    return fallback
+
+
 async def info(_request: web.Request) -> web.Response:
     """Return device-identity + network strings the UI surfaces."""
     rc, hostname = await run("hostname")
@@ -591,14 +610,16 @@ async def info(_request: web.Request) -> web.Response:
             temp_c = int(f.read().strip()) / 1000.0
     except Exception:
         pass
+    name = _boombox_name(hostname or "boombox")
     return web.json_response({
         "hostname": hostname or "boombox",
+        "name": name,
         "ips": (ips or "").split(),
         "uptime": uptime or "",
         "temp_c": temp_c,
-        "airplay_name": "Boombox",
-        "spotify_name": "Boombox",
-        "bluetooth_name": hostname or "boombox",
+        "airplay_name": name,
+        "spotify_name": name,
+        "bluetooth_name": name,
     })
 
 

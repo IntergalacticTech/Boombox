@@ -1,0 +1,455 @@
+#!/usr/bin/env python3
+# install/bin/boombox-setup-apply — privileged helper for the boombox-setup
+# first-run wizard. Installed root-owned to /usr/local/sbin/boombox-setup-apply
+# (0755) and invoked ONLY via sudo by the boombox user, per the narrow grant in
+# /etc/sudoers.d/boombox.
+#
+# Design for least privilege:
+#   * The command reads a SINGLE JSON object from stdin and writes a JSON
+#     result to stdout. The sudoers rule therefore needs NO argument wildcard
+#     (`... NOPASSWD: /usr/local/sbin/boombox-setup-apply`), so there is no
+#     argv-injection surface — the caller cannot smuggle extra flags.
+#   * Every string the caller supplies is validated HERE, in the root-owned
+#     script. Nothing from the wizard is trusted.
+#   * stdlib only. This runs under the system python3 as root, NOT inside the
+#     boombox venv, so it must not import any project/venv modules.
+#
+# Actions (JSON `action` field):
+#   identity   {name, rename_host}    → boombox.env + optional hostname + unify
+#   wifi-scan  {}                     → list nearby SSIDs (brings wlan0 up)
+#   wifi-join  {ssid, psk}            → join a network on wlan0 (leaves eth0)
+#   jellyfin   {mode, base?, api_key?}→ point video at built-in or your server
+#
+# Result is always JSON: {"ok": bool, ...} on stdout, exit 0. Hard errors
+# (bad JSON, unknown action) exit non-zero with {"ok": false, "error": ...}.
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+BOOMBOX_ENV = "/etc/boombox/boombox.env"
+JELLYFIN_ENV = "/etc/boombox/jellyfin.env"
+JELLYFIN_KEY_FILE = "/etc/boombox/jellyfin-api-key"
+SHAIRPORT_CONF = "/etc/shairport-sync.conf"
+HOSTS_FILE = "/etc/hosts"
+WLAN_IF = "wlan0"
+
+# A device name: printable, 1–32 chars, no control chars or shell/EnvironmentFile
+# hazards. Allow letters/digits/space and a few punctuation marks people use in
+# room names ("Kids' Room", "Living-Room 2").
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .'_-]{0,31}$")
+
+
+# --------------------------------------------------------------------------- #
+# Pure helpers (unit-tested by importing this file as a module).
+# --------------------------------------------------------------------------- #
+def validate_name(raw: object) -> str:
+    if not isinstance(raw, str):
+        raise ValueError("name must be a string")
+    name = raw.strip()
+    if not _NAME_RE.match(name):
+        raise ValueError(
+            "name must be 1–32 chars: letters, digits, space . ' _ -")
+    return name
+
+
+def slugify(name: str) -> str:
+    """Derive a valid Linux/mDNS hostname from a display name.
+
+    RFC-1123 label: lowercase alnum + hyphen, no leading/trailing hyphen,
+    1–63 chars. Falls back to 'boombox' if nothing survives.
+    """
+    s = name.lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    s = s[:63].strip("-")
+    return s or "boombox"
+
+
+def parse_nmcli_scan(output: str) -> list[dict]:
+    """Parse `nmcli -t -f SSID,SIGNAL,SECURITY dev wifi list`.
+
+    -t is terminal/script mode: colon-separated, backslash-escaped colons in
+    fields. Dedup by SSID keeping the strongest signal; drop hidden (empty)
+    SSIDs; sort strongest-first.
+    """
+    best: dict[str, dict] = {}
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Unescape nmcli's '\:' then split on unescaped ':'. Fields are
+        # SSID:SIGNAL:SECURITY; SSIDs rarely contain ':'.
+        parts = re.split(r"(?<!\\):", line)
+        parts = [p.replace("\\:", ":") for p in parts]
+        if len(parts) < 3:
+            continue
+        ssid, signal, security = parts[0], parts[1], parts[2]
+        if not ssid:
+            continue
+        try:
+            sig = int(signal)
+        except ValueError:
+            sig = 0
+        secured = security.strip() not in ("", "--")
+        prev = best.get(ssid)
+        if prev is None or sig > prev["signal"]:
+            best[ssid] = {"ssid": ssid, "signal": sig, "secured": secured}
+    return sorted(best.values(), key=lambda n: n["signal"], reverse=True)
+
+
+def _atomic_write(path: str, content: str, mode: int = 0o644) -> None:
+    d = os.path.dirname(path) or "/"
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-setup-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _read_env_file(path: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def _write_env_file(path: str, kv: dict[str, str], mode: int = 0o644) -> None:
+    body = "".join(f"{k}={v}\n" for k, v in kv.items())
+    _atomic_write(path, body, mode)
+
+
+def _run(cmd: list[str], timeout: int = 25, check: bool = False,
+         inp: str | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout,
+        check=check, input=inp,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Actions.
+# --------------------------------------------------------------------------- #
+def action_identity(body: dict) -> dict:
+    name = validate_name(body.get("name"))
+    rename_host = bool(body.get("rename_host", False))
+    slug = slugify(name)
+    boombox_id = f"boombox-{slug}"
+
+    _write_env_file(BOOMBOX_ENV, {
+        "BOOMBOX_ID": boombox_id,
+        "BOOMBOX_NAME": name,
+    }, mode=0o644)
+
+    reboot_required = False
+    if rename_host:
+        _set_hostname(slug)
+        reboot_required = True
+
+    # Best-effort identity unification across the discovery surfaces. Each is
+    # wrapped so a missing/absent service never fails the whole action — the
+    # "any subset works" rule applies to identity too.
+    unified = []
+    if _set_shairport_name(name):
+        unified.append("airplay")
+    if _set_bluetooth_alias(name):
+        unified.append("bluetooth")
+    _restart_system_units(["avahi-daemon"])  # picks up the new hostname
+
+    return {
+        "ok": True, "name": name, "id": boombox_id,
+        "hostname": slug if rename_host else _current_hostname(),
+        "rename_host": rename_host, "unified": unified,
+        "reboot_required": reboot_required,
+    }
+
+
+def _current_hostname() -> str:
+    try:
+        return _run(["hostname"], timeout=5).stdout.strip() or "boombox"
+    except Exception:
+        return "boombox"
+
+
+def _set_hostname(slug: str) -> None:
+    if shutil.which("hostnamectl"):
+        _run(["hostnamectl", "set-hostname", slug], check=False)
+    else:
+        _atomic_write("/etc/hostname", slug + "\n", 0o644)
+        _run(["hostname", slug], check=False)
+    # Keep the 127.0.1.1 line in /etc/hosts in sync so sudo/mDNS resolve the
+    # new name without a reboot.
+    try:
+        with open(HOSTS_FILE) as f:
+            lines = f.readlines()
+        found = False
+        for i, ln in enumerate(lines):
+            if ln.split("#", 1)[0].strip().startswith("127.0.1.1"):
+                lines[i] = f"127.0.1.1\t{slug}\n"
+                found = True
+                break
+        if not found:
+            lines.append(f"127.0.1.1\t{slug}\n")
+        _atomic_write(HOSTS_FILE, "".join(lines), 0o644)
+    except OSError:
+        pass
+
+
+def _set_shairport_name(name: str) -> bool:
+    """Set the AirPlay advertised name in shairport-sync.conf's general block."""
+    if not os.path.exists(SHAIRPORT_CONF):
+        return False
+    try:
+        with open(SHAIRPORT_CONF) as f:
+            conf = f.read()
+        # Quote-escape for the conf's C-string syntax.
+        safe = name.replace("\\", "\\\\").replace('"', '\\"')
+        if re.search(r'(?m)^\s*name\s*=', conf):
+            new = re.sub(r'(?m)^(\s*)name\s*=\s*"[^"]*"\s*;',
+                         rf'\1name = "{safe}";', conf)
+        elif re.search(r"(?m)^\s*general\s*=\s*\{", conf):
+            new = re.sub(r"(?m)^(\s*general\s*=\s*\{)",
+                         rf'\1\n\tname = "{safe}";', conf, count=1)
+        else:
+            return False
+        if new != conf:
+            _atomic_write(SHAIRPORT_CONF, new, 0o644)
+            _restart_system_units(["shairport-sync"])
+        return True
+    except OSError:
+        return False
+
+
+def _set_bluetooth_alias(name: str) -> bool:
+    if not shutil.which("bluetoothctl"):
+        return False
+    try:
+        # system-alias is friendly-name only; ignore failure (adapter may be
+        # down at setup time — the alias persists and applies when it's up).
+        r = _run(["bluetoothctl", "system-alias", name], timeout=8)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _restart_system_units(units: list[str]) -> None:
+    for u in units:
+        try:
+            # is-enabled/active is cheaper than blindly restarting a
+            # non-existent unit and logging a failure.
+            chk = _run(["systemctl", "is-active", u], timeout=8)
+            if chk.stdout.strip() in ("active", "activating"):
+                _run(["systemctl", "restart", u], timeout=20)
+        except Exception:
+            pass
+
+
+def action_wifi_scan(_body: dict) -> dict:
+    if not _wlan_present():
+        return {"ok": True, "networks": [], "no_wifi": True}
+    _run(["ip", "link", "set", WLAN_IF, "up"], check=False)
+    if shutil.which("nmcli"):
+        try:
+            r = _run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY",
+                      "dev", "wifi", "list", "--rescan", "yes"], timeout=30)
+            return {"ok": True, "networks": parse_nmcli_scan(r.stdout)}
+        except Exception as e:
+            return {"ok": False, "error": f"scan failed: {e}"}
+    # wpa_cli fallback
+    try:
+        _run(["wpa_cli", "-i", WLAN_IF, "scan"], timeout=10)
+        r = _run(["wpa_cli", "-i", WLAN_IF, "scan_results"], timeout=10)
+        nets: dict[str, dict] = {}
+        for line in r.stdout.splitlines()[1:]:
+            cols = line.split("\t")
+            if len(cols) >= 5 and cols[4]:
+                ssid = cols[4]
+                sig = 0
+                try:
+                    sig = int(cols[2])
+                except ValueError:
+                    pass
+                secured = "WPA" in cols[3] or "WEP" in cols[3]
+                if ssid not in nets or sig > nets[ssid]["signal"]:
+                    nets[ssid] = {"ssid": ssid, "signal": sig,
+                                  "secured": secured}
+        return {"ok": True,
+                "networks": sorted(nets.values(),
+                                   key=lambda n: n["signal"], reverse=True)}
+    except Exception as e:
+        return {"ok": False, "error": f"scan failed: {e}"}
+
+
+def action_wifi_join(body: dict) -> dict:
+    ssid = body.get("ssid")
+    psk = body.get("psk", "")
+    if not isinstance(ssid, str) or not (1 <= len(ssid) <= 32):
+        return {"ok": False, "error": "ssid must be 1–32 chars"}
+    if not isinstance(psk, str) or (psk and not (8 <= len(psk) <= 63)):
+        return {"ok": False, "error": "passphrase must be 8–63 chars"}
+    if not _wlan_present():
+        return {"ok": False, "error": "no wlan0 interface present"}
+    _run(["ip", "link", "set", WLAN_IF, "up"], check=False)
+
+    if shutil.which("nmcli"):
+        cmd = ["nmcli", "dev", "wifi", "connect", ssid, "ifname", WLAN_IF]
+        if psk:
+            cmd += ["password", psk]
+        try:
+            r = _run(cmd, timeout=45)
+            if r.returncode != 0:
+                # Never echo the passphrase back, even if nmcli logged it.
+                err = (r.stderr or r.stdout).strip().replace(psk, "***") \
+                    if psk else (r.stderr or r.stdout).strip()
+                return {"ok": False, "error": err or "connection failed"}
+        except Exception as e:
+            return {"ok": False, "error": f"join failed: {e}"}
+    else:
+        ok, err = _wpa_join(ssid, psk)
+        if not ok:
+            return {"ok": False, "error": err}
+
+    ip = _wlan_ip()
+    return {"ok": True, "connected": bool(ip), "ssid": ssid, "ip": ip}
+
+
+def _wpa_join(ssid: str, psk: str) -> tuple[bool, str]:
+    try:
+        def wpa(*args):
+            return _run(["wpa_cli", "-i", WLAN_IF, *args], timeout=10).stdout.strip()
+        nid = wpa("add_network")
+        if not nid.isdigit():
+            return False, "wpa_cli add_network failed"
+        wpa("set_network", nid, "ssid", f'"{ssid}"')
+        if psk:
+            wpa("set_network", nid, "psk", f'"{psk}"')
+        else:
+            wpa("set_network", nid, "key_mgmt", "NONE")
+        wpa("enable_network", nid)
+        wpa("select_network", nid)
+        wpa("save_config")
+        return True, ""
+    except Exception as e:
+        return False, f"wpa_cli join failed: {e}"
+
+
+def _wlan_present() -> bool:
+    return os.path.isdir(f"/sys/class/net/{WLAN_IF}")
+
+
+def _wlan_ip() -> str:
+    try:
+        r = _run(["ip", "-4", "-o", "addr", "show", "dev", WLAN_IF], timeout=8)
+        m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", r.stdout)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def action_jellyfin(body: dict) -> dict:
+    mode = body.get("mode")
+    if mode not in ("builtin", "remote"):
+        return {"ok": False, "error": "mode must be 'builtin' or 'remote'"}
+    env = _read_env_file(JELLYFIN_ENV)
+
+    if mode == "builtin":
+        # Drop any off-device override; the resolver then defaults to the
+        # local server at http://127.0.0.1:8096.
+        env.pop("BOOMBOX_JELLYFIN_BASE", None)
+    else:
+        base = body.get("base", "")
+        if not isinstance(base, str) or not re.match(r"^https?://[^\s]+$", base):
+            return {"ok": False, "error": "base must be http(s)://host"}
+        env["BOOMBOX_JELLYFIN_BASE"] = base.rstrip("/")
+        api_key = body.get("api_key", "")
+        if api_key:
+            if not isinstance(api_key, str) or not re.match(r"^[A-Za-z0-9]+$", api_key):
+                return {"ok": False, "error": "api_key must be alphanumeric"}
+            env["JELLYFIN_API_KEY"] = api_key
+            _atomic_write(JELLYFIN_KEY_FILE, api_key + "\n", 0o640)
+            _chown_boombox_group(JELLYFIN_KEY_FILE)
+
+    _write_env_file(JELLYFIN_ENV, env, mode=0o640)
+    _chown_boombox_group(JELLYFIN_ENV)
+    return {"ok": True, "mode": mode}
+
+
+def _chown_boombox_group(path: str) -> None:
+    """Keep jellyfin.env/key readable by the boombox user's group (matches the
+    install-time 0640 root:<group> layout the systemd EnvironmentFile expects)."""
+    import grp
+    import pwd
+    user = os.environ.get("SUDO_USER") or "dietpi"
+    try:
+        gid = pwd.getpwnam(user).pw_gid
+    except KeyError:
+        try:
+            gid = grp.getgrnam("boombox").gr_gid
+        except KeyError:
+            return
+    try:
+        os.chown(path, 0, gid)
+    except OSError:
+        pass
+
+
+ACTIONS = {
+    "identity": action_identity,
+    "wifi-scan": action_wifi_scan,
+    "wifi-join": action_wifi_join,
+    "jellyfin": action_jellyfin,
+}
+
+
+def main() -> int:
+    try:
+        raw = sys.stdin.read()
+        body = json.loads(raw) if raw.strip() else {}
+    except (json.JSONDecodeError, ValueError) as e:
+        print(json.dumps({"ok": False, "error": f"bad json: {e}"}))
+        return 2
+    if not isinstance(body, dict):
+        print(json.dumps({"ok": False, "error": "expected a json object"}))
+        return 2
+    action = body.get("action")
+    fn = ACTIONS.get(action)
+    if fn is None:
+        print(json.dumps({"ok": False, "error": f"unknown action: {action}"}))
+        return 2
+    try:
+        result = fn(body)
+    except ValueError as e:
+        print(json.dumps({"ok": False, "error": str(e)}))
+        return 0
+    except Exception as e:  # noqa: BLE001 — helper must always answer in JSON
+        print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}))
+        return 1
+    print(json.dumps(result))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
