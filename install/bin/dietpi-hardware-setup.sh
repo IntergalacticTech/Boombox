@@ -61,6 +61,14 @@ for kv in display_auto_detect=1 max_framebuffers=2 disable_fw_kms_setup=1 dtpara
   grep -q "^${kv%=*}=" "$CFG" || echo "$kv" >> "$CFG"
 done
 
+# DietPi disables the onboard radio (dtoverlay=disable-wifi) when first-run had
+# Wi-Fi off. The boombox is portable and the setup wizard joins Wi-Fi, so
+# re-enable it. Takes effect on reboot; joining a network stays opt-in.
+if grep -q '^dtoverlay=disable-wifi' "$CFG"; then
+  log "re-enabling onboard Wi-Fi (removing dtoverlay=disable-wifi)"
+  sed -i '/^dtoverlay=disable-wifi/d' "$CFG"
+fi
+
 # --- 2. DAC overlay ----------------------------------------------------------
 log "installing DAC overlay → $BOOT_FW_DIR/usercfg.txt"
 install -m 0644 "$CONFIG_DIR/usercfg.txt" "$BOOT_FW_DIR/usercfg.txt"

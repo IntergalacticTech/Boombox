@@ -157,7 +157,7 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
-      boombox-remote boombox-library boombox-rfid
+      boombox-remote boombox-library boombox-rfid boombox-setup
     )
     # Enable any unit not yet enabled — handles freshly-added units like
     # boombox-rfid landing in a deploy after install.sh last ran.
@@ -202,7 +202,7 @@ PYRELOAD
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
-      boombox-remote boombox-library boombox-rfid
+      boombox-remote boombox-library boombox-rfid boombox-setup
     )
     while (( $(date +%s) < deadline )); do
       ok=1
@@ -254,7 +254,7 @@ PYRELOAD
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons
       boombox-resume boombox-bt-volume boombox-kiosk-guard boombox-osk
-      boombox-remote boombox-library boombox-rfid
+      boombox-remote boombox-library boombox-rfid boombox-setup
     )
     for u in "${units[@]}"; do
       systemctl --user restart "$u.service" || true

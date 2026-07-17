@@ -22,3 +22,11 @@
 # deploy can re-sync the snippet from the release tree without granting
 # generic write to /etc/nginx.
 %BOOMBOX_USER% ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /bin/systemctl reload nginx, /usr/bin/systemctl reload nginx, /usr/bin/install -m 0644 /opt/boombox/current/install/config/nginx-boombox-common.conf /etc/nginx/snippets/boombox-common.conf
+
+# First-run setup wizard (boombox-setup) privileged helper. The helper reads a
+# single JSON command from stdin and applies it (device name/hostname, Wi-Fi
+# join, Jellyfin target). It lives at a root-owned, non-user-writable path and
+# takes NO arguments, so there is no argv-injection surface — every input is
+# validated inside the root script. This is the only generic-ish escalation the
+# boombox user gets, and it is bounded by that script's fixed action set.
+%BOOMBOX_USER% ALL=(root) NOPASSWD: /usr/local/sbin/boombox-setup-apply

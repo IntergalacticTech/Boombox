@@ -399,6 +399,15 @@ log "building remote-ui (PWA) in $ACTIVE_REPO/remote-ui"
 )
 chmod -R a+rX "$ACTIVE_REPO/remote-ui/dist"
 chmod o+x "$ACTIVE_REPO/remote-ui"
+
+log "building setup-ui (first-run wizard) in $ACTIVE_REPO/setup-ui"
+(
+  cd "$ACTIVE_REPO/setup-ui"
+  npm install --no-audit --no-fund
+  npm run build
+)
+chmod -R a+rX "$ACTIVE_REPO/setup-ui/dist"
+chmod o+x "$ACTIVE_REPO/setup-ui"
 # Tear down the legacy doc root if it's still around.
 if [[ -d /var/www/boombox && ! -L /var/www/boombox ]]; then
   log "removing legacy /var/www/boombox (nginx now serves from current/ui/dist)"
@@ -479,10 +488,30 @@ USER_UNITS=(
   boombox-updater
   boombox-library
   boombox-rfid
+  boombox-setup
 )
 for u in "${USER_UNITS[@]}"; do
   systemctl --user enable "$u.service"
 done
+
+# First-run setup wizard: install the privileged helper root-owned to a path
+# the boombox user cannot rewrite (the sudoers grant points here), so the
+# NOPASSWD escalation can't be hijacked by editing the script. See
+# install/sudoers/boombox and services/boombox-setup.py.
+log "installing boombox-setup-apply helper"
+sudo install -m 0755 -o root -g root "$ACTIVE_SCRIPT_DIR/bin/boombox-setup-apply" \
+  /usr/local/sbin/boombox-setup-apply
+
+# First-run marker: a device that already has a configured library predates
+# the wizard — mark setup complete so it isn't forced back through it. A
+# genuinely fresh device has no library URL and no marker, so the kiosk opens
+# the wizard. (The wizard's POST /complete writes this on a fresh device.)
+SETUP_MARKER=/opt/boombox/state/setup-complete
+if [[ ! -f "$SETUP_MARKER" ]] && [[ -f /etc/boombox/library.yml ]] \
+   && grep -qE '^\s*url:\s*"?\s*https?://' /etc/boombox/library.yml; then
+  log "existing library config detected — marking setup complete"
+  install -m 0644 /dev/null "$SETUP_MARKER" && echo 1 > "$SETUP_MARKER"
+fi
 
 # System-side template + udev rule for USB auto-mount.
 log "installing USB auto-mount (system unit + udev rule)"

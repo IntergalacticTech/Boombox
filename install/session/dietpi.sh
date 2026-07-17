@@ -39,6 +39,14 @@ setup_graphical_session() {
       sudo grep -q "^${kv%=*}=" "$cfg" \
         || echo "$kv" | sudo tee -a "$cfg" >/dev/null
     done
+    # DietPi adds `dtoverlay=disable-wifi` when its first-run had Wi-Fi off,
+    # which unloads the radio entirely (no wlan0). The boombox is portable and
+    # the setup wizard joins Wi-Fi, so re-enable the onboard radio. Takes
+    # effect on the post-install reboot; joining a network is still opt-in.
+    if sudo grep -q '^dtoverlay=disable-wifi' "$cfg"; then
+      warn "re-enabling onboard Wi-Fi (removing dtoverlay=disable-wifi)"
+      sudo sed -i '/^dtoverlay=disable-wifi/d' "$cfg"
+    fi
   else
     warn "no config.txt found — skipping KMS display enablement"
   fi
