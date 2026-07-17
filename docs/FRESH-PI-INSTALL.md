@@ -25,7 +25,7 @@ state where that installer can run.
 | **USB-C power supply** | The official 27 W Pi 5 PSU. Under-powering a Pi 5 with a DAC + touchscreen causes brownouts. | **Yes** |
 | **HiFiBerry-class I²S DAC** | A PCM5122 / `hifiberry-dacplus`-family HAT (e.g. 52Pi EP-0218). Sits on the GPIO header. | Recommended |
 | **Speakers / amp** | Line-out or amplified speakers off the DAC. | Recommended |
-| **1280×800 touchscreen** | The UI is laid out for 1280×800. Any Wayland-capable DSI/HDMI panel works. | Recommended |
+| **Touchscreen** | The reference builds use the official Raspberry Pi 7″ DSI Touch Display (800×480, FT5x06 touch); any Wayland-capable DSI/HDMI panel works. | Recommended |
 | **USB HID RFID reader** | A keyboard-emulating 125 kHz/13.56 MHz reader. Tap a card to play a bound album/playlist. | Optional |
 | **17 GPIO buttons + rotary encoder** | The physical control surface. Wire per [BUTTONS.md](./BUTTONS.md). | Optional |
 | **USB stick / drive** | For sideloading music; auto-mounts into the library. | Optional |
@@ -169,6 +169,38 @@ to disable it separately.
 > **No DAC attached?** Leave the overlay as-is. The audio stack still starts;
 > you just won't have a working output until a DAC is present. This is the
 > "any subset works" rule in action.
+
+### The screen — DietPi ships with the display stack *disabled*
+
+Out of the box a DietPi image gives you a **completely dark DSI touchscreen —
+not even a boot console**. Two things are missing that Raspberry Pi OS ships by
+default:
+
+- `dtoverlay=vc4-kms-v3d` is present but **commented out** in `config.txt`, so
+  no KMS/DRM display driver loads at all (`/sys/class/drm` is empty);
+- `display_auto_detect=1` is absent, so the firmware never probes the DSI
+  ports for the panel (and `dtparam=i2c_arm=on` is off, which the panel's
+  touch controller and backlight regulator also need).
+
+The installer's DietPi session bootstrap (`install/session/dietpi.sh`) now
+enables all of this in `config.txt` automatically. To bring the screen (and
+DAC) up **before** running the full installer — e.g. to sanity-check hardware
+on a fresh flash — run the standalone, idempotent script as root:
+
+```bash
+install/bin/dietpi-hardware-setup.sh
+reboot
+```
+
+After the reboot the panel shows the boot console, and:
+
+```bash
+cat /sys/class/drm/card*-DSI-1/status   # → connected
+tr '\0' '\n' < /proc/device-tree/panel_disp@0/compatible  # → raspberrypi,7inch-dsi
+```
+
+No panel attached? The settings are harmless — `display_auto_detect` simply
+finds nothing and HDMI/headless still works. "Any subset works."
 
 ---
 
@@ -324,6 +356,8 @@ Video:    http://<pi-ip>:8096/     (Jellyfin)
 
 | Symptom | Where to look / fix |
 |---|---|
+| **Screen dark from power-on (never shows a console)** | The KMS display stack is disabled — DietPi's default. Check `ls /sys/class/drm/` (empty ⇒ no DRM driver). Run `install/bin/dietpi-hardware-setup.sh` (or re-run `install.sh`) and reboot; it enables `dtoverlay=vc4-kms-v3d`, `display_auto_detect=1`, and `dtparam=i2c_arm=on` in `config.txt`. |
+| **DietPi first-run loops "DietPi has not fully been installed"** | The automated first-run was interrupted (e.g. `dietpi-update` rebooted mid-way); DietPi's error handler then resets `AUTO_SETUP_AUTOMATED=0` and waits for an interactive session. Fix: `rm -f /tmp/.dietpi-login_firstrun_setup_err`, set `AUTO_SETUP_AUTOMATED=1` in `/boot/dietpi.txt` again, and re-run `/boot/dietpi/dietpi-login`. Done when `/boot/dietpi/.install_stage` reads `2`. |
 | **No audio** | `aplay -l` — is `sndrpihifiberry` listed? If not, the overlay didn't bind: check `/boot/usercfg.txt` has `dtoverlay=hifiberry-dacplus` and `/boot/config.txt` includes `usercfg.txt`, try an alternate overlay from the comments in that file, reboot. If the card lists but is silent, `alsamixer` and unmute/raise. Verify `/etc/asound.conf` points `default` at `hw:sndrpihifiberry`. |
 | **Kiosk black screen** | The compositor or Chromium didn't come up. `systemctl --user status boombox-kiosk` and `journalctl --user -u boombox-kiosk -n 100`. Confirm `labwc` launched: it execs from `~/.bash_profile` **only on the tty1 console login** — check the `>>> boombox session >>>` block is present in `~/.bash_profile` and that DietPi didn't override tty1 autologin. `boombox-kiosk-guard` should be re-pinning the tab to `http://localhost/`. |
 | **A service won't start** | `journalctl --user -u boombox-<svc> -n 100 --no-pager` for user units; `journalctl -u <svc>` (no `--user`) for nginx/mopidy/smbd/jellyfin. Many `boombox-*` services need the desktop session's PipeWire/Wayland/`/dev/input`, so a service failing right after boot often just needs the graphical session up — re-check after the kiosk appears. |
@@ -366,9 +400,16 @@ places worth knowing:
   compositor at all, so `install/session/dietpi.sh` installs labwc, wires tty1
   autologin, and launches the compositor from `~/.bash_profile`. If the kiosk
   misbehaves on DietPi, this file is the first place to look.
-- **Boot partition path.** DietPi mounts it at `/boot`; RPi OS Bookworm uses
-  `/boot/firmware`. The installer probes for `/boot/firmware` and falls back to
-  `/boot`, so the DAC overlay lands correctly on both.
+- **The display stack is off by default.** DietPi comments out
+  `dtoverlay=vc4-kms-v3d` and omits `display_auto_detect` / `dtparam=i2c_arm`,
+  so there is no DRM device and a DSI panel stays dark. `dietpi.sh` enables
+  them in `config.txt`; `install/bin/dietpi-hardware-setup.sh` does the same
+  standalone. RPi OS ships all of it enabled.
+- **Boot partition path.** Newer DietPi images (v10+, Trixie) mount it at
+  `/boot/firmware` like RPi OS Bookworm; older DietPi used `/boot`. The
+  installer probes for `/boot/firmware` and falls back to `/boot`, so the DAC
+  overlay lands correctly on both. (DietPi's own files — `dietpi.txt`, the
+  `dietpi/` scripts — stay under `/boot` either way.)
 - **First-boot config is DietPi's, not ours.** `dietpi.txt` / `dietpi-wifi.txt`
   are DietPi features; the repo carries no first-boot image automation (a
   pre-built SD image is still on the roadmap). Everything Boombox-specific

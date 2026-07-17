@@ -2,6 +2,10 @@
 # install/session/dietpi.sh — graphical-session bootstrap for DietPi.
 # DietPi Lite boots to a bare console with no compositor, so this *creates*
 # the Wayland session the boombox kiosk needs:
+#   0. enables the KMS display stack in config.txt — DietPi ships with
+#      vc4-kms-v3d commented out and no display_auto_detect, so without
+#      this there is no DRM device at all: the DSI touchscreen stays dark
+#      and labwc has nothing to render to. RPi OS ships all of it enabled.
 #   1. apt-installs labwc + the Wayland tools the shared labwc-autostart
 #      calls (chromium / wvkbd / grim / unclutter are already in
 #      install.sh's shared apt line and are not repeated here).
@@ -13,6 +17,32 @@
 # $BOOMBOX_USER, and the log()/warn() helpers being defined there.
 
 setup_graphical_session() {
+  # 0. KMS display stack. Uncomment DietPi's stock '#dtoverlay=vc4-kms-v3d,
+  #    noaudio' line (dropping ,noaudio — HDMI audio cards are harmless and
+  #    this matches the RPi OS default; the DAC stays the ALSA default via
+  #    /etc/asound.conf) and add the display keys RPi OS ships out of the
+  #    box. display_auto_detect makes the firmware probe the DSI ports and
+  #    load the right panel overlay (e.g. the official 7" touchscreen);
+  #    i2c_arm is needed for panel/touch detection and DAC probing.
+  local cfg="${BOOT_FW_DIR:-/boot/firmware}/config.txt"
+  [[ -f "$cfg" ]] || cfg=/boot/config.txt
+  if [[ -f "$cfg" ]]; then
+    log "enabling KMS display stack in $cfg"
+    sudo sed -i 's|^#dtoverlay=vc4-kms-v3d.*|dtoverlay=vc4-kms-v3d|' "$cfg"
+    sudo grep -q '^dtoverlay=vc4-kms-v3d' "$cfg" \
+      || echo 'dtoverlay=vc4-kms-v3d' | sudo tee -a "$cfg" >/dev/null
+    local kv
+    for kv in display_auto_detect=1 max_framebuffers=2 \
+              disable_fw_kms_setup=1 dtparam=i2c_arm=on; do
+      # compare on everything up to the *value* so dtparam keys match as
+      # 'dtparam=i2c_arm', not just 'dtparam'
+      sudo grep -q "^${kv%=*}=" "$cfg" \
+        || echo "$kv" | sudo tee -a "$cfg" >/dev/null
+    done
+  else
+    warn "no config.txt found — skipping KMS display enablement"
+  fi
+
   # 1. Compositor + Wayland tools. labwc and kanshi are in Debian's repos;
   #    wlrctl may not be packaged for every Debian release, so it is
   #    best-effort — config/labwc-autostart calls it in a backgrounded

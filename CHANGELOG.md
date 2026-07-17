@@ -93,6 +93,16 @@ artist / playlist and tap to play. See
 
 ### Install / deploy
 
+- **DietPi: enable the KMS display stack.** DietPi images ship with
+  `dtoverlay=vc4-kms-v3d` commented out and no `display_auto_detect` /
+  `dtparam=i2c_arm`, leaving a DSI touchscreen completely dark (no DRM
+  device at all) — the Wayland kiosk could never have started. The
+  DietPi session bootstrap (`install/session/dietpi.sh`) now enables
+  them in `config.txt`, and a new standalone
+  `install/bin/dietpi-hardware-setup.sh` brings up screen + DAC +
+  ALSA default on a fresh flash before the full install (verified on
+  boombox2: official RPi 7″ DSI panel + HiFiBerry DAC+ on DietPi
+  v10.5, Pi 5, NVMe boot).
 - **`apply-release.sh` restart sweep** now includes `boombox-library`
   and `boombox-rfid` (Phase 1's library was previously omitted, so
   deploys staged new code but old service processes kept running).
