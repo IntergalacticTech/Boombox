@@ -249,8 +249,14 @@ When it finishes it prints the remote web password and Jellyfin URL. **Reboot:**
 sudo reboot
 ```
 
-After reboot, Chromium comes up in kiosk mode on the touchscreen showing the
-Boombox UI, with audio routed through the DAC.
+After reboot, Chromium comes up in kiosk mode on the touchscreen. On a
+**fresh** device it opens the **setup wizard** instead of the player: name the
+boombox, join Wi-Fi, connect your music library and video server, and pair a
+remote — all from the touchscreen, or scan the QR it shows to finish from your
+phone or laptop. When you tap Finish it drops into the Boombox UI with audio
+routed through the DAC. Everything the wizard sets is also editable later from
+**Settings**, and the [Setup & connecting services](https://intergalactictech.github.io/Boombox/setup.html)
+guide documents each step for doing it by hand.
 
 > **Idempotent + re-runnable.** Re-running `install.sh` is safe — every step
 > checks before it acts. Re-run it after `git pull` to pick up config, systemd,

@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="Set up a Boombox: build the SMB music share, connect a Navidrome (Subsonic) home library, wire Jellyfin video on-device or off-device (including exposing your own server from outside your home), and pair phone and hardware remotes."
+    >
+    <meta property="og:title" content="Boombox | Setup &amp; connecting services">
+    <meta
+      property="og:description"
+      content="Connect your music share, Navidrome home library, Jellyfin video, and remotes — start with the on-device Setup Wizard, then use this page as the manual reference."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="assets/settings-upload.png">
+    <meta name="theme-color" content="#0b0f0d">
+    <title>Boombox | Setup &amp; connecting services</title>
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <script>document.documentElement.classList.add("js");</script>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" data-site-header>
+      <a class="brand" href="#top" aria-label="Boombox home">
+        <img src="assets/favicon.svg" alt="" width="28" height="28">
+        <span>Boombox</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+        <span class="sr-only">Open navigation</span>
+        <span></span>
+        <span></span>
+      </button>
+      <nav id="site-nav" class="site-nav" aria-label="Primary navigation">
+        <a href="index.html#features">Features</a>
+        <a href="index.html#remote">Web UI</a>
+        <a href="index.html#install">Install</a>
+        <a href="setup.html" aria-current="page">Setup</a>
+        <a href="index.html#docs">Docs</a>
+        <a class="nav-github" href="https://github.com/IntergalacticTech/Boombox">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section id="top" class="section setup-hero">
+        <div class="container setup-hero-inner reveal">
+          <p class="eyebrow">Setup &amp; services</p>
+          <h1>Set up</h1>
+          <p class="hero-copy">
+            Point a fresh boombox at your music and video, and let phones and
+            the hardware remote drive it. The fastest path is the on-device
+            Setup Wizard; this page is the reference for exactly what each step
+            configures, and how to do any of it by hand or change it later from
+            Settings.
+          </p>
+          <div class="hero-actions" aria-label="Setup shortcuts">
+            <a class="button button-primary" href="#wizard">Start with the wizard</a>
+            <a class="button button-secondary" href="#smb">Jump to manual setup</a>
+          </div>
+          <nav class="setup-toc" aria-label="On this page">
+            <a href="#wizard">Setup Wizard</a>
+            <a href="#smb">Music share (SMB)</a>
+            <a href="#navidrome">Home library (Navidrome)</a>
+            <a href="#video">Video (Jellyfin)</a>
+            <a href="#servers">Off-device servers</a>
+            <a href="#remotes">Remotes</a>
+          </nav>
+        </div>
+      </section>
+
+      <section id="wizard" class="section setup-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Start here</p>
+            <h2>The easiest path is the on-device Setup Wizard.</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              A fresh boombox auto-launches a first-run Setup Wizard on the
+              touchscreen. Work through it right on the 5-inch screen, or scan
+              the QR code it shows to continue from your phone or laptop
+              browser — handy for typing Wi-Fi passwords and server URLs on a
+              real keyboard. The wizard writes the same configuration this page
+              documents, so anything it sets you can later inspect or change
+              from the touchscreen <strong>Settings</strong> drawer.
+            </p>
+            <p>The wizard walks through, in order:</p>
+            <div class="feature-grid">
+              <article class="feature-card reveal">
+                <span class="feature-mark feature-mark-orange" aria-hidden="true"></span>
+                <h3>Device name &amp; Wi-Fi</h3>
+                <p>Name the boombox and join it to your network so the rest of setup — and every remote — can reach it.</p>
+              </article>
+              <article class="feature-card reveal">
+                <span class="feature-mark feature-mark-magenta" aria-hidden="true"></span>
+                <h3>Music library</h3>
+                <p>Connect your Navidrome (Subsonic) server: URL, username, password, tested live before it saves. Detailed below.</p>
+              </article>
+              <article class="feature-card reveal">
+                <span class="feature-mark feature-mark-cyan" aria-hidden="true"></span>
+                <h3>Video</h3>
+                <p>Use the Jellyfin server bundled on the device, or point at your own server elsewhere. Detailed below.</p>
+              </article>
+              <article class="feature-card reveal">
+                <span class="feature-mark feature-mark-green" aria-hidden="true"></span>
+                <h3>Remotes</h3>
+                <p>Enable the phone remote and pair your first device with a 6-digit PIN, or pair the CYD hardware remote.</p>
+              </article>
+            </div>
+            <p class="setup-note">
+              Prefer to do it by hand, or need to change something after
+              first-run? Every step has a manual equivalent — the sections
+              below are the reference.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="smb" class="section setup-section setup-band">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Music share</p>
+            <h2>Mount the SMB share to move music on and off the boombox.</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              The installer publishes your music library as a read/write SMB
+              share, so you can drag files in from Finder, Windows Explorer, or
+              any SMB client instead of SSH. Editing files over the share
+              changes the desktop user's <code>~/Music/</code> directory
+              directly.
+            </p>
+            <ul class="check-list">
+              <li><strong>Share path</strong> — <code>smb://&lt;pi-ip&gt;/boombox-music</code></li>
+              <li><strong>Username</strong> — the desktop user (<code>jwc</code> on the current appliance).</li>
+              <li><strong>Password</strong> — the same static remote credential used for the LAN web login. Read it with <code>sudo cat /etc/boombox/web-auth.env</code>; the touchscreen Settings drawer also shows it.</li>
+            </ul>
+            <p>
+              On macOS use Finder's <strong>Go → Connect to Server</strong>
+              (<kbd>⌘K</kbd>) with the share URL. From a Linux box you can
+              mount it read/write with <code>cifs</code>:
+            </p>
+            <div class="terminal reveal" aria-label="Mount the SMB music share">
+              <div class="terminal-bar">
+                <span>mount-share.sh</span>
+                <button class="copy-button" type="button" data-copy-target="smb-code">Copy</button>
+              </div>
+              <pre id="smb-code"><code># macOS — in Finder: Go → Connect to Server (⌘K)
+smb://&lt;pi-ip&gt;/boombox-music
+
+# Linux — mount read/write with the desktop user + web-auth password
+sudo mkdir -p /mnt/boombox
+sudo mount -t cifs //&lt;pi-ip&gt;/boombox-music /mnt/boombox \
+    -o username=&lt;desktop-user&gt;,uid=$(id -u),gid=$(id -g)</code></pre>
+            </div>
+            <p class="setup-note">
+              After a big batch of adds, renames, or deletes, run a library
+              scan from the touchscreen <strong>Settings</strong> drawer so
+              Mopidy picks up the changes. The music share does not include
+              <code>~/Videos/</code> — for video, use the upload button, a USB
+              stick, or <code>rsync</code> (see the Video section).
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="navidrome" class="section setup-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Home library</p>
+            <h2>Connect Navidrome for a browsable, offline-cached home library.</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              The Home Library is a parallel browse tree backed by a
+              <a class="setup-link" href="https://www.navidrome.org/">Navidrome</a>
+              — or any Subsonic-API-compatible — server on your LAN or a public
+              host. Browse it from the touchscreen or PWA, pin albums to a USB
+              cache drive for offline play, and stream the rest with one tap.
+            </p>
+            <h3 class="setup-subhead">1. Configure the source</h3>
+            <p>
+              Open <strong>Settings → Home Library</strong> on the touchscreen
+              (or the LAN web UI), fill in the fields, tap <strong>Test</strong>
+              until you see <em>✓ Connected</em>, then <strong>Save</strong>:
+            </p>
+            <ul class="check-list">
+              <li><strong>Source URL</strong> — <code>http://&lt;navidrome-host&gt;:4533</code> (your own port works; <code>https://</code> works too).</li>
+              <li><strong>Username</strong> — your Navidrome user.</li>
+              <li><strong>Password</strong> — your Navidrome password. It is Fernet-encrypted at rest with a key derived from the Pi's <code>/etc/machine-id</code>, so moving the SD card to another Pi makes it unreadable and forces re-entry.</li>
+            </ul>
+            <p>
+              The first full sync of a typical 5–10k-album library takes a few
+              minutes and re-runs hourly. Auth uses Subsonic's token+salt
+              scheme — a fresh salt per call, so your password never appears in
+              a URL.
+            </p>
+            <h3 class="setup-subhead">2. Adopt a USB cache drive</h3>
+            <p>
+              Plug in a USB stick formatted ext4 / NTFS / exFAT (FAT32 works but
+              caps files at 4 GB). The kiosk pops a <strong>"New drive
+              detected"</strong> overlay — tap <strong>YES, USE FOR CACHE</strong>
+              and it writes a <code>.boombox-cache</code> marker, creates
+              <code>audio/</code>, <code>meta/</code>, and <code>tmp/</code>
+              subdirs, and starts pulling any already-pinned tracks. You can also
+              adopt a drive by hand:
+            </p>
+            <div class="terminal reveal" aria-label="Adopt a USB cache drive by hand">
+              <div class="terminal-bar">
+                <span>adopt-cache.sh</span>
+                <button class="copy-button" type="button" data-copy-target="cache-code">Copy</button>
+              </div>
+              <pre id="cache-code"><code>sudo touch /media/&lt;drive&gt;/.boombox-cache
+sudo mkdir -p /media/&lt;drive&gt;/{audio,meta,tmp}
+systemctl --user restart boombox-library</code></pre>
+            </div>
+            <h3 class="setup-subhead">3. Browse &amp; pin</h3>
+            <p>
+              Open the Library drawer, tap <strong>Home Library</strong>, and
+              browse Artists / Albums / Playlists (all FTS-searchable) or the
+              <strong>Cached only</strong> view. Tap the pin on an album, artist,
+              or playlist and its tracks download to the cache drive — pinned
+              content survives reboots, network failures, and the boombox going
+              on a trip. Pinned albums play with no server reachable at all;
+              everything else streams on demand, with a source badge on the
+              now-playing bar (⬇ Cache · ⚡ Stream) telling you which pipeline is
+              feeding the speakers.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="video" class="section setup-section setup-band">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Video</p>
+            <h2>Play video from the bundled Jellyfin, or point at your own server.</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              A standalone <a class="setup-link" href="https://jellyfin.org/">Jellyfin</a>
+              server ships on the device, running on port <code>8096</code>
+              independent of the music stack. You can leave it on-device or
+              redirect the whole boombox — touchscreen included — at a server
+              elsewhere. Both are single-setting choices.
+            </p>
+            <div class="feature-grid">
+              <article class="feature-card reveal">
+                <span class="feature-mark feature-mark-cyan" aria-hidden="true"></span>
+                <h3>On-device (default)</h3>
+                <p>
+                  <code>install.sh</code> installs and configures Jellyfin against
+                  <code>~/Videos</code> for you — no manual wizard. Tap
+                  <strong>WATCH</strong> in the Settings drawer and the kiosk opens
+                  <code>http://localhost:8096/</code>; a floating <em>← BOOMBOX</em>
+                  pill returns you. Username is <code>boombox</code>; the password
+                  is the 6-digit number in <code>/etc/boombox/web-auth.env</code>.
+                  Any LAN browser or Jellyfin app can also point at
+                  <code>http://&lt;pi-ip&gt;:8096/</code>.
+                </p>
+              </article>
+              <article class="feature-card reveal">
+                <span class="feature-mark feature-mark-magenta" aria-hidden="true"></span>
+                <h3>Off-device (your server)</h3>
+                <p>
+                  Point <code>BOOMBOX_JELLYFIN_BASE</code> at your own Jellyfin and
+                  supply an API key. Every Jellyfin address on the boombox — the
+                  transport proxy, the WATCH button, and both library-refresh
+                  triggers — resolves through that one variable, so the whole
+                  device follows.
+                </p>
+              </article>
+            </div>
+            <p class="setup-subhead-lead">
+              To redirect the device at an off-device Jellyfin, set the base URL
+              and store an API key created in the remote server's
+              <strong>Dashboard → API Keys</strong>, then restart the consumers:
+            </p>
+            <div class="terminal reveal" aria-label="Point the boombox at an off-device Jellyfin">
+              <div class="terminal-bar">
+                <span>jellyfin-offdevice.sh</span>
+                <button class="copy-button" type="button" data-copy-target="jellyfin-code">Copy</button>
+              </div>
+              <pre id="jellyfin-code"><code># 1. Point the device at your server (loaded by the units already)
+echo 'BOOMBOX_JELLYFIN_BASE=https://video.example.com' \
+    | sudo tee -a /etc/boombox/jellyfin.env
+
+# 2. Store the API key from Jellyfin Dashboard → API Keys (single line)
+printf '%s\n' 'PASTE_YOUR_JELLYFIN_API_KEY' \
+    | sudo tee /etc/boombox/jellyfin-api-key >/dev/null
+sudo chmod 0640 /etc/boombox/jellyfin-api-key
+
+# 3. Restart the consumers so they pick up the new base + key
+systemctl --user restart boombox-remote boombox-buttons</code></pre>
+            </div>
+            <p class="setup-note">
+              Jellyfin's default Movies library only indexes files named
+              <code>Title (Year).ext</code> — e.g. <code>Sintel (2010).mp4</code>.
+              For arbitrary files, switch the library to Mixed Content or add a
+              second library of the right type. On a Pi 5, encode to H.264 / AAC
+              for direct play; 4K / HDR forces a software transcode it can't keep
+              up with.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="servers" class="section setup-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Off-device servers</p>
+            <h2>Run Navidrome + Jellyfin off the device, reachable from outside your home.</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              Moving both servers onto a real "home server" gives Jellyfin the
+              CPU to transcode comfortably and puts your library state in one
+              backed-up place. The boombox only ever needs a reachable HTTPS URL
+              plus credentials for each server — it does not care where the box
+              physically runs. The
+              <a class="setup-link" href="https://github.com/IntergalacticTech/Boombox/tree/main/servers"><code>servers/</code></a>
+              directory ships a Docker Compose stack for exactly this.
+            </p>
+            <h3 class="setup-subhead">Bring it up (Docker)</h3>
+            <p>
+              Run it on any always-on box (a NAS, mini-PC, or old laptop is the
+              recommended host — your media stays on your disks). Copy the
+              example env, set your media paths and ports, and start it:
+            </p>
+            <div class="terminal reveal" aria-label="Bring up the Navidrome + Jellyfin Docker stack">
+              <div class="terminal-bar">
+                <span>servers-up.sh</span>
+                <button class="copy-button" type="button" data-copy-target="servers-code">Copy</button>
+              </div>
+              <pre id="servers-code"><code>cd servers
+cp .env.example .env
+$EDITOR .env          # set MUSIC_DIR, VIDEO_DIR, PUID/PGID, TZ, ports
+docker compose up -d
+docker compose ps     # both should show (healthy) within ~40 s</code></pre>
+            </div>
+            <p>
+              Then, once on the LAN, run each server's own first-launch wizard:
+              open <code>http://&lt;host&gt;:4533</code> to create the Navidrome
+              admin, and <code>http://&lt;host&gt;:8096</code> to create the
+              Jellyfin admin and add a Movies library pointed at
+              <code>/media</code>. Use strong, unique passwords — do <em>not</em>
+              reuse the boombox's LAN credential.
+            </p>
+
+            <h3 class="setup-subhead">Expose it from outside your home — pick one</h3>
+            <p>
+              The boombox needs an HTTPS URL it can reach. Both options below
+              give you TLS; never expose either server as raw HTTP.
+            </p>
+            <div class="feature-grid">
+              <article class="feature-card reveal">
+                <span class="feature-mark feature-mark-orange" aria-hidden="true"></span>
+                <h3>A · Cloudflare Tunnel</h3>
+                <p>
+                  <code>cloudflared</code> dials <em>out</em> to Cloudflare, so you
+                  open no router ports and never reveal your home IP; Cloudflare
+                  terminates TLS at the edge. Create a tunnel in the Zero Trust
+                  dashboard, add public hostnames pointing at the
+                  <code>navidrome</code> / <code>jellyfin</code> service names, put
+                  the token in <code>.env</code>, and bring the stack up with the
+                  overlay. Strongly recommended: add a Cloudflare Access policy in
+                  front.
+                </p>
+              </article>
+              <article class="feature-card reveal">
+                <span class="feature-mark feature-mark-yellow" aria-hidden="true"></span>
+                <h3>B · Port-forward + reverse proxy</h3>
+                <p>
+                  If you'd rather not depend on Cloudflare, forward
+                  <code>443</code> (and <code>80</code> for the ACME challenge) to a
+                  reverse proxy on the host that terminates Let's Encrypt TLS.
+                  <strong>Caddy</strong> is the least-effort — automatic
+                  certificates. Forward only the proxy's ports, never 4533/8096
+                  directly, and add rate-limiting at the proxy.
+                </p>
+              </article>
+            </div>
+            <div class="terminal reveal" aria-label="Cloudflare Tunnel overlay and a minimal Caddyfile">
+              <div class="terminal-bar">
+                <span>expose.sh</span>
+                <button class="copy-button" type="button" data-copy-target="expose-code">Copy</button>
+              </div>
+              <pre id="expose-code"><code># Option A — bring the stack up WITH the Cloudflare Tunnel sidecar
+docker compose -f docker-compose.yml -f docker-compose.cloudflared.yml up -d
+
+# Option B — a minimal Caddyfile (automatic Let's Encrypt TLS)
+#   music.example.com {
+#       reverse_proxy localhost:4533
+#   }
+#   video.example.com {
+#       reverse_proxy localhost:8096
+#   }
+
+# Either way: tell Jellyfin its public origin, then re-up
+echo 'JELLYFIN_PUBLISHED_URL=https://video.example.com' >> servers/.env</code></pre>
+            </div>
+            <p class="setup-note">
+              Then point the device at the public URLs: set
+              <strong>Settings → Home Library</strong> Source URL to
+              <code>https://music.example.com</code>, and
+              <code>BOOMBOX_JELLYFIN_BASE=https://video.example.com</code> in
+              <code>/etc/boombox/jellyfin.env</code> (see the Video section).
+              Sync, streaming, and playback work the same off-LAN as at home.
+            </p>
+            <p class="setup-note setup-warn">
+              <strong>Security is non-negotiable here.</strong> Exposing a media
+              server is the highest-risk step in the project. Use strong, unique
+              passwords, keep the servers patched (pin image versions and bump on
+              a schedule), and add rate-limiting at the edge. A mesh VPN
+              (Tailscale / WireGuard) or Cloudflare Access in front is safer than
+              a bare public endpoint. Rule of thumb: <em>mesh VPN &gt; public +
+              Cloudflare Access &gt; public + reverse proxy with rate-limiting
+              &gt; raw port-forward (never)</em>. And back up the server state
+              you can't re-copy — the <code>navidrome-data</code> and
+              <code>jellyfin-config</code> volumes plus your <code>.env</code>:
+            </p>
+            <div class="terminal reveal" aria-label="Snapshot the server state volumes">
+              <div class="terminal-bar">
+                <span>backup.sh</span>
+                <button class="copy-button" type="button" data-copy-target="backup-code">Copy</button>
+              </div>
+              <pre id="backup-code"><code>cd servers
+docker compose stop            # quiesce for a consistent DB snapshot
+docker run --rm \
+  -v navidrome-data:/nd -v jellyfin-config:/jf \
+  -v "$PWD":/backup alpine \
+  tar czf /backup/boombox-servers-backup.tgz -C / nd jf
+docker compose start</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="remotes" class="section setup-section setup-band">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Remotes</p>
+            <h2>Pair a phone PWA or the hardware remote.</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              The phone-facing surface is <strong>off by default</strong> — a
+              privacy gate against arbitrary phones on the Wi-Fi. A human at the
+              touchscreen has to turn it on before any phone route responds.
+            </p>
+            <ul class="check-list">
+              <li>Open <strong>Settings → Phone remote</strong> on the touchscreen and flip <strong>ENABLE</strong>. The screen then shows a 6-digit pairing PIN (single-use, ~120-second lifetime, rotates freely).</li>
+              <li>On your phone, open the installable web app at <code>http://&lt;pi-ip&gt;:8090/remote/</code> — the same URL the touchscreen's web-QR overlay encodes. Redeem the PIN to get a durable bearer token; use the browser's <strong>Add to Home Screen</strong> to install it as a standalone app.</li>
+              <li>The token survives reboots and is only revoked by unpairing from the touchscreen. Turning the toggle off later blocks phones but keeps paired tokens, so flipping it back on works without re-pairing.</li>
+            </ul>
+            <p>
+              The full LAN web UI lives at <code>http://&lt;pi-ip&gt;:8090/</code>
+              behind HTTP Basic auth — log in with the same credential from
+              <code>/etc/boombox/web-auth.env</code> that the SMB share uses.
+              (The <code>/api/remote/</code> path is exempt from Basic auth
+              because phones carry their own bearer tokens.) The CYD hardware
+              remote uses the same backend over BLE and HTTP, so it keeps working
+              regardless of the phone toggle.
+            </p>
+            <p class="setup-note setup-warn">
+              This is a friction gate for a trusted LAN, not a hardened
+              public-internet service: the credential is a short reused number,
+              there's no rate-limiting, and traffic is plaintext HTTP. Don't
+              enable the remote on a Wi-Fi network you don't trust, and never
+              expose port 8090 to the internet.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section setup-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Go deeper</p>
+            <h2>The source docs behind every step here.</h2>
+          </div>
+          <div class="docs-grid">
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/ACCESS.md">
+              <span>Access</span>
+              <small>LAN web auth, SMB, uploads, USB, remote pairing</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/HOME-LIBRARY.md">
+              <span>Home library</span>
+              <small>Navidrome sync, USB cache, pinning, offline play</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/HOME-SERVERS.md">
+              <span>Home servers</span>
+              <small>Run Navidrome + Jellyfin off-device, reachable away from home</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/VIDEO.md">
+              <span>Video</span>
+              <small>Jellyfin, Watch mode, native apps, file naming</small>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-layout">
+        <p>Boombox is MIT-licensed open-source software.</p>
+        <div class="footer-links">
+          <a href="index.html">Home</a>
+          <a href="https://github.com/IntergalacticTech/Boombox">Repository</a>
+          <a href="https://github.com/IntergalacticTech/Boombox/blob/main/LICENSE">License</a>
+          <a href="#top">Back to top</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>

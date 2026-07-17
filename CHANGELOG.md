@@ -5,6 +5,45 @@ prefixes in `git log`.
 
 ---
 
+## Unreleased — First-run setup wizard
+
+A fresh boombox now walks itself through setup. On first boot the kiosk
+opens a **web-based setup wizard** (also reachable from a phone/laptop by
+scanning the QR the touchscreen shows) that configures the device name,
+Wi-Fi, music library, video server, and remotes — no SSH required.
+
+### Added
+
+- **`boombox-setup`** service (`127.0.0.1:6689`, `/api/setup/*`,
+  `auth_basic off`): the single front-door the wizard talks to from both
+  the kiosk (localhost, trusted) and a phone (LAN, gated by a **setup
+  token** minted on the kiosk and shown as a QR — physical-presence
+  proof, mirroring the remote-pairing PIN model). It proxies music/remote
+  config to `boombox-library` and `boombox-remote` over loopback so the
+  phone never hits the LAN Basic-auth wall, and runs privileged actions
+  (device name + hostname, Wi-Fi join, Jellyfin target) through one
+  narrow sudoers-gated helper.
+- **`/usr/local/sbin/boombox-setup-apply`**: root-owned helper installed
+  to a path the boombox user can't rewrite; reads a single JSON command
+  from stdin (so the `NOPASSWD` grant needs no argument wildcard — no
+  argv-injection surface) and validates every field before acting.
+  Actions: `identity` (writes `boombox.env`, optionally renames the
+  hostname, and unifies the name across mDNS/AirPlay/Bluetooth/`/info`),
+  `wifi-scan`/`wifi-join` (nmcli-first, `wpa_cli` fallback; leaves
+  Ethernet untouched), and `jellyfin` (built-in vs. your own server).
+- **`setup-ui/`**: a React+Vite wizard served at `/setup/` (like the
+  `/remote/` PWA), a full-screen multi-step flow — Welcome → Name →
+  Wi-Fi → Music → Video → Remotes → Done — that works on the 800×480
+  kiosk and on a phone. Kiosk redirects to it while setup is incomplete
+  and returns to the player once finished.
+- **Identity unification**: `boombox-state`'s `/info` now reads the
+  device name from `/etc/boombox/boombox.env` (fresh each call) and
+  reports it as the AirPlay/Spotify/Bluetooth name, so a rename in the
+  wizard is reflected everywhere the mDNS advertisement already used it.
+- Website: a new **Setup & connecting services** guide
+  (`site/setup.html`) covering the SMB music share, Navidrome, Jellyfin
+  (on/off-device + exposing it from outside the home), and remotes.
+
 ## Unreleased — Home Library + RFID
 
 Boombox now carries your Navidrome catalog with it. A new
