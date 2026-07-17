@@ -12,6 +12,7 @@ Phase 1 has no pairing UI — tokens are added by hand for testing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import io
 import json
@@ -683,9 +684,21 @@ async def main() -> None:
         # enters via nginx /api/remote/.
         azc = AsyncZeroconf(ip_version=IPVersion.V4Only)
         info = build_mdns_service_info()
-        await azc.async_register_service(info)
-        log.info("boombox-remote on :%d, mDNS as %s (port %d, path %s)",
-                  PORT, info.name, info.port, "/api/remote/")
+        # allow_name_change: if another boombox on the LAN already claimed
+        # this instance name (two devices with the same BOOMBOX_ID),
+        # zeroconf auto-suffixes ours instead of raising
+        # NonUniqueNameException. And if advertisement still fails, run
+        # without discovery rather than crash-looping — remotes can reach
+        # us by IP, and "any subset works" applies to LAN twins too.
+        try:
+            await azc.async_register_service(info, allow_name_change=True)
+            log.info("boombox-remote on :%d, mDNS as %s (port %d, path %s)",
+                      PORT, info.name, info.port, "/api/remote/")
+        except Exception:
+            log.exception(
+                "mDNS advertisement failed — continuing without discovery "
+                "(set a unique BOOMBOX_ID in /etc/boombox/boombox.env if "
+                "another boombox shares this LAN)")
 
         # BLE peripheral — the primary remote transport per the design spec.
         # Runs concurrently with the HTTP/WS server; they share the same
@@ -716,7 +729,9 @@ async def main() -> None:
         finally:
             if ble_task is not None:
                 ble_task.cancel()
-            await azc.async_unregister_service(info)
+            # Registration is best-effort above, so unregistration is too.
+            with contextlib.suppress(Exception):
+                await azc.async_unregister_service(info)
             await azc.async_close()
 
 

@@ -129,6 +129,17 @@ artist / playlist and tap to play. See
 
 ### Fixed
 
+- **`boombox-remote` crash-looped when two boomboxes share a LAN**: both
+  devices advertised the same hard-coded mDNS instance name
+  (`boombox-default._boombox._tcp.local.`), so the second registration
+  died with `NonUniqueNameException` on every restart. Registration now
+  passes `allow_name_change=True`, failure to advertise is non-fatal
+  (service keeps serving; discovery-less remotes reach it by IP), and
+  the unit reads `/etc/boombox/boombox.env` — written by install.sh on
+  fresh installs with `BOOMBOX_ID=boombox-<hostname>` — so each device
+  gets a unique identity. Existing installs keep their current identity
+  (the env file is only created when absent). Found bringing boombox2
+  onto the same LAN as the original.
 - **`boombox-library` chunked sync**: HTTP `client.get_album()` calls
   no longer happen inside an open SQLite transaction — each section
   brackets its local upserts only. With `PRAGMA busy_timeout = 10000`

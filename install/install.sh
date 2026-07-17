@@ -155,6 +155,16 @@ if [ ! -f /etc/boombox/library.yml ]; then
     sudo chmod 600 /etc/boombox/library.yml
 fi
 
+# Per-device identity for mDNS/BLE discovery — unique per boombox so two
+# devices can share a LAN. Only written when absent: existing installs
+# keep whatever identity their paired remotes already know.
+if [ ! -f /etc/boombox/boombox.env ]; then
+    sudo mkdir -p /etc/boombox
+    printf 'BOOMBOX_ID=boombox-%s\nBOOMBOX_NAME=%s\n' "$(hostname)" "$(hostname)" \
+      | sudo tee /etc/boombox/boombox.env >/dev/null
+    sudo chmod 644 /etc/boombox/boombox.env
+fi
+
 # Place default boombox-rfid config if absent (atomic, idempotent).
 if [ ! -f /etc/boombox/rfid.yml ]; then
     sudo mkdir -p /etc/boombox

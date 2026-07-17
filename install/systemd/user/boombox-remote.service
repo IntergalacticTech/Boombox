@@ -8,6 +8,10 @@ Type=simple
 # Optional: supplies JELLYFIN_API_KEY and (for an off-device Jellyfin)
 # BOOMBOX_JELLYFIN_BASE. The leading '-' makes it a no-op when absent.
 EnvironmentFile=-/etc/boombox/jellyfin.env
+# Optional: per-device identity (BOOMBOX_ID / BOOMBOX_NAME) so two
+# boomboxes can share a LAN without mDNS name collisions. Written by
+# install.sh on fresh installs; absent on older ones (default identity).
+EnvironmentFile=-/etc/boombox/boombox.env
 ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-remote.py
 Restart=on-failure
 RestartSec=3
