@@ -430,6 +430,25 @@ sudo systemctl enable --now smbd
 # ---------------------------------------------------------------------------
 # 9. systemd units
 # ---------------------------------------------------------------------------
+# Everything `systemctl --user` below needs a per-user systemd instance,
+# which needs systemd-logind — and DietPi ships with logind *masked*. Unmask
+# and start it first (no-op on RPi OS where it's already active), and make
+# sure this shell can reach the user bus even over a bare SSH session
+# (nohup/non-login shells don't get XDG_RUNTIME_DIR).
+if [[ "$(systemctl is-enabled systemd-logind 2>&1)" == "masked" ]]; then
+  warn "systemd-logind is masked (DietPi default) — unmasking; user services need it"
+  sudo systemctl unmask systemd-logind dbus
+  sudo systemctl enable --now dbus systemd-logind
+fi
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+if [[ ! -d "$XDG_RUNTIME_DIR" ]]; then
+  # No user manager running yet for this user — linger starts one.
+  sudo loginctl enable-linger "$BOOMBOX_USER"
+  for _ in 1 2 3 4 5; do [[ -d "$XDG_RUNTIME_DIR" ]] && break; sleep 1; done
+  [[ -d "$XDG_RUNTIME_DIR" ]] || fail "user runtime dir $XDG_RUNTIME_DIR never appeared — is systemd-logind running?"
+fi
+
 log "installing user systemd units"
 mkdir -p "$HOME/.config/systemd/user"
 install -m 0644 "$ACTIVE_SCRIPT_DIR/systemd/user/"*.service "$HOME/.config/systemd/user/"

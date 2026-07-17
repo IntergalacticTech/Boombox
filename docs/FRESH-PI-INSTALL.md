@@ -270,6 +270,14 @@ Boombox UI, with audio routed through the DAC.
 - **Group membership needs a reboot.** The installer adds your user to
   `gpio`, `audio`, `video`, `render`, `bluetooth`, `plugdev`, and `input`. Those
   take effect after the reboot you're already doing.
+- **`systemd-logind` is masked on DietPi.** User systemd units, linger, and
+  `loginctl` all need logind, and DietPi ships it masked. The installer
+  unmasks and starts it automatically (and exports `XDG_RUNTIME_DIR` /
+  `DBUS_SESSION_BUS_ADDRESS` so `systemctl --user` works even from a bare
+  SSH/nohup shell). If you see *"Could not enable linger: Unit
+  dbus-org.freedesktop.login1.service failed to load properly"*, that's this —
+  `sudo systemctl unmask systemd-logind dbus && sudo systemctl enable --now
+  dbus systemd-logind`.
 
 ---
 

@@ -103,6 +103,12 @@ artist / playlist and tap to play. See
   ALSA default on a fresh flash before the full install (verified on
   boombox2: official RPi 7″ DSI panel + HiFiBerry DAC+ on DietPi
   v10.5, Pi 5, NVMe boot).
+- **DietPi: unmask `systemd-logind` before user units.** DietPi masks
+  logind, so every `systemctl --user` call and `loginctl
+  enable-linger` in the installer failed on a stock image. install.sh
+  now unmasks/starts `dbus` + `systemd-logind` when masked and exports
+  `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` so the user bus is
+  reachable from non-login (SSH/nohup) shells.
 - **`apply-release.sh` restart sweep** now includes `boombox-library`
   and `boombox-rfid` (Phase 1's library was previously omitted, so
   deploys staged new code but old service processes kept running).
