@@ -1,7 +1,15 @@
+# install/systemd/user/boombox-setup.service
 [Unit]
 Description=Boombox first-run setup wizard backend (HTTP API)
-After=graphical-session.target boombox-state.service boombox-library.service
-PartOf=graphical-session.target
+# A pure loopback HTTP backend like boombox-library — order it after
+# default.target, NOT graphical-session. Ordering it after the other
+# boombox-* services (which are themselves After=default.target /
+# graphical-session) creates a start-up cycle that systemd breaks by
+# dropping this unit at boot. The service degrades gracefully if
+# boombox-library / boombox-remote aren't up yet (status wraps their
+# calls; the kiosk gate retries), so it needs no ordering against them.
+After=default.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple

@@ -43,11 +43,23 @@ describe('redirectToSetupIfIncomplete', () => {
     expect(replace).not.toHaveBeenCalled()
   })
 
-  it('fails open (no redirect) when the setup API is unreachable', async () => {
+  it('fails open (no redirect) when the setup API stays unreachable', async () => {
     stubLocation('localhost')
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('conn refused')))
     expect(await redirectToSetupIfIncomplete()).toBe(false)
-  })
+  }, 10000)
+
+  it('retries a cold-boot race, then redirects once the service answers', async () => {
+    const replace = stubLocation('localhost')
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('starting'))
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ complete: false }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const did = await redirectToSetupIfIncomplete()
+    expect(did).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(replace).toHaveBeenCalledWith('/setup/')
+  }, 10000)
 
   it('does not loop when already on /setup', async () => {
     const replace = stubLocation('localhost', '/setup/')

@@ -651,6 +651,17 @@ export function SettingsDrawer({ onClose }: Props) {
             mono
           />
 
+          {/* Re-run the first-run setup wizard (name, Wi-Fi, music, video, remotes) */}
+          <SettingRow
+            title="Setup wizard"
+            subtitle="name, Wi-Fi, music, video & remotes"
+            action={
+              <button onClick={() => { window.location.href = "/setup/"; }} style={primaryButton("#5be7ff")}>
+                OPEN
+              </button>
+            }
+          />
+
           {/* System */}
           <SettingRow
             title="System"
