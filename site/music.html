@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="Stand up the music server the boombox streams from. The boombox speaks the Subsonic API, so any Subsonic-compatible server is a drop-in; today the supported one is Navidrome. Bring up the Docker Compose stack, create the admin, and point the boombox at it."
+    >
+    <meta property="og:title" content="Boombox | Music server setup">
+    <meta
+      property="og:description"
+      content="Set up the boombox's music server over the Subsonic API — start with Navidrome via the servers/ Docker stack, with room for more Subsonic-compatible servers later."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="assets/settings-upload.png">
+    <meta name="theme-color" content="#0b0f0d">
+    <title>Boombox | Music server setup</title>
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <script>document.documentElement.classList.add("js");</script>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" data-site-header>
+      <a class="brand" href="#top" aria-label="Boombox home">
+        <img src="assets/favicon.svg" alt="" width="28" height="28">
+        <span>Boombox</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+        <span class="sr-only">Open navigation</span>
+        <span></span>
+        <span></span>
+      </button>
+      <nav id="site-nav" class="site-nav" aria-label="Primary navigation">
+        <a href="index.html#features">Features</a>
+        <a href="index.html#remote">Web UI</a>
+        <a href="index.html#install">Install</a>
+        <a href="setup.html">Setup</a>
+        <a href="index.html#docs">Docs</a>
+        <a class="nav-github" href="https://github.com/IntergalacticTech/Boombox">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section id="top" class="section setup-hero">
+        <div class="container setup-hero-inner reveal">
+          <p class="eyebrow">Music service</p>
+          <h1>Music server</h1>
+          <p class="hero-copy">
+            The boombox streams your music from a server that speaks the
+            <strong>Subsonic API</strong> — it appends <code>/rest/…</code>
+            calls, authenticates with a fresh per-call token+salt (your password
+            never rides in a URL), and pulls artists, albums, art, and streams.
+            Because that boundary is a published protocol, any
+            Subsonic-compatible server can sit at the URL. Today the supported,
+            tested one is <strong>Navidrome</strong> — and this catalog is built
+            to grow.
+          </p>
+          <div class="hero-actions" aria-label="Music setup shortcuts">
+            <a class="button button-primary" href="#navidrome">Set up Navidrome</a>
+            <a class="button button-secondary" href="#servers">Supported servers</a>
+          </div>
+          <nav class="setup-toc" aria-label="On this page">
+            <a href="#servers">Supported servers</a>
+            <a href="#navidrome">Navidrome</a>
+            <a href="#connect">Connect the boombox</a>
+            <a href="#deeper">Go deeper</a>
+          </nav>
+        </div>
+      </section>
+
+      <section id="servers" class="section setup-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Supported servers</p>
+            <h2>One tested server today, a catalog with room to grow.</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              The boombox doesn't care <em>which</em> Subsonic server answers, as
+              long as it answers correctly. That's the whole point of picking a
+              protocol boundary. Right now exactly one server is supported and
+              tested end-to-end; the placeholder below is not decoration — it's
+              where the next one lands.
+            </p>
+            <div class="feature-grid">
+              <article class="feature-card reveal">
+                <span class="feature-card-tag feature-card-tag-now">Recommended · current</span>
+                <h3>Navidrome</h3>
+                <p>
+                  A fast, self-hosted Subsonic server and the reference the
+                  boombox is built and tested against — the Home Library sync,
+                  USB offline cache, and token+salt streaming all target it.
+                  Pinned as <code>navidrome/navidrome:0.54.5</code> in the
+                  <code>servers/</code> stack. Full setup is below.
+                </p>
+              </article>
+              <article class="feature-card feature-card-soon reveal">
+                <span class="feature-card-tag">Planned</span>
+                <h3>More options coming</h3>
+                <p>
+                  The boombox speaks the Subsonic API, so other
+                  Subsonic-compatible servers can be added here as they're
+                  tested. This slot is where they'll appear — each as its own
+                  setup section alongside Navidrome.
+                </p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="navidrome" class="section setup-section setup-band">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Set it up</p>
+            <h2>Navidrome</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              <a class="setup-link" href="https://www.navidrome.org/">Navidrome</a>
+              is a lightweight, self-hosted music server that exposes your
+              library over the Subsonic API. Run it on any always-on box — a NAS,
+              a mini-PC, an old laptop, or a cloud VPS — and the boombox streams
+              from it on the LAN or from anywhere once you expose it. The
+              <a class="setup-link" href="https://github.com/IntergalacticTech/Boombox/tree/main/servers"><code>servers/</code></a>
+              directory ships a Docker Compose stack that stands it up for you.
+            </p>
+
+            <h3 class="setup-subhead">1. Stand it up with Docker Compose</h3>
+            <p>
+              Copy the example env, set your media path and ports, and start the
+              stack. The same compose file also brings up Jellyfin for video (see
+              <a class="setup-link" href="video.html">the video-server guide</a>);
+              you get both from one <code>up</code>.
+            </p>
+            <div class="terminal reveal" aria-label="Bring up the Navidrome server with Docker Compose">
+              <div class="terminal-bar">
+                <span>navidrome-up.sh</span>
+                <button class="copy-button" type="button" data-copy-target="nd-up-code">Copy</button>
+              </div>
+              <pre id="nd-up-code"><code>cd servers
+cp .env.example .env
+$EDITOR .env          # set MUSIC_DIR, VIDEO_DIR, PUID/PGID, TZ, ports
+docker compose up -d          # starts Navidrome (:4533) + Jellyfin (:8096)
+docker compose ps             # navidrome should show (healthy) within ~40 s</code></pre>
+            </div>
+            <p>
+              Your <code>MUSIC_DIR</code> is bind-mounted <strong>read-only</strong>
+              into the container as <code>/music</code>, so Navidrome scans your
+              collection but can never mutate it (<code>ND_MUSICFOLDER=/music</code>,
+              <code>ND_SCANSCHEDULE=1h</code>). Server state — the SQLite database,
+              playlists, stars, and play counts — lives in the named
+              <code>navidrome-data</code> volume at <code>/data</code>, independent
+              of the media. That volume is the thing you back up; the music you can
+              always re-copy.
+            </p>
+
+            <h3 class="setup-subhead">2. Create the Navidrome admin</h3>
+            <p>
+              Navidrome creates its first admin account through its own web wizard
+              on first launch — there's no headless seed. On the LAN, open
+              <code>http://&lt;host&gt;:4533</code> and set a <strong>strong,
+              unique</strong> password. Do <em>not</em> reuse the boombox's weak
+              6-digit LAN credential here — this server may end up
+              internet-reachable. The first full scan of a typical 5–10k-album
+              library takes a few minutes, then re-runs hourly.
+            </p>
+
+            <h3 class="setup-subhead">3. Reach it from outside your home (optional)</h3>
+            <p>
+              On the LAN you're done — the boombox needs only a reachable URL plus
+              credentials. To stream when the boombox travels, expose the server
+              behind TLS. The shipped Cloudflare Tunnel overlay dials
+              <em>out</em>, so you open no router ports and never reveal your home
+              IP:
+            </p>
+            <div class="terminal reveal" aria-label="Expose the servers with the Cloudflare Tunnel overlay">
+              <div class="terminal-bar">
+                <span>navidrome-expose.sh</span>
+                <button class="copy-button" type="button" data-copy-target="nd-expose-code">Copy</button>
+              </div>
+              <pre id="nd-expose-code"><code># Reach both servers from outside the home WITHOUT opening router ports
+docker compose -f docker-compose.yml -f docker-compose.cloudflared.yml up -d
+
+# Map the tunnel hostname to http://navidrome:4533 in the Cloudflare Zero Trust
+# dashboard, put the tunnel token in .env as CLOUDFLARE_TUNNEL_TOKEN, then re-up.
+# (Router port-forward + a reverse proxy with TLS is the other supported path.)</code></pre>
+            </div>
+            <p class="setup-note setup-warn">
+              Exposing a media server is the highest-risk step in the project.
+              Use a strong, unique password, keep the image patched (it's pinned
+              on purpose — bump it deliberately), and add rate-limiting at the
+              edge. A mesh VPN (Tailscale / WireGuard) or Cloudflare Access in
+              front is safer than a bare public endpoint. Full walkthrough and the
+              security rules are in
+              <a class="setup-link" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/HOME-SERVERS.md">HOME-SERVERS.md</a>.
+            </p>
+
+            <h3 class="setup-subhead">4. Point the boombox at it</h3>
+            <p>
+              Open <strong>Settings → Home Library</strong> on the touchscreen (or
+              the LAN web UI), fill in the fields, tap <strong>Test</strong> until
+              you see <em>✓ Connected</em>, then <strong>Save</strong>:
+            </p>
+            <ul class="check-list">
+              <li><strong>Source URL</strong> — <code>http://&lt;host&gt;:4533</code> on the LAN, or <code>https://music.example.com</code> once exposed.</li>
+              <li><strong>Username</strong> — your Navidrome user.</li>
+              <li><strong>Password</strong> — your Navidrome password. It's Fernet-encrypted at rest with a key derived from the Pi's <code>/etc/machine-id</code>, so moving the SD card to another Pi makes it unreadable and forces re-entry.</li>
+            </ul>
+            <p class="setup-note">
+              The on-device <a class="setup-link" href="setup.html#wizard">Setup Wizard</a>
+              collects the same three fields during first-run — either path writes
+              the identical config. Once it connects, the sync chip in the chrome
+              goes green; pin albums to a USB cache drive and they play with no
+              server reachable at all.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="connect" class="section setup-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Connect the boombox</p>
+            <h2>The wizard does the pairing — this page just stands up the server.</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              You don't wire the boombox up here. A fresh device auto-launches a
+              first-run <strong>Setup Wizard</strong> that walks through Wi-Fi,
+              the music library, video, and remotes — the music step is exactly
+              the URL / username / password from above, tested live before it
+              saves. See the
+              <a class="setup-link" href="setup.html#wizard">Setup &amp; services</a>
+              reference for the wizard and every manual equivalent; don't duplicate
+              it, just follow it once the server is up.
+            </p>
+            <ul class="check-list">
+              <li>Setting up video too? The same <code>servers/</code> stack runs Jellyfin — see the <a class="setup-link" href="video.html">video-server guide</a>.</li>
+              <li>Already have the boombox running? Change the source any time from <strong>Settings → Home Library</strong>.</li>
+              <li>The offline path is independent: pinned albums live on the USB cache drive and play with no server at all.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="deeper" class="section setup-section setup-band">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Go deeper</p>
+            <h2>The source docs behind the music server.</h2>
+          </div>
+          <div class="docs-grid">
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/HOME-LIBRARY.md">
+              <span>Home library</span>
+              <small>Navidrome sync, USB cache, pinning, offline play</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/HOME-SERVERS.md">
+              <span>Home servers</span>
+              <small>Run the servers off-device, expose them, back them up</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/tree/main/servers">
+              <span>servers/ stack</span>
+              <small>The Docker Compose files, .env.example, and tunnel overlay</small>
+            </a>
+            <a class="doc-link reveal" href="setup.html">
+              <span>Setup &amp; services</span>
+              <small>The Setup Wizard and every manual step, end to end</small>
+            </a>
+            <a class="doc-link reveal" href="video.html">
+              <span>Video server</span>
+              <small>Set up Jellyfin; more servers later</small>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-layout">
+        <p>Boombox is MIT-licensed open-source software.</p>
+        <div class="footer-links">
+          <a href="index.html">Home</a>
+          <a href="setup.html">Setup</a>
+          <a href="https://github.com/IntergalacticTech/Boombox">Repository</a>
+          <a href="#top">Back to top</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>

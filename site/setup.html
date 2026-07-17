@@ -180,6 +180,13 @@ sudo mount -t cifs //&lt;pi-ip&gt;/boombox-music /mnt/boombox \
               host. Browse it from the touchscreen or PWA, pin albums to a USB
               cache drive for offline play, and stream the rest with one tap.
             </p>
+            <p class="setup-subhead-lead">
+              Need to stand the server up first? →
+              <a class="setup-link" href="music.html">Full music-server setup guide</a>
+              — Navidrome via the <code>servers/</code> Docker stack, with room for
+              more Subsonic servers later. The steps below assume the server is
+              already running.
+            </p>
             <h3 class="setup-subhead">1. Configure the source</h3>
             <p>
               Open <strong>Settings → Home Library</strong> on the touchscreen
@@ -245,6 +252,12 @@ systemctl --user restart boombox-library</code></pre>
               independent of the music stack. You can leave it on-device or
               redirect the whole boombox — touchscreen included — at a server
               elsewhere. Both are single-setting choices.
+            </p>
+            <p class="setup-subhead-lead">
+              Standing up your own video server? →
+              <a class="setup-link" href="video.html">Full video-server setup guide</a>
+              — Jellyfin via the <code>servers/</code> Docker stack, with room for
+              more servers later. The two choices below assume the server exists.
             </p>
             <div class="feature-grid">
               <article class="feature-card reveal">
@@ -482,6 +495,14 @@ docker compose start</code></pre>
             <h2>The source docs behind every step here.</h2>
           </div>
           <div class="docs-grid">
+            <a class="doc-link reveal" href="music.html">
+              <span>Music server</span>
+              <small>Set up Navidrome; more Subsonic servers later</small>
+            </a>
+            <a class="doc-link reveal" href="video.html">
+              <span>Video server</span>
+              <small>Set up Jellyfin; more servers later</small>
+            </a>
             <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/ACCESS.md">
               <span>Access</span>
               <small>LAN web auth, SMB, uploads, USB, remote pairing</small>

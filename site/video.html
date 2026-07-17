@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="Stand up the video server the boombox plays from. The boombox uses the Jellyfin API, so the video server is swappable; today the supported one is Jellyfin. Bring up the Docker Compose stack, create the admin and Movies library, and point the boombox at it."
+    >
+    <meta property="og:title" content="Boombox | Video server setup">
+    <meta
+      property="og:description"
+      content="Set up the boombox's video server over the Jellyfin API — start with Jellyfin via the servers/ Docker stack, with room for more servers later."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="assets/deckos-watch.png">
+    <meta name="theme-color" content="#0b0f0d">
+    <title>Boombox | Video server setup</title>
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <script>document.documentElement.classList.add("js");</script>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" data-site-header>
+      <a class="brand" href="#top" aria-label="Boombox home">
+        <img src="assets/favicon.svg" alt="" width="28" height="28">
+        <span>Boombox</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+        <span class="sr-only">Open navigation</span>
+        <span></span>
+        <span></span>
+      </button>
+      <nav id="site-nav" class="site-nav" aria-label="Primary navigation">
+        <a href="index.html#features">Features</a>
+        <a href="index.html#remote">Web UI</a>
+        <a href="index.html#install">Install</a>
+        <a href="setup.html">Setup</a>
+        <a href="index.html#docs">Docs</a>
+        <a class="nav-github" href="https://github.com/IntergalacticTech/Boombox">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section id="top" class="section setup-hero">
+        <div class="container setup-hero-inner reveal">
+          <p class="eyebrow">Video service</p>
+          <h1>Video server</h1>
+          <p class="hero-copy">
+            The boombox plays video through the <strong>Jellyfin API</strong> —
+            it authenticates with an API key, proxies transport server-side, and
+            hands playback to Jellyfin's web and native clients. Because that
+            boundary is a defined API, the video server is swappable. Today the
+            supported, tested one is <strong>Jellyfin</strong> itself — it even
+            ships on the device by default — and this catalog has room for more.
+          </p>
+          <div class="hero-actions" aria-label="Video setup shortcuts">
+            <a class="button button-primary" href="#jellyfin">Set up Jellyfin</a>
+            <a class="button button-secondary" href="#servers">Supported servers</a>
+          </div>
+          <nav class="setup-toc" aria-label="On this page">
+            <a href="#servers">Supported servers</a>
+            <a href="#jellyfin">Jellyfin</a>
+            <a href="#connect">Connect the boombox</a>
+            <a href="#deeper">Go deeper</a>
+          </nav>
+        </div>
+      </section>
+
+      <section id="servers" class="section setup-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Supported servers</p>
+            <h2>One tested server today, a catalog with room to grow.</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              The boombox talks to whatever server answers the Jellyfin API — the
+              API boundary is what makes alternatives possible. Right now exactly
+              one server is supported and tested end-to-end; the placeholder below
+              is not decoration — it's where the next one lands.
+            </p>
+            <div class="feature-grid">
+              <article class="feature-card reveal">
+                <span class="feature-card-tag feature-card-tag-now">Recommended · current</span>
+                <h3>Jellyfin</h3>
+                <p>
+                  The free, self-hosted media server the boombox is built and
+                  tested against — the <strong>WATCH</strong> button, the
+                  transport proxy, and both library-refresh triggers all speak its
+                  API. Pinned as <code>jellyfin/jellyfin:10.10.7</code> in the
+                  <code>servers/</code> stack, and bundled on the device by
+                  default. Full setup is below.
+                </p>
+              </article>
+              <article class="feature-card feature-card-soon reveal">
+                <span class="feature-card-tag">Planned</span>
+                <h3>More options coming</h3>
+                <p>
+                  Video runs through the Jellyfin API, so a compatible server can
+                  be added here once it's tested. This slot is where alternatives
+                  will appear — each as its own setup section alongside Jellyfin.
+                </p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="jellyfin" class="section setup-section setup-band">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Set it up</p>
+            <h2>Jellyfin</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              <a class="setup-link" href="https://jellyfin.org/">Jellyfin</a> is a
+              free, self-hosted media server. The boombox bundles one on the
+              device against <code>~/Videos</code> for zero-config out of the box
+              (see <a class="setup-link" href="setup.html#video">Setup → Video</a>) —
+              but moving it onto a real server gives it the CPU to transcode
+              comfortably, which a Pi 5 can't do for 4K/HDR. The
+              <a class="setup-link" href="https://github.com/IntergalacticTech/Boombox/tree/main/servers"><code>servers/</code></a>
+              directory ships a Docker Compose stack that stands up your own.
+            </p>
+
+            <h3 class="setup-subhead">1. Stand it up with Docker Compose</h3>
+            <p>
+              Copy the example env, set your media path and ports, and start the
+              stack. The same compose file also brings up Navidrome for music (see
+              <a class="setup-link" href="music.html">the music-server guide</a>);
+              you get both from one <code>up</code>.
+            </p>
+            <div class="terminal reveal" aria-label="Bring up the Jellyfin server with Docker Compose">
+              <div class="terminal-bar">
+                <span>jellyfin-up.sh</span>
+                <button class="copy-button" type="button" data-copy-target="jf-up-code">Copy</button>
+              </div>
+              <pre id="jf-up-code"><code>cd servers
+cp .env.example .env
+$EDITOR .env          # set MUSIC_DIR, VIDEO_DIR, PUID/PGID, TZ, ports
+docker compose up -d          # starts Jellyfin (:8096) + Navidrome (:4533)
+docker compose ps             # jellyfin should show (healthy) within ~40 s</code></pre>
+            </div>
+            <p>
+              Your <code>VIDEO_DIR</code> is bind-mounted <strong>read-only</strong>
+              into the container as <code>/media</code>, so Jellyfin scans your
+              library but can never mutate it. Server state — users, libraries, and
+              <strong>watch history / resume points</strong> — lives in the named
+              <code>jellyfin-config</code> volume at <code>/config</code>
+              (<code>jellyfin-cache</code> holds regenerable thumbnails and
+              transcodes). Back up <code>jellyfin-config</code>; skip the cache.
+            </p>
+
+            <h3 class="setup-subhead">2. Create the admin &amp; a Movies library</h3>
+            <p>
+              Jellyfin runs its own first-launch wizard — there's no headless seed.
+              On the LAN, open <code>http://&lt;host&gt;:8096</code>, create the
+              admin user with a <strong>strong, unique</strong> password (don't
+              reuse the boombox's 6-digit LAN credential), and add a
+              <strong>Movies</strong> library pointed at <code>/media</code>
+              (that's your <code>VIDEO_DIR</code> inside the container).
+            </p>
+            <p class="setup-note">
+              The default Movies library only indexes files named
+              <code>Title (Year).ext</code> — e.g. <code>Sintel (2010).mp4</code>.
+              Anything else is silently skipped. For arbitrary files switch the
+              library to Mixed Content, or add a second library of the right type.
+              For direct play on modest hardware, encode to H.264 / AAC; 4K / HDR
+              forces a software transcode a small host can't keep up with.
+            </p>
+
+            <h3 class="setup-subhead">3. Reach it from outside your home (optional)</h3>
+            <p>
+              On the LAN you're done — the boombox needs only a reachable URL and
+              an API key. To watch when the boombox travels, expose the server
+              behind TLS. The shipped Cloudflare Tunnel overlay dials
+              <em>out</em>, so you open no router ports; tell Jellyfin its public
+              origin so generated links are correct:
+            </p>
+            <div class="terminal reveal" aria-label="Expose Jellyfin with the Cloudflare Tunnel overlay">
+              <div class="terminal-bar">
+                <span>jellyfin-expose.sh</span>
+                <button class="copy-button" type="button" data-copy-target="jf-expose-code">Copy</button>
+              </div>
+              <pre id="jf-expose-code"><code># Reach both servers from outside the home WITHOUT opening router ports
+docker compose -f docker-compose.yml -f docker-compose.cloudflared.yml up -d
+
+# Map the tunnel hostname to http://jellyfin:8096 in the Cloudflare Zero Trust
+# dashboard, then tell Jellyfin its public origin and re-up:
+echo 'JELLYFIN_PUBLISHED_URL=https://video.example.com' >> .env
+docker compose up -d
+# (Router port-forward + a reverse proxy with TLS is the other supported path.)</code></pre>
+            </div>
+            <p class="setup-note setup-warn">
+              Exposing a media server is the highest-risk step in the project.
+              Jellyfin uses an API key and native apps send passwords, so TLS is
+              non-negotiable — never expose it as raw HTTP. Use a strong, unique
+              password, keep the pinned image patched, and add rate-limiting at the
+              edge. A mesh VPN (Tailscale / WireGuard) or Cloudflare Access in
+              front is safer than a bare public endpoint. Full walkthrough in
+              <a class="setup-link" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/HOME-SERVERS.md">HOME-SERVERS.md</a>.
+            </p>
+
+            <h3 class="setup-subhead">4. Point the boombox at it</h3>
+            <p>
+              Every Jellyfin address on the boombox — the transport proxy, the
+              WATCH button's kiosk navigation, and both library-refresh triggers —
+              resolves through one variable, <code>BOOMBOX_JELLYFIN_BASE</code>.
+              Set it, drop in an API key created in the server's
+              <strong>Dashboard → API Keys</strong>, and restart the consumers:
+            </p>
+            <div class="terminal reveal" aria-label="Point the boombox at an off-device Jellyfin">
+              <div class="terminal-bar">
+                <span>jellyfin-connect.sh</span>
+                <button class="copy-button" type="button" data-copy-target="jf-connect-code">Copy</button>
+              </div>
+              <pre id="jf-connect-code"><code># 1. Point the device at your server (loaded by the units already)
+echo 'BOOMBOX_JELLYFIN_BASE=https://video.example.com' \
+    | sudo tee -a /etc/boombox/jellyfin.env
+
+# 2. Store the API key from Jellyfin Dashboard → API Keys (single line)
+printf '%s\n' 'PASTE_YOUR_JELLYFIN_API_KEY' \
+    | sudo tee /etc/boombox/jellyfin-api-key >/dev/null
+sudo chmod 0640 /etc/boombox/jellyfin-api-key
+
+# 3. Restart the consumers so they pick up the new base + key
+systemctl --user restart boombox-remote boombox-buttons</code></pre>
+            </div>
+            <p class="setup-note">
+              The on-device <a class="setup-link" href="setup.html#wizard">Setup Wizard</a>
+              has a Video step that does the same thing for you — this manual path
+              is the reference and the way to change it later. Set the one env var
+              and the whole device, touchscreen included, follows your server.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="connect" class="section setup-section">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Connect the boombox</p>
+            <h2>The wizard does the pairing — this page just stands up the server.</h2>
+          </div>
+          <div class="setup-content">
+            <p>
+              You don't wire the boombox up here. A fresh device auto-launches a
+              first-run <strong>Setup Wizard</strong> that walks through Wi-Fi, the
+              music library, video, and remotes — its Video step points the device
+              at the bundled server or your own. See the
+              <a class="setup-link" href="setup.html#video">Setup &amp; services</a>
+              reference for the wizard and every manual equivalent; don't duplicate
+              it, just follow it once the server is up.
+            </p>
+            <ul class="check-list">
+              <li>Setting up music too? The same <code>servers/</code> stack runs Navidrome — see the <a class="setup-link" href="music.html">music-server guide</a>.</li>
+              <li>Already have the boombox running? Change the target any time by editing <code>/etc/boombox/jellyfin.env</code> and restarting the consumers.</li>
+              <li>Prefer the bundled on-device server? It's the default — nothing to configure. See <a class="setup-link" href="setup.html#video">Setup → Video</a>.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="deeper" class="section setup-section setup-band">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-kicker">Go deeper</p>
+            <h2>The source docs behind the video server.</h2>
+          </div>
+          <div class="docs-grid">
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/VIDEO.md">
+              <span>Video</span>
+              <small>Jellyfin, Watch mode, native apps, file naming</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/blob/main/docs/HOME-SERVERS.md">
+              <span>Home servers</span>
+              <small>Run the servers off-device, expose them, back them up</small>
+            </a>
+            <a class="doc-link reveal" href="https://github.com/IntergalacticTech/Boombox/tree/main/servers">
+              <span>servers/ stack</span>
+              <small>The Docker Compose files, .env.example, and tunnel overlay</small>
+            </a>
+            <a class="doc-link reveal" href="setup.html">
+              <span>Setup &amp; services</span>
+              <small>The Setup Wizard and every manual step, end to end</small>
+            </a>
+            <a class="doc-link reveal" href="music.html">
+              <span>Music server</span>
+              <small>Set up Navidrome; more Subsonic servers later</small>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-layout">
+        <p>Boombox is MIT-licensed open-source software.</p>
+        <div class="footer-links">
+          <a href="index.html">Home</a>
+          <a href="setup.html">Setup</a>
+          <a href="https://github.com/IntergalacticTech/Boombox">Repository</a>
+          <a href="#top">Back to top</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>
