@@ -2,8 +2,16 @@
 
 ## Tooling
 Working in **HTML/React** (not Figma/Sketch/PSD). The interactive mockups live at
-`index.html` (a design canvas with all 6 skins side-by-side). Each skin is a
-self-contained JSX module: `direction-<skin>.jsx`.
+`index.html` (a design canvas with all 11 directions side-by-side — the 6
+shipped skins plus 5 design-only explorations). Each skin is a self-contained
+JSX module: `<skin>/source.jsx`.
+
+To view the canvas, serve this folder over HTTP (Babel fetches the `.jsx`
+files, so `file://` won't work):
+
+```
+python3 -m http.server 8123 -d skins   →   http://localhost:8123/
+```
 
 The Figma tokens-export plugin recipe doesn't apply here — but the JSX color/font
 constants are the source-of-truth and have been transcribed verbatim into each

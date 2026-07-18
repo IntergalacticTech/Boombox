@@ -376,10 +376,44 @@ def _sq(val: str) -> str:
     return val.replace("'", "'\\''")
 
 
+ASSOC_TIMEOUT_S = 18   # wrong passphrase ⇒ never reaches COMPLETED; fail here
+DHCP_TIMEOUT_S = 25
+
+
+def parse_wpa_state(status_output: str) -> str:
+    """Extract wpa_state from `wpa_cli status` output ('' when absent)."""
+    m = re.search(r"(?m)^wpa_state=(\S+)", status_output)
+    return m.group(1) if m else ""
+
+
+def _wifi_associated() -> bool:
+    """Is wlan0 associated AND through the WPA handshake? Prefer wpa_cli
+    (authoritative: COMPLETED only after the 4-way handshake, i.e. the
+    passphrase was right); fall back to `iw dev link` which can only prove
+    L2 association."""
+    try:
+        r = _run(["wpa_cli", "-i", WLAN_IF, "status"], timeout=5)
+        if r.returncode == 0 and r.stdout:
+            return parse_wpa_state(r.stdout) == "COMPLETED"
+    except Exception:
+        pass
+    try:
+        r = _run(["iw", "dev", WLAN_IF, "link"], timeout=5)
+        return r.stdout.startswith("Connected to")
+    except Exception:
+        return False
+
+
 def _ifupdown_join(ssid: str, psk: str) -> tuple[bool, str]:
     """Join on an ifupdown system (DietPi). Prefer DietPi's own wifidb —
     creds in its DB survive dietpi-config round-trips — falling back to a
-    plain wpa_supplicant.conf. Then enable wlan0 and ifup it."""
+    plain wpa_supplicant.conf.
+
+    ifup blocks on DHCP, and with a wrong passphrase DHCP never completes —
+    that made a bad password feel like a freeze. So run ifup in the
+    background and watch the WPA state: no COMPLETED within
+    ASSOC_TIMEOUT_S ⇒ tear down and answer quickly with a clear error."""
+    import time as _time
     try:
         if os.path.exists(DIETPI_WIFIDB):
             keymgr = "WPA-PSK" if psk else "NONE"
@@ -412,11 +446,33 @@ def _ifupdown_join(ssid: str, psk: str) -> tuple[bool, str]:
             pass
 
         _run(["ifdown", WLAN_IF], timeout=20)
-        r = _run(["ifup", WLAN_IF], timeout=60)
-        if r.returncode != 0:
-            err = (r.stderr or r.stdout).strip().replace(psk, "***") \
-                if psk else (r.stderr or r.stdout).strip()
-            return False, f"ifup failed: {err[:200]}"
+        proc = subprocess.Popen(["ifup", WLAN_IF], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+
+        deadline = _time.monotonic() + ASSOC_TIMEOUT_S
+        associated = False
+        while _time.monotonic() < deadline:
+            if _wifi_associated():
+                associated = True
+                break
+            # ifup exiting non-zero this early is its own failure signal.
+            if proc.poll() is not None and proc.returncode != 0:
+                break
+            _time.sleep(1)
+
+        if not associated:
+            proc.kill()
+            _run(["ifdown", WLAN_IF], timeout=20)
+            # Leave the radio up so the next scan works immediately.
+            _run(["ip", "link", "set", WLAN_IF, "up"], check=False)
+            return False, (f"Couldn't join “{ssid}” — check the passphrase "
+                           "and try again.")
+
+        # Handshake done (passphrase right) — give DHCP a bounded window.
+        try:
+            proc.wait(timeout=DHCP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
         return True, ""
     except Exception as e:
         return False, f"join failed: {e}"

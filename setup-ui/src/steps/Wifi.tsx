@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { WizardCtx } from "../App";
 import type { WifiNetwork, WifiScanResult, WifiJoinResult } from "../lib/types";
 import {
@@ -39,24 +39,54 @@ export function Wifi({ ctx }: { ctx: WizardCtx }) {
     return () => { alive = false; };
   }, [api, hasWifi]);
 
+  const [phase, setPhase] = useState<string | null>(null);
+  const settledRef = useRef(false);
+
   const join = async (net: WifiNetwork) => {
     setJoinError(null);
     setBusy(true);
+    settledRef.current = false;
+    setPhase(`Connecting to ${net.ssid}…`);
+    // Progress narration while the device associates + DHCPs (the backend
+    // answers a wrong passphrase in ~20s; success typically 5–15s).
+    const phases = window.setTimeout(
+      () => setPhase("Checking the passphrase…"), 6000);
+    const phases2 = window.setTimeout(
+      () => setPhase("Still working — getting an address…"), 22000);
+    // Hard cap: never leave the user staring at a spinner. The backend
+    // bounds itself well under this; tripping it means something is stuck.
+    const timer = window.setTimeout(() => {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      setBusy(false);
+      setJoinError("This is taking too long — the Boombox may still be "
+        + "trying. Give it a moment, then rescan or skip Wi-Fi.");
+    }, 60000);
     try {
       const r = await api.put<WifiJoinResult>("wifi", {
         ssid: net.ssid, psk: net.secured ? psk : "",
       });
+      if (settledRef.current) return;   // the hard cap already spoke
+      settledRef.current = true;
       setBusy(false);
       if (!r.ok || !r.connected) {
-        setJoinError(r.error ?? "Couldn't join that network.");
+        setJoinError(r.error
+          ?? `Couldn't join ${net.ssid} — check the passphrase and try again.`);
         return;
       }
       const info = { ssid: r.ssid ?? net.ssid, ip: r.ip ?? "" };
       setJoined(info);
       update({ wifiConnected: true, wifiSsid: info.ssid, wifiIp: info.ip });
     } catch {
+      if (settledRef.current) return;
+      settledRef.current = true;
       setBusy(false);
       setJoinError("Couldn't reach the Boombox. Try again.");
+    } finally {
+      window.clearTimeout(phases);
+      window.clearTimeout(phases2);
+      window.clearTimeout(timer);
+      setPhase(null);
     }
   };
 
@@ -123,7 +153,13 @@ export function Wifi({ ctx }: { ctx: WizardCtx }) {
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{
+        display: "flex", flexDirection: "column", gap: 8,
+        // Lock the list while a join is in flight so taps elsewhere can't
+        // stack a second attempt on top of the first.
+        pointerEvents: busy ? "none" : "auto",
+        opacity: busy ? 0.55 : 1,
+      }}>
         {networks.map((net) => {
           const isSel = selected?.ssid === net.ssid;
           return (
@@ -173,6 +209,12 @@ export function Wifi({ ctx }: { ctx: WizardCtx }) {
                   >
                     {busy ? "Joining…" : "Join"}
                   </PrimaryButton>
+                  {isSel && phase && (
+                    <div style={{ color: "var(--ink2)", fontSize: 13 }}>
+                      {phase}
+                    </div>
+                  )}
+                  {isSel && joinError && <ErrorText>{joinError}</ErrorText>}
                 </div>
               )}
             </div>
@@ -180,7 +222,11 @@ export function Wifi({ ctx }: { ctx: WizardCtx }) {
         })}
       </div>
 
-      {joinError && <ErrorText>{joinError}</ErrorText>}
+      {/* Errors for open networks (no inline panel to anchor to). */}
+      {joinError && !selected?.secured && <ErrorText>{joinError}</ErrorText>}
+      {phase && !selected?.secured && (
+        <div style={{ color: "var(--ink2)", fontSize: 13 }}>{phase}</div>
+      )}
 
       <NavRow
         onBack={back}

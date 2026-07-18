@@ -35,6 +35,9 @@ serve different purposes and intentionally do not share code.
 
 ```
 skins/                       ← DESIGN-TIME (designer source-of-truth)
+├── index.html               design canvas: all directions side-by-side
+├── design-canvas.jsx        pan/zoom canvas harness (sections, artboards, focus)
+├── app.jsx                  wires every direction into the canvas
 ├── _shared/shared.jsx       <Icon>, demo tracks, fake VU
 ├── block95/
 │   ├── source.jsx           full mockup as one JSX file (no build step)
@@ -54,9 +57,17 @@ ui/src/skins/                ← RUNTIME (what the boombox actually renders)
 
 **`/skins/` (design)** is what a designer iterates on. Each skin is a single
 self-contained `.jsx` mockup that renders at 1280×800. No build, no install,
-no React-dev-tools. You open `index.html` (an in-repo design canvas, not
-checked in here yet) or screenshot it directly. The fonts are listed with
-license URLs in `fonts.json` (all OFL-1.1, embed freely).
+no React-dev-tools. Open the in-repo design canvas by serving the folder
+(Babel fetches the `.jsx` files, so `file://` won't work):
+
+```
+python3 -m http.server 8123 -d skins   →   http://localhost:8123/
+```
+
+The canvas holds all 11 design directions: the 6 shipped skins plus 5
+design-only explorations (VFD-88, Flight Deck, Midnight FM, Zine, Boom/OS)
+that have no runtime counterpart yet. The fonts are listed with license
+URLs in `fonts.json` (all OFL-1.1, embed freely).
 
 **`/ui/src/skins/` (runtime)** is the live boombox UI. Each skin is a `.tsx`
 component that subscribes to real Mopidy/MPRIS state via the hooks in

@@ -140,3 +140,10 @@ def test_parse_iw_scan_empty():
 
 def test_sq_escapes_single_quotes():
     assert helper._sq("it's") == "it'\\''s"
+
+
+def test_parse_wpa_state():
+    out = "bssid=aa:bb\nssid=HomeNet\nwpa_state=COMPLETED\nip_address=10.0.5.141"
+    assert helper.parse_wpa_state(out) == "COMPLETED"
+    assert helper.parse_wpa_state("wpa_state=4WAY_HANDSHAKE\n") == "4WAY_HANDSHAKE"
+    assert helper.parse_wpa_state("no state here") == ""

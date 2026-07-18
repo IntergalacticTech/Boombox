@@ -14,5 +14,17 @@
   "Archivo Black": {
     "license": "OFL-1.1",
     "url": "https://github.com/Omnibus-Type/Archivo"
+  },
+  "Space Mono": {
+    "license": "OFL-1.1",
+    "url": "https://github.com/googlefonts/spacemono"
+  },
+  "DM Mono": {
+    "license": "OFL-1.1",
+    "url": "https://github.com/googlefonts/dm-mono"
+  },
+  "VT323": {
+    "license": "OFL-1.1",
+    "url": "https://github.com/phoikoi/VT323"
   }
 }
