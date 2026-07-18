@@ -7,6 +7,11 @@ PartOf=graphical-session.target
 Type=simple
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=WAYLAND_DISPLAY=wayland-0
+# A hard-killed Chromium leaves Singleton* symlinks pointing at a dead PID,
+# and the next launch refuses the "in-use" profile — crash-looping the kiosk
+# on a black screen. This unit is the only thing that launches this profile,
+# so clearing the locks before every start is always safe.
+ExecStartPre=/bin/rm -f %h/.config/chromium/SingletonLock %h/.config/chromium/SingletonSocket %h/.config/chromium/SingletonCookie
 ## --app= + --start-maximized instead of --kiosk: --kiosk triggers
 ## xdg_toplevel.set_fullscreen on Wayland, and labwc raises fullscreen
 ## surfaces above the wlr_layer_shell overlay where wvkbd lives — i.e.
