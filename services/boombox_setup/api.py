@@ -33,6 +33,8 @@ class Context(Protocol):
     def is_complete(self) -> bool: ...
     def mark_complete(self) -> None: ...
     def lan_host(self) -> str: ...
+    def get_skin(self) -> str | None: ...
+    def set_skin(self, skin_id: str) -> bool: ...
 
     # privileged helper (sudo) + post-apply user-unit restarts
     async def apply(self, payload: dict) -> dict: ...
@@ -65,8 +67,9 @@ def _token_from(req: web.Request) -> str:
 
 @web.middleware
 async def _auth_mw(req: web.Request, handler):
-    # Open routes: status (read-only) and the OPTIONS preflight.
-    open_paths = {"/api/setup/status"}
+    # Open routes: status (read-only), code→token redemption (gated by the
+    # on-screen code itself, not the middleware), and the OPTIONS preflight.
+    open_paths = {"/api/setup/status", "/api/setup/session/redeem"}
     if req.method == "OPTIONS" or req.path in open_paths:
         return await handler(req)
 
@@ -91,6 +94,8 @@ def build_app(ctx: Context) -> web.Application:
     r = app.router
     r.add_get("/api/setup/status", _status)
     r.add_post("/api/setup/session", _session_start)
+    r.add_post("/api/setup/session/redeem", _session_redeem)
+    r.add_put("/api/setup/skin", _skin_put)
     r.add_put("/api/setup/identity", _identity)
     r.add_get("/api/setup/wifi/scan", _wifi_scan)
     r.add_put("/api/setup/wifi", _wifi_join)
@@ -124,16 +129,48 @@ async def _status(req: web.Request) -> web.Response:
         "music": music,
         "video": ctx.video_status(),
         "remote": remote,
+        "skin": ctx.get_skin(),
     })
 
 
 async def _session_start(req: web.Request) -> web.Response:
     sess: SetupSession = req.app["session"]
     ctx: Context = req.app["ctx"]
-    token, expires_at = sess.mint()
+    token, code, expires_at = sess.mint()
     host = ctx.lan_host()
-    url = f"http://{host}:{ctx.lan_port}/setup/#t={token}"
-    return web.json_response({"token": token, "expires_at": expires_at, "url": url})
+    base_url = f"http://{host}:{ctx.lan_port}/setup/"
+    return web.json_response({
+        "token": token,
+        "code": code,
+        "expires_at": expires_at,
+        # Full URL (QR) and the typable base + code the kiosk displays.
+        "url": f"{base_url}#t={token}",
+        "base_url": base_url,
+    })
+
+
+async def _session_redeem(req: web.Request) -> web.Response:
+    """Exchange the on-screen 6-digit code for the setup token — the typed-URL
+    path for phones that can't scan the QR. Open route; the code is the gate."""
+    sess: SetupSession = req.app["session"]
+    body = await req.json()
+    code = str(body.get("code", "")).strip()
+    token = sess.redeem_code(code)
+    if token is None:
+        return web.json_response(
+            {"ok": False, "error": "wrong or expired code — check the "
+             "boombox screen and try again"}, status=403)
+    return web.json_response({"ok": True, "token": token})
+
+
+async def _skin_put(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    body = await req.json()
+    skin_id = str(body.get("id", "")).strip()
+    if not ctx.set_skin(skin_id):
+        return web.json_response({"ok": False, "error": "invalid skin id"},
+                                 status=400)
+    return web.json_response({"ok": True, "skin": skin_id})
 
 
 async def _identity(req: web.Request) -> web.Response:

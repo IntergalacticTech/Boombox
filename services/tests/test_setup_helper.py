@@ -102,3 +102,41 @@ def test_jellyfin_remote_requires_valid_base():
 def test_wifi_join_validates_ssid_and_psk():
     assert helper.action_wifi_join({"ssid": "", "psk": ""})["ok"] is False
     assert helper.action_wifi_join({"ssid": "Net", "psk": "short"})["ok"] is False
+
+
+# ---- parse_iw_scan (DietPi path: no NetworkManager, no live supplicant) ------
+IW_SAMPLE = """\
+BSS aa:bb:cc:dd:ee:01(on wlan0)
+\tsignal: -45.00 dBm
+\tSSID: HomeNet
+\tRSN:\t * Version: 1
+BSS aa:bb:cc:dd:ee:02(on wlan0)
+\tsignal: -72.00 dBm
+\tSSID: HomeNet
+\tRSN:\t * Version: 1
+BSS aa:bb:cc:dd:ee:03(on wlan0)
+\tsignal: -60.00 dBm
+\tSSID: Open Guest
+BSS aa:bb:cc:dd:ee:04(on wlan0)
+\tsignal: -80.00 dBm
+\tSSID: \\x00\\x00\\x00
+\tRSN:\t * Version: 1
+"""
+
+
+def test_parse_iw_scan_dedup_sort_and_security():
+    nets = helper.parse_iw_scan(IW_SAMPLE)
+    assert [n["ssid"] for n in nets] == ["HomeNet", "Open Guest"]
+    home = nets[0]
+    assert home["signal"] == 100  # -45 dBm clamps to 100 via 2*(dbm+100)
+    assert home["secured"] is True
+    assert nets[1]["secured"] is False
+    assert nets[1]["signal"] == 80
+
+
+def test_parse_iw_scan_empty():
+    assert helper.parse_iw_scan("") == []
+
+
+def test_sq_escapes_single_quotes():
+    assert helper._sq("it's") == "it'\\''s"

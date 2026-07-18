@@ -35,7 +35,7 @@ describe("parseHashToken", () => {
 describe("SetupApi auth attachment", () => {
   it("kiosk (no token): sends no Authorization header and no ?t= query", async () => {
     const fetchFn = mockFetch({ ok: true });
-    const api = makeApi(""); // no hash token → kiosk
+    const api = makeApi("", "localhost"); // on-device, no token → kiosk
     expect(api.isKiosk).toBe(true);
 
     await api.get("status");
@@ -49,7 +49,7 @@ describe("SetupApi auth attachment", () => {
 
   it("phone (token): attaches Bearer header AND ?t= query on every request", async () => {
     const fetchFn = mockFetch({ ok: true });
-    const api = makeApi("#t=TOK42");
+    const api = makeApi("#t=TOK42", "192.168.1.50"); // LAN client
     expect(api.isKiosk).toBe(false);
     expect(api.token).toBe("TOK42");
 
@@ -80,5 +80,23 @@ describe("SetupApi auth attachment", () => {
     const api = makeApi("");
     const r = await api.put<{ ok: boolean; error: string }>("identity", {});
     expect(r).toEqual({ ok: false, error: "bad_name" });
+  });
+});
+
+describe("adoptToken (typed-URL code redemption)", () => {
+  it("attaches auth after adopting a token, and isKiosk stays hostname-based", async () => {
+    const fetchFn = mockFetch({ ok: true });
+    const api = makeApi("", "192.168.1.50"); // LAN visitor, no hash token
+    expect(api.isKiosk).toBe(false);
+    expect(api.token).toBeNull();
+
+    api.adoptToken("CODE-TOK");
+    await api.get("status");
+
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(url).toBe("/api/setup/status?t=CODE-TOK");
+    expect((init.headers as Record<string, string>).Authorization)
+      .toBe("Bearer CODE-TOK");
+    expect(api.isKiosk).toBe(false);
   });
 });

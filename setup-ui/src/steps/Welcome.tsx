@@ -7,16 +7,16 @@ import { PrimaryButton, StepBody } from "../components/ui";
 /** Step 1 — greet and, on the kiosk, offer a QR to finish from a phone. */
 export function Welcome({ ctx }: { ctx: WizardCtx }) {
   const { api, status, next } = ctx;
-  const [handoffUrl, setHandoffUrl] = useState<string | null>(null);
+  const [handoff, setHandoff] = useState<SessionResult | null>(null);
 
   useEffect(() => {
-    // Only the kiosk (no hash token) may mint a session for the handoff QR;
-    // from a phone POST session 403s, so we simply skip it.
+    // Only the kiosk may mint a session for the phone handoff; from a phone
+    // POST session 403s, so we simply skip it.
     if (!api.isKiosk) return;
     let alive = true;
     api.post<SessionResult>("session")
-      .then((r) => { if (alive) setHandoffUrl(r.url); })
-      .catch(() => { /* QR is optional — kiosk setup works without it */ });
+      .then((r) => { if (alive) setHandoff(r); })
+      .catch(() => { /* handoff is optional — kiosk setup works without it */ });
     return () => { alive = false; };
   }, [api]);
 
@@ -26,28 +26,48 @@ export function Welcome({ ctx }: { ctx: WizardCtx }) {
       subtitle="Let's get it set up. This takes a couple of minutes."
     >
       <div style={{
-        padding: 16, borderRadius: 12, background: "var(--panel)",
-        border: "1px solid var(--rule)",
+        padding: "10px 14px", borderRadius: 12, background: "var(--panel)",
+        border: "1px solid var(--rule)", display: "flex",
+        alignItems: "baseline", gap: 10,
       }}>
-        <div style={{ fontSize: 13, color: "var(--ink2)" }}>This device</div>
-        <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>
+        <span style={{ fontSize: 13, color: "var(--ink2)" }}>This device</span>
+        <span style={{ fontSize: 17, fontWeight: 700 }}>
           {status.identity.name}
-        </div>
-        <div style={{ fontSize: 13, color: "var(--ink2)", marginTop: 2 }}>
+        </span>
+        <span style={{ fontSize: 13, color: "var(--ink2)" }}>
           {status.identity.hostname}
-        </div>
+        </span>
       </div>
 
-      {handoffUrl && (
+      {handoff && (
         <div style={{
-          display: "flex", flexDirection: "column", alignItems: "center",
-          gap: 10, paddingTop: 4,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          gap: 18,
         }}>
-          <div style={{ background: "#fff", padding: 12, borderRadius: 8 }}>
-            <QRCodeSVG value={handoffUrl} size={168} />
+          <div style={{
+            background: "#fff", padding: 8, borderRadius: 8, flex: "none",
+          }}>
+            <QRCodeSVG value={handoff.url} size={116} />
           </div>
-          <div style={{ fontSize: 13, color: "var(--ink2)", textAlign: "center" }}>
-            Or scan to finish setup from your phone.
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+            <div style={{ fontSize: 13, color: "var(--ink2)" }}>
+              Scan to set up from your phone — or visit
+            </div>
+            <div style={{
+              fontFamily: "var(--mono)", fontSize: 15,
+              color: "var(--accent2)", overflowWrap: "anywhere",
+            }}>
+              {handoff.base_url}
+            </div>
+            <div style={{ fontSize: 13, color: "var(--ink2)" }}>
+              and enter code{" "}
+              <span style={{
+                fontFamily: "var(--mono)", fontSize: 16, fontWeight: 700,
+                color: "var(--ink)", letterSpacing: "0.18em",
+              }}>
+                {handoff.code}
+              </span>
+            </div>
           </div>
         </div>
       )}

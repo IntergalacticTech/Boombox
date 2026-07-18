@@ -10,6 +10,7 @@ const STATUS = {
   music: { url: "", username: "", configured: false, reachable: false },
   video: { mode: "builtin", base: "", has_key: false },
   remote: { enabled: false, peers: [] },
+  skin: null,
 };
 
 /** Route the mocked fetch by URL so the wizard can load status + mint a
@@ -20,7 +21,9 @@ function routeFetch() {
     const body = url.startsWith("/api/setup/status")
       ? STATUS
       : url.startsWith("/api/setup/session")
-        ? { token: "t", expires_at: "", url: "http://boombox.local:8090/setup/#t=t" }
+        ? { token: "t", code: "123456", expires_at: "",
+            url: "http://boombox.local:8090/setup/#t=t",
+            base_url: "http://boombox.local:8090/setup/" }
         : { ok: true };
     return Promise.resolve({
       ok: true, status: 200, text: async () => JSON.stringify(body),
@@ -41,7 +44,7 @@ describe("Setup wizard", () => {
     await waitFor(() =>
       expect(screen.getByText(/welcome to your boombox/i)).toBeTruthy());
     expect(screen.getByText("boombox.local")).toBeTruthy();
-    expect(screen.getByText(/step 1 of 7/i)).toBeTruthy();
+    expect(screen.getByText(/step 1 of 8/i)).toBeTruthy();
   });
 
   it("advances from Welcome to Name when Get started is clicked", async () => {
@@ -52,7 +55,7 @@ describe("Setup wizard", () => {
     fireEvent.click(screen.getByRole("button", { name: /get started/i }));
     await waitFor(() =>
       expect(screen.getByText(/name your boombox/i)).toBeTruthy());
-    expect(screen.getByText(/step 2 of 7/i)).toBeTruthy();
+    expect(screen.getByText(/step 2 of 8/i)).toBeTruthy();
     // The name field is prefilled from status.identity.name.
     expect((screen.getByLabelText(/device name/i) as HTMLInputElement).value)
       .toBe("Boombox");

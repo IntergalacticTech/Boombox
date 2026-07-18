@@ -30,10 +30,13 @@ export function Done({ ctx }: { ctx: WizardCtx }) {
     try {
       await api.post<OkResult>("complete");
       setBusy(false);
-      // On the kiosk, return to the player. On a phone, show a confirmation —
-      // the kiosk itself will move on.
+      // On the kiosk, return to the player — carrying the chosen skin via
+      // the player's ?skin= query (which it persists to localStorage). On a
+      // phone, show a confirmation; the kiosk polls status and moves on
+      // by itself.
       if (api.isKiosk) {
-        window.location.href = "/";
+        const q = summary.skin ? `?skin=${encodeURIComponent(summary.skin)}` : "";
+        window.location.href = `/${q}`;
         return;
       }
       setFinished(true);
@@ -74,6 +77,8 @@ export function Done({ ctx }: { ctx: WizardCtx }) {
              value={summary.musicConfigured ? "Connected" : "Not configured"} />
         <Row label="Video"
              value={summary.videoMode === "remote" ? "Own server" : "Built-in Jellyfin"} />
+        <Row label="Skin"
+             value={summary.skin || "Default"} />
         <Row label="Phone remote"
              value={summary.remoteEnabled ? "Enabled" : "Off"} />
       </div>

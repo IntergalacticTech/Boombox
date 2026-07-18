@@ -140,9 +140,16 @@ export function Wifi({ ctx }: { ctx: WizardCtx }) {
                 }}
               >
                 <span>{net.ssid}</span>
-                <span aria-hidden style={{ color: "var(--ink2)" }}>
-                  {net.secured ? "🔒" : ""}
-                </span>
+                {/* Inline SVG padlock — the kiosk font has no emoji glyphs. */}
+                {net.secured && (
+                  <svg aria-hidden width="14" height="16" viewBox="0 0 14 16"
+                       style={{ flex: "none" }}>
+                    <rect x="1" y="7" width="12" height="8" rx="2"
+                          fill="var(--ink2)" />
+                    <path d="M4 7V5a3 3 0 0 1 6 0v2" fill="none"
+                          stroke="var(--ink2)" strokeWidth="2" />
+                  </svg>
+                )}
               </button>
               {isSel && net.secured && (
                 <div style={{

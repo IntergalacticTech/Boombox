@@ -36,6 +36,15 @@ class FakeContext:
     def lan_host(self):
         return "192.168.1.81"
 
+    def get_skin(self):
+        return getattr(self, "skin", None)
+
+    def set_skin(self, skin_id):
+        if not skin_id.isidentifier() and "-" not in skin_id:
+            return False
+        self.skin = skin_id
+        return True
+
     async def apply(self, payload):
         self.applied.append(payload)
         return self.apply_result
@@ -178,3 +187,40 @@ async def test_complete_marks_and_persists(client):
     r = await c.post("/api/setup/complete", headers=LOCAL)
     assert r.status == 200
     assert ctx.complete is True
+
+
+@pytest.mark.asyncio
+async def test_session_includes_code_and_base_url(client):
+    c, _ = client
+    r = await c.post("/api/setup/session", headers=LOCAL)
+    body = await r.json()
+    assert len(body["code"]) == 6 and body["code"].isdigit()
+    assert body["base_url"] == "http://192.168.1.81:8090/setup/"
+    assert body["url"].startswith(body["base_url"] + "#t=")
+
+
+@pytest.mark.asyncio
+async def test_code_redeem_from_lan_grants_token(client):
+    c, ctx = client
+    r = await c.post("/api/setup/session", headers=LOCAL)
+    minted = await r.json()
+    # Wrong code → 403, and it's an open route (no token needed to try).
+    r = await c.post("/api/setup/session/redeem", json={"code": "999999" if minted["code"] != "999999" else "111111"}, headers=LAN)
+    assert r.status == 403
+    # Right code → the token, which then authorizes a mutation from the LAN.
+    r = await c.post("/api/setup/session/redeem", json={"code": minted["code"]}, headers=LAN)
+    assert r.status == 200
+    token = (await r.json())["token"]
+    r = await c.put("/api/setup/skin", json={"id": "deckos"},
+                    headers={**LAN, "Authorization": f"Bearer {token}"})
+    assert r.status == 200
+    assert ctx.skin == "deckos"
+
+
+@pytest.mark.asyncio
+async def test_skin_put_and_status_roundtrip(client):
+    c, ctx = client
+    r = await c.put("/api/setup/skin", json={"id": "tapeshift"}, headers=LOCAL)
+    assert r.status == 200
+    r = await c.get("/api/setup/status", headers=LAN)
+    assert (await r.json())["skin"] == "tapeshift"

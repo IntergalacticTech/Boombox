@@ -20,7 +20,7 @@ function makeCtx(overrides: Partial<WizardCtx> = {}): {
     summary: {
       name: "Boombox", rebootRequired: false, wifiConnected: false,
       wifiSsid: "", wifiIp: "", musicConfigured: false,
-      videoMode: "builtin", remoteEnabled: false,
+      videoMode: "builtin", skin: "", remoteEnabled: false,
     },
     update: vi.fn(),
     next,

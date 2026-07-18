@@ -71,6 +71,48 @@ def slugify(name: str) -> str:
     return s or "boombox"
 
 
+def parse_iw_scan(output: str) -> list[dict]:
+    """Parse `iw dev wlan0 scan` output into the same shape as nmcli's.
+
+    iw needs no running wpa_supplicant, which matters on DietPi where Wi-Fi
+    may be entirely unconfigured at setup time. Signal is dBm; map roughly to
+    0–100 with the common 2*(dBm+100) rule. Secured = RSN/WPA block or the
+    Privacy capability bit (WEP).
+    """
+    best: dict[str, dict] = {}
+    ssid = None
+    sig = 0
+    secured = False
+
+    def flush():
+        if not ssid:
+            return
+        prev = best.get(ssid)
+        if prev is None or sig > prev["signal"]:
+            best[ssid] = {"ssid": ssid, "signal": sig, "secured": secured}
+
+    for line in output.splitlines():
+        if line.startswith("BSS "):
+            flush()
+            ssid, sig, secured = None, 0, False
+            continue
+        s = line.strip()
+        if s.startswith("SSID:"):
+            val = s[5:].strip()
+            # iw escapes non-printables as \xNN; hidden SSIDs are empty.
+            if val and "\\x00" not in val:
+                ssid = val
+        elif s.startswith("signal:"):
+            m = re.search(r"(-?\d+(?:\.\d+)?)\s*dBm", s)
+            if m:
+                dbm = float(m.group(1))
+                sig = max(0, min(100, int(2 * (dbm + 100))))
+        elif s.startswith(("RSN:", "WPA:")) or "Privacy" in s:
+            secured = True
+    flush()
+    return sorted(best.values(), key=lambda n: n["signal"], reverse=True)
+
+
 def parse_nmcli_scan(output: str) -> list[dict]:
     """Parse `nmcli -t -f SSID,SIGNAL,SECURITY dev wifi list`.
 
@@ -267,6 +309,12 @@ def _restart_system_units(units: list[str]) -> None:
             pass
 
 
+DIETPI_WIFIDB = "/boot/dietpi/func/dietpi-wifidb"
+DIETPI_WIFI_DB_FILE = "/var/lib/dietpi/dietpi-wifi.db"
+INTERFACES_FILE = "/etc/network/interfaces"
+WPA_CONF = "/etc/wpa_supplicant/wpa_supplicant.conf"
+
+
 def action_wifi_scan(_body: dict) -> dict:
     if not _wlan_present():
         return {"ok": True, "networks": [], "no_wifi": True}
@@ -278,27 +326,14 @@ def action_wifi_scan(_body: dict) -> dict:
             return {"ok": True, "networks": parse_nmcli_scan(r.stdout)}
         except Exception as e:
             return {"ok": False, "error": f"scan failed: {e}"}
-    # wpa_cli fallback
+    # No NetworkManager (DietPi): scan with iw, which needs no running
+    # wpa_supplicant. We run as root, so /usr/sbin is on PATH.
     try:
-        _run(["wpa_cli", "-i", WLAN_IF, "scan"], timeout=10)
-        r = _run(["wpa_cli", "-i", WLAN_IF, "scan_results"], timeout=10)
-        nets: dict[str, dict] = {}
-        for line in r.stdout.splitlines()[1:]:
-            cols = line.split("\t")
-            if len(cols) >= 5 and cols[4]:
-                ssid = cols[4]
-                sig = 0
-                try:
-                    sig = int(cols[2])
-                except ValueError:
-                    pass
-                secured = "WPA" in cols[3] or "WEP" in cols[3]
-                if ssid not in nets or sig > nets[ssid]["signal"]:
-                    nets[ssid] = {"ssid": ssid, "signal": sig,
-                                  "secured": secured}
-        return {"ok": True,
-                "networks": sorted(nets.values(),
-                                   key=lambda n: n["signal"], reverse=True)}
+        r = _run(["iw", "dev", WLAN_IF, "scan"], timeout=30)
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout).strip()
+            return {"ok": False, "error": f"scan failed: {err[:200]}"}
+        return {"ok": True, "networks": parse_iw_scan(r.stdout)}
     except Exception as e:
         return {"ok": False, "error": f"scan failed: {e}"}
 
@@ -328,32 +363,74 @@ def action_wifi_join(body: dict) -> dict:
         except Exception as e:
             return {"ok": False, "error": f"join failed: {e}"}
     else:
-        ok, err = _wpa_join(ssid, psk)
+        ok, err = _ifupdown_join(ssid, psk)
         if not ok:
             return {"ok": False, "error": err}
 
-    ip = _wlan_ip()
+    ip = _wait_wlan_ip(20)
     return {"ok": True, "connected": bool(ip), "ssid": ssid, "ip": ip}
 
 
-def _wpa_join(ssid: str, psk: str) -> tuple[bool, str]:
+def _sq(val: str) -> str:
+    """Escape a value for a single-quoted bash string ('…')."""
+    return val.replace("'", "'\\''")
+
+
+def _ifupdown_join(ssid: str, psk: str) -> tuple[bool, str]:
+    """Join on an ifupdown system (DietPi). Prefer DietPi's own wifidb —
+    creds in its DB survive dietpi-config round-trips — falling back to a
+    plain wpa_supplicant.conf. Then enable wlan0 and ifup it."""
     try:
-        def wpa(*args):
-            return _run(["wpa_cli", "-i", WLAN_IF, *args], timeout=10).stdout.strip()
-        nid = wpa("add_network")
-        if not nid.isdigit():
-            return False, "wpa_cli add_network failed"
-        wpa("set_network", nid, "ssid", f'"{ssid}"')
-        if psk:
-            wpa("set_network", nid, "psk", f'"{psk}"')
+        if os.path.exists(DIETPI_WIFIDB):
+            keymgr = "WPA-PSK" if psk else "NONE"
+            _atomic_write(DIETPI_WIFI_DB_FILE, (
+                f"aWIFI_SSID[0]='{_sq(ssid)}'\n"
+                f"aWIFI_KEY[0]='{_sq(psk)}'\n"
+                f"aWIFI_KEYMGR[0]='{keymgr}'\n"
+            ), 0o600)
+            r = _run([DIETPI_WIFIDB, "1"], timeout=60)
+            if r.returncode != 0:
+                err = (r.stderr or r.stdout).strip().replace(psk, "***") \
+                    if psk else (r.stderr or r.stdout).strip()
+                return False, f"dietpi-wifidb failed: {err[:200]}"
         else:
-            wpa("set_network", nid, "key_mgmt", "NONE")
-        wpa("enable_network", nid)
-        wpa("select_network", nid)
-        wpa("save_config")
+            net = (f'network={{\n\tssid="{ssid}"\n\tpsk="{psk}"\n}}\n' if psk
+                   else f'network={{\n\tssid="{ssid}"\n\tkey_mgmt=NONE\n}}\n')
+            _atomic_write(WPA_CONF,
+                          "ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev\n"
+                          "update_config=1\n" + net, 0o600)
+
+        # DietPi comments out `allow-hotplug wlan0` when Wi-Fi is disabled;
+        # re-enable so the interface comes up now and on every boot.
+        try:
+            with open(INTERFACES_FILE) as f:
+                iface = f.read()
+            new = re.sub(r"(?m)^#\s*(allow-hotplug\s+wlan0)", r"\1", iface)
+            if new != iface:
+                _atomic_write(INTERFACES_FILE, new, 0o644)
+        except OSError:
+            pass
+
+        _run(["ifdown", WLAN_IF], timeout=20)
+        r = _run(["ifup", WLAN_IF], timeout=60)
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout).strip().replace(psk, "***") \
+                if psk else (r.stderr or r.stdout).strip()
+            return False, f"ifup failed: {err[:200]}"
         return True, ""
     except Exception as e:
-        return False, f"wpa_cli join failed: {e}"
+        return False, f"join failed: {e}"
+
+
+def _wait_wlan_ip(timeout_s: int) -> str:
+    import time as _time
+    deadline = _time.monotonic() + timeout_s
+    while _time.monotonic() < deadline:
+        ip = _wlan_ip()
+        if ip:
+            return ip
+        _time.sleep(1)
+    return _wlan_ip()
 
 
 def _wlan_present() -> bool:

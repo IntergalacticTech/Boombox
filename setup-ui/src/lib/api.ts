@@ -28,11 +28,15 @@ export function parseHashToken(hash: string): string | null {
 }
 
 export interface SetupApi {
-  /** The active session token, or null on the kiosk. */
+  /** The active session token, or null when none (kiosk, or a phone that
+   *  hasn't redeemed the on-screen code yet). */
   readonly token: string | null;
-  /** True when running on the kiosk (no hash token) — the only context that
-   *  may mint a session for the phone-handoff QR. */
+  /** True when running on the device itself (localhost kiosk) — the only
+   *  context that may mint a session for the phone-handoff QR, and the one
+   *  that never needs a token. */
   readonly isKiosk: boolean;
+  /** Adopt a token obtained after load (the typed-URL + code path). */
+  adoptToken(token: string): void;
   get<T = unknown>(path: string): Promise<T>;
   post<T = unknown>(path: string, body?: unknown): Promise<T>;
   put<T = unknown>(path: string, body?: unknown): Promise<T>;
@@ -48,15 +52,26 @@ export class ApiError extends Error {
   }
 }
 
-class HttpSetupApi implements SetupApi {
-  readonly token: string | null;
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
-  constructor(token: string | null) {
+class HttpSetupApi implements SetupApi {
+  token: string | null;
+  private readonly hostname: string;
+
+  constructor(token: string | null, hostname: string) {
     this.token = token;
+    this.hostname = hostname;
   }
 
   get isKiosk(): boolean {
-    return this.token === null;
+    // Kiosk = running on the device itself. Token presence is NOT the
+    // signal — a phone that redeemed the on-screen code has a token but is
+    // still a LAN client.
+    return LOCAL_HOSTS.has(this.hostname);
+  }
+
+  adoptToken(token: string): void {
+    this.token = token;
   }
 
   /** Build the same-origin URL, appending `?t=<token>` when authenticated. */
@@ -109,10 +124,13 @@ class HttpSetupApi implements SetupApi {
   }
 }
 
-/** Build a client, reading the hash token once. Pass an explicit hash for
- *  tests; defaults to the live location. */
-export function makeApi(hash: string = location.hash): SetupApi {
-  return new HttpSetupApi(parseHashToken(hash));
+/** Build a client, reading the hash token once. Pass an explicit hash and
+ *  hostname for tests; defaults to the live location. */
+export function makeApi(
+  hash: string = location.hash,
+  hostname: string = location.hostname,
+): SetupApi {
+  return new HttpSetupApi(parseHashToken(hash), hostname);
 }
 
 const ApiContext = createContext<SetupApi | null>(null);

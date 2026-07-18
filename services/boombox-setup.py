@@ -43,6 +43,12 @@ BOOMBOX_ENV = Path(os.environ.get("BOOMBOX_ENV_FILE", "/etc/boombox/boombox.env"
 JELLYFIN_ENV = Path(os.environ.get("BOOMBOX_JELLYFIN_ENV", "/etc/boombox/jellyfin.env"))
 COMPLETE_MARKER = Path(os.environ.get("BOOMBOX_SETUP_MARKER",
                                       "/opt/boombox/state/setup-complete"))
+SKIN_FILE = Path(os.environ.get("BOOMBOX_SETUP_SKIN",
+                                "/opt/boombox/state/setup-skin"))
+# Kiosk skins live in the ui app's registry; the wizard offers the same set.
+# Kept as a permissive pattern rather than a hard list so a new skin doesn't
+# need a boombox-setup change to be selectable.
+_SKIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 # The LAN-facing web port (for the QR URL). web-auth.env sets BOOMBOX_WEB_PORT;
 # accept BOOMBOX_LAN_PORT too for parity with boombox-remote's mDNS port.
 LAN_PORT = int(os.environ.get("BOOMBOX_WEB_PORT")
@@ -143,6 +149,28 @@ class ServiceContext:
             COMPLETE_MARKER.write_text("1\n")
         except OSError as e:
             log.warning("could not write completion marker: %s", e)
+
+    def get_skin(self) -> str | None:
+        """The skin chosen in the wizard, if any. The kiosk player itself
+        reads localStorage / ?skin= — this file exists so a phone-side choice
+        can reach the kiosk (the kiosk wizard polls status and redirects to
+        /?skin=<id> on completion)."""
+        try:
+            v = SKIN_FILE.read_text().strip()
+            return v or None
+        except OSError:
+            return None
+
+    def set_skin(self, skin_id: str) -> bool:
+        if not _SKIN_ID_RE.match(skin_id):
+            return False
+        try:
+            SKIN_FILE.parent.mkdir(parents=True, exist_ok=True)
+            SKIN_FILE.write_text(skin_id + "\n")
+            return True
+        except OSError as e:
+            log.warning("could not persist skin choice: %s", e)
+            return False
 
     # ---- privileged helper ------------------------------------------------
     async def apply(self, payload: dict) -> dict:

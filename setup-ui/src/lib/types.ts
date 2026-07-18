@@ -45,12 +45,21 @@ export interface Status {
   music: MusicStatus;
   video: VideoStatus;
   remote: RemoteStatus;
+  skin: string | null;
 }
 
 export interface SessionResult {
   token: string;
+  code: string;
   expires_at: string;
   url: string;
+  base_url: string;
+}
+
+export interface RedeemResult {
+  ok: boolean;
+  token?: string;
+  error?: string;
 }
 
 export interface IdentityResult {
