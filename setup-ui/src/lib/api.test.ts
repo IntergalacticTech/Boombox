@@ -84,6 +84,8 @@ describe("SetupApi auth attachment", () => {
 });
 
 describe("adoptToken (typed-URL code redemption)", () => {
+  beforeEach(() => localStorage.clear());
+
   it("attaches auth after adopting a token, and isKiosk stays hostname-based", async () => {
     const fetchFn = mockFetch({ ok: true });
     const api = makeApi("", "192.168.1.50"); // LAN visitor, no hash token
@@ -98,5 +100,36 @@ describe("adoptToken (typed-URL code redemption)", () => {
     expect((init.headers as Record<string, string>).Authorization)
       .toBe("Bearer CODE-TOK");
     expect(api.isKiosk).toBe(false);
+  });
+});
+
+describe("token persistence (stay logged in)", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("adoptToken persists; a later makeApi without a hash restores it", () => {
+    const api = makeApi("", "192.168.1.50");
+    api.adoptToken("PERSIST-ME");
+    const later = makeApi("", "192.168.1.50"); // page reload, no hash
+    expect(later.token).toBe("PERSIST-ME");
+  });
+
+  it("a fresh hash token wins over a stored one and replaces it", () => {
+    localStorage.setItem("boombox-setup-token", "OLD");
+    const api = makeApi("#t=NEW", "192.168.1.50");
+    expect(api.token).toBe("NEW");
+    expect(localStorage.getItem("boombox-setup-token")).toBe("NEW");
+  });
+
+  it("a 401 clears the stored token and fires onAuthFail", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false, status: 401, text: async () => "{\"error\":\"nope\"}",
+    }));
+    const api = makeApi("#t=STALE", "192.168.1.50");
+    const onFail = vi.fn();
+    api.onAuthFail = onFail;
+    await expect(api.get("status")).rejects.toThrow();
+    expect(onFail).toHaveBeenCalled();
+    expect(api.token).toBeNull();
+    expect(localStorage.getItem("boombox-setup-token")).toBeNull();
   });
 });

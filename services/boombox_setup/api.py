@@ -261,4 +261,8 @@ async def _video_put(req: web.Request) -> web.Response:
 async def _complete(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
     ctx.mark_complete()
+    # Setup is done — retire the session so the long-lived token can't
+    # linger as an idle credential.
+    sess: SetupSession = req.app["session"]
+    sess.clear()
     return web.json_response({"ok": True})

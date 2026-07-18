@@ -8,6 +8,7 @@ hard-depend on the runtime wiring (keeps tests fast).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from dataclasses import replace
@@ -108,7 +109,18 @@ async def _source_put(req: web.Request) -> web.Response:
         # if upstream test_source leaked it into its error message.
         safe_msg = msg.replace(new_source.password, "***") if new_source.password else msg
         return web.json_response({"ok": False, "error": safe_msg}, status=400)
-    ctx.save_config(replace(ctx.cfg, source=new_source))
+    # save_config writes mopidy.conf and RESTARTS Mopidy — seconds of
+    # blocking subprocess work that must not stall the event loop (it froze
+    # every in-flight request, including the setup wizard's, past their
+    # client timeouts).
+    try:
+        await asyncio.to_thread(ctx.save_config,
+                                replace(ctx.cfg, source=new_source))
+    except Exception as e:  # noqa: BLE001 — always answer JSON, never a bare 500
+        log.exception("source save failed")
+        return web.json_response(
+            {"ok": False, "error": f"save failed: {type(e).__name__}: {e}"},
+            status=500)
     await ctx.trigger_sync()
     return web.json_response({"ok": True})
 

@@ -207,14 +207,27 @@ class ServiceContext:
         await asyncio.to_thread(_restart)
 
     # ---- proxy: boombox-library ------------------------------------------
+    # Testing/saving against a remote HTTPS library can legitimately take
+    # ~10s+ (cold TLS, a slow tunnel, Mopidy reloading on save), and a
+    # flaky moment upstream must degrade to a clean not-ok — never to an
+    # exception that surfaces as a wizard 500.
+    _MUSIC_TIMEOUT = aiohttp.ClientTimeout(total=45)
+
+    @staticmethod
+    async def _json_or_none(r: aiohttp.ClientResponse) -> dict | None:
+        try:
+            return await r.json()
+        except Exception:
+            return None
+
     async def music_get(self) -> dict:
         s = await self._http()
         async with s.get(f"{LIBRARY_BASE}/api/library/source") as r:
-            src = await r.json()
+            src = await self._json_or_none(r) or {}
         reachable = False
         try:
             async with s.get(f"{LIBRARY_BASE}/api/library/health") as r:
-                h = await r.json()
+                h = await self._json_or_none(r) or {}
                 reachable = bool(h.get("navidrome_reachable"))
         except Exception:
             pass
@@ -227,38 +240,72 @@ class ServiceContext:
 
     async def music_test(self, url, username, password) -> tuple[bool, str]:
         s = await self._http()
-        async with s.post(f"{LIBRARY_BASE}/api/library/source/test",
-                          json={"url": url, "username": username,
-                                "password": password}) as r:
-            d = await r.json()
+        try:
+            async with s.post(f"{LIBRARY_BASE}/api/library/source/test",
+                              json={"url": url, "username": username,
+                                    "password": password},
+                              timeout=self._MUSIC_TIMEOUT) as r:
+                d = await self._json_or_none(r)
+        except Exception as e:
+            log.warning("music test proxy failed: %s", e)
+            return False, "The library service didn't answer — try again."
+        if d is None:
+            return False, "The library service didn't answer — try again."
         return bool(d.get("ok")), d.get("error", "")
 
     async def music_save(self, url, username, password) -> tuple[bool, str]:
         s = await self._http()
-        async with s.put(f"{LIBRARY_BASE}/api/library/source",
-                        json={"url": url, "username": username,
-                              "password": password}) as r:
-            d = await r.json()
-            if r.status == 200 and d.get("ok"):
-                return True, ""
-            return False, d.get("error", "save failed")
+        try:
+            async with s.put(f"{LIBRARY_BASE}/api/library/source",
+                             json={"url": url, "username": username,
+                                   "password": password},
+                             timeout=self._MUSIC_TIMEOUT) as r:
+                d = await self._json_or_none(r)
+                if d is not None and r.status == 200 and d.get("ok"):
+                    return True, ""
+                if d is not None:
+                    return False, d.get("error", "save failed")
+        except Exception as e:
+            log.warning("music save proxy failed: %s", e)
+        return False, ("Couldn't save — the library service didn't answer. "
+                       "Try again.")
 
     # ---- proxy: boombox-remote -------------------------------------------
+    # The wizard's Video step restarts boombox-remote (to pick up the new
+    # Jellyfin env), and the Remotes step comes right after — so these
+    # proxies retry connection failures for a few seconds rather than
+    # failing into the restart window.
+    async def _remote_post(self, path: str, label: str) -> dict:
+        s = await self._http()
+        deadline = asyncio.get_event_loop().time() + 8
+        while True:
+            try:
+                async with s.post(f"{REMOTE_BASE}{path}") as r:
+                    d = await self._json_or_none(r)
+                    if d is not None:
+                        return d
+            except aiohttp.ClientConnectionError:
+                pass  # service (re)starting — retry below
+            except Exception as e:
+                log.warning("%s proxy failed: %s", label, e)
+                break
+            if asyncio.get_event_loop().time() >= deadline:
+                break
+            await asyncio.sleep(1)
+        return {"ok": False,
+                "error": "The remote service didn't answer — try again."}
+
     async def remote_status(self) -> dict:
         s = await self._http()
         async with s.get(f"{REMOTE_BASE}/api/remote/admin/status") as r:
-            d = await r.json()
+            d = await self._json_or_none(r) or {}
         return {"enabled": bool(d.get("enabled")), "peers": d.get("peers", [])}
 
     async def remote_enable(self) -> dict:
-        s = await self._http()
-        async with s.post(f"{REMOTE_BASE}/api/remote/admin/enable") as r:
-            return await r.json()
+        return await self._remote_post("/api/remote/admin/enable", "remote enable")
 
     async def remote_pair_start(self) -> dict:
-        s = await self._http()
-        async with s.post(f"{REMOTE_BASE}/api/remote/pair/start") as r:
-            return await r.json()
+        return await self._remote_post("/api/remote/pair/start", "remote pair")
 
     async def close(self) -> None:
         if self._session and not self._session.closed:

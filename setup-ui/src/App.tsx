@@ -151,6 +151,13 @@ export default function App() {
   const [authed, setAuthed] = useState(() => api.isKiosk || api.token !== null);
 
   useEffect(() => {
+    // Token rejected mid-flow (expired / service restarted): back to the
+    // code-entry screen instead of every action erroring.
+    api.onAuthFail = () => setAuthed(false);
+    return () => { api.onAuthFail = null; };
+  }, [api]);
+
+  useEffect(() => {
     let alive = true;
     api.get<Status>("status")
       .then((s) => { if (alive) setStatus(s); })

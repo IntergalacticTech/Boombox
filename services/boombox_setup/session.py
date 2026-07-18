@@ -17,7 +17,10 @@ import secrets
 import time
 from dataclasses import dataclass
 
-TOKEN_TTL_S = 1800  # 30 min — first-run setup is unhurried.
+# Long enough that stepping away mid-setup never logs you out. The token is
+# only mintable with physical access to the kiosk, only authorizes setup
+# actions, and is cleared the moment setup completes.
+TOKEN_TTL_S = 24 * 3600
 
 
 def _hash(token: str) -> str:
@@ -38,15 +41,28 @@ class SetupSession:
     _expires_at: float = 0.0
     _code_hash: str | None = None
     _code_attempts: int = 0
-    # Kept in the clear only so redeem can return it; never logged.
+    # Kept in the clear only so redeem/idempotent-mint can return them;
+    # never logged.
     _token: str | None = None
+    _code: str | None = None
 
     def mint(self, now: float | None = None) -> tuple[str, str, float]:
-        """Returns (token, code, expires_at). Re-minting invalidates both."""
+        """Returns (token, code, expires_at).
+
+        Idempotent while a session is live: the kiosk mints on every Welcome
+        render, and re-minting there must NOT invalidate a token a phone is
+        already using — a kiosk reload used to log the phone out. A fresh
+        session is only minted when none exists or the current one expired."""
         now = time.time() if now is None else now
+        # (_code_hash None ⇒ the code was burned by too many bad attempts —
+        # treat that as no session so the kiosk shows a fresh code.)
+        if (self._token is not None and self._code is not None
+                and self._code_hash is not None and now < self._expires_at):
+            return self._token, self._code, self._expires_at
         token = secrets.token_urlsafe(24)
         code = f"{secrets.randbelow(1_000_000):06d}"
         self._token = token
+        self._code = code
         self._token_hash = _hash(token)
         self._code_hash = _hash(code)
         self._code_attempts = 0
@@ -84,3 +100,4 @@ class SetupSession:
         self._code_hash = None
         self._code_attempts = 0
         self._token = None
+        self._code = None

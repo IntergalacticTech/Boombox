@@ -37,6 +37,9 @@ export interface SetupApi {
   readonly isKiosk: boolean;
   /** Adopt a token obtained after load (the typed-URL + code path). */
   adoptToken(token: string): void;
+  /** Set by the app: invoked when the server rejects the token, so the UI
+   *  can return to code entry. */
+  onAuthFail: (() => void) | null;
   get<T = unknown>(path: string): Promise<T>;
   post<T = unknown>(path: string, body?: unknown): Promise<T>;
   put<T = unknown>(path: string, body?: unknown): Promise<T>;
@@ -54,9 +57,32 @@ export class ApiError extends Error {
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
+// Survives reloads and stepping away — the server-side session lives 24h and
+// is cleared when setup completes, so persisting the bearer locally is safe
+// and means the code is entered once, not once per visit.
+const TOKEN_STORE_KEY = "boombox-setup-token";
+
+function loadStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_STORE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeToken(token: string | null): void {
+  try {
+    if (token === null) localStorage.removeItem(TOKEN_STORE_KEY);
+    else localStorage.setItem(TOKEN_STORE_KEY, token);
+  } catch { /* private mode — the in-memory token still works this visit */ }
+}
+
 class HttpSetupApi implements SetupApi {
   token: string | null;
   private readonly hostname: string;
+  /** Called when the server rejects our token (expired / service restarted)
+   *  so the app can drop back to code entry instead of erroring forever. */
+  onAuthFail: (() => void) | null = null;
 
   constructor(token: string | null, hostname: string) {
     this.token = token;
@@ -72,6 +98,7 @@ class HttpSetupApi implements SetupApi {
 
   adoptToken(token: string): void {
     this.token = token;
+    storeToken(token);
   }
 
   /** Build the same-origin URL, appending `?t=<token>` when authenticated. */
@@ -96,6 +123,15 @@ class HttpSetupApi implements SetupApi {
       headers: this.headers(hasBody),
       body: hasBody ? JSON.stringify(body) : undefined,
     });
+    // Our token no longer authorizes (expired, or the setup service
+    // restarted and lost the session): forget it and let the app return
+    // to code entry rather than failing every action from here on.
+    if (r.status === 401 && this.token !== null && !this.isKiosk) {
+      this.token = null;
+      storeToken(null);
+      this.onAuthFail?.();
+      throw new ApiError(401, "setup token rejected");
+    }
     // The contract returns JSON on both success and validation failures
     // (e.g. 400 { ok:false, error }), so parse the body regardless of status
     // and let callers inspect `ok`. Only a non-JSON error body is fatal.
@@ -124,13 +160,17 @@ class HttpSetupApi implements SetupApi {
   }
 }
 
-/** Build a client, reading the hash token once. Pass an explicit hash and
- *  hostname for tests; defaults to the live location. */
+/** Build a client. Token precedence: URL hash (a fresh QR scan wins) → the
+ *  stored token from an earlier visit. Pass an explicit hash and hostname
+ *  for tests; defaults to the live location. */
 export function makeApi(
   hash: string = location.hash,
   hostname: string = location.hostname,
 ): SetupApi {
-  return new HttpSetupApi(parseHashToken(hash), hostname);
+  const fromHash = parseHashToken(hash);
+  const api = new HttpSetupApi(fromHash ?? loadStoredToken(), hostname);
+  if (fromHash !== null) storeToken(fromHash);
+  return api;
 }
 
 const ApiContext = createContext<SetupApi | null>(null);

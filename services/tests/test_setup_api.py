@@ -224,3 +224,19 @@ async def test_skin_put_and_status_roundtrip(client):
     assert r.status == 200
     r = await c.get("/api/setup/status", headers=LAN)
     assert (await r.json())["skin"] == "tapeshift"
+
+
+@pytest.mark.asyncio
+async def test_complete_retires_the_session_token(client):
+    c, _ = client
+    r = await c.post("/api/setup/session", headers=LOCAL)
+    token = (await r.json())["token"]
+    hdrs = {**LAN, "Authorization": f"Bearer {token}"}
+    # Token works before completion…
+    r = await c.put("/api/setup/skin", json={"id": "simple"}, headers=hdrs)
+    assert r.status == 200
+    # …and is dead after it.
+    r = await c.post("/api/setup/complete", headers=hdrs)
+    assert r.status == 200
+    r = await c.put("/api/setup/skin", json={"id": "meter"}, headers=hdrs)
+    assert r.status == 401

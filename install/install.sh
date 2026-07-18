@@ -147,9 +147,23 @@ PYPATCH
   echo "[install] patched mopidy/audio/scan.py for StructureWrapper compat"
 fi
 
+# /etc/boombox must be WRITABLE BY THE BOOMBOX USER, not just its files:
+# boombox-library and the setup wizard save configs atomically (write
+# .tmp + rename), which needs directory write permission. A root-owned
+# 0755 dir made every Settings/wizard save fail with PermissionError on
+# the .tmp file (found on MarkII: music "Save & Continue" 500'd).
+sudo mkdir -p /etc/boombox
+sudo chown "$BOOMBOX_USER:$BOOMBOX_USER" /etc/boombox
+sudo chmod 0755 /etc/boombox
+# Same for /etc/mopidy: boombox-library rewrites mopidy.conf atomically on
+# every source save (write .tmp + rename), which needs dir write. The conf
+# FILE was already chowned to the boombox user; the directory wasn't.
+if [ -d /etc/mopidy ]; then
+    sudo chown "$BOOMBOX_USER" /etc/mopidy
+fi
+
 # Place default boombox-library config if absent (atomic, idempotent).
 if [ ! -f /etc/boombox/library.yml ]; then
-    sudo mkdir -p /etc/boombox
     sudo cp "$(dirname "$0")/config/library.yml.template" /etc/boombox/library.yml
     sudo chown "$BOOMBOX_USER:$BOOMBOX_USER" /etc/boombox/library.yml
     sudo chmod 600 /etc/boombox/library.yml

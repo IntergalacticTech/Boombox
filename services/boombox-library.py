@@ -97,14 +97,22 @@ class ServiceContext:
         reload_mopidy()
 
     async def test_source(self, url: str, username: str, password: str) -> tuple[bool, str]:
-        async with SubsonicClient(url, username, password) as c:
-            try:
-                await c.ping()
-                return (True, "")
-            except SubsonicAuthError as e:
-                return (False, f"auth: {e}")
-            except SubsonicUnreachable as e:
-                return (False, f"unreachable: {e}")
+        try:
+            async with SubsonicClient(url, username, password) as c:
+                try:
+                    await c.ping()
+                    return (True, "")
+                except SubsonicAuthError as e:
+                    return (False, f"auth: {e}")
+                except SubsonicUnreachable as e:
+                    return (False, f"unreachable: {e}")
+        except Exception as e:  # noqa: BLE001
+            # A timeout (or any transport surprise) must come back as a
+            # clean not-ok, never escape as an unhandled exception — that
+            # surfaced to callers as a text/plain 504 and broke the setup
+            # wizard's save with a 500.
+            log.warning("source test failed: %s: %s", type(e).__name__, e)
+            return (False, f"unreachable: {type(e).__name__}")
 
     async def trigger_sync(self) -> None:
         if self._sync_task and not self._sync_task.done():
