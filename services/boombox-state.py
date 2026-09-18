@@ -1002,15 +1002,16 @@ def make_app() -> web.Application:
 
 async def main():
     global _power
-    app = make_app()
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 6681)
-    await site.start()
-    log.info("boombox-state listening on http://127.0.0.1:6681/state")
     async with aiohttp.ClientSession() as session:
+        # Build the manager before the site is up so /power never answers
+        # 503 during startup (and so we never mutate a started app).
         _power = build_power_manager(session)
-        app["power"] = _power
+        app = make_app()
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 6681)
+        await site.start()
+        log.info("boombox-state listening on http://127.0.0.1:6681/state")
         await _power.start()
         await poll_loop()
 

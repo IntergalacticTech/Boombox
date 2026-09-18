@@ -103,7 +103,7 @@ sudo apt install -y \
   python3-dbus python3-gi python3-gi-cairo gir1.2-glib-2.0 \
   mopidy mopidy-mpd mopidy-local mpc \
   nginx apache2-utils samba \
-  chromium unclutter grim wvkbd \
+  chromium unclutter grim wvkbd wlr-randr \
   playerctl \
   pipewire pipewire-pulse wireplumber pulseaudio-utils \
   shairport-sync \

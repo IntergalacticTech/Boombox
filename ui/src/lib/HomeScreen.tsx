@@ -32,7 +32,9 @@ type Props = {
 /** Tiles that aren't inputs. Kept apart from CARDS so sources.ts stays a
  * description of the audio pipeline and nothing else. */
 const SETTINGS_TILE = { name: "Settings", tag: "SYSTEM", accent: "#9aa4b2", glyph: "⚙" };
-const OFF_TILE = { name: "Off", tag: "STANDBY", accent: "#ff5466", glyph: "⏻" };
+// "◯" rather than the IEC power symbol ⏻ — Inter has no glyph for it, and a
+// tofu box on the Off tile is exactly the wrong thing to ship.
+const OFF_TILE = { name: "Off", tag: "STANDBY", accent: "#ff5466", glyph: "◯" };
 
 export function HomeScreen({
   theme, queueCount, onGoPlayer, onOpenLibrary, onOpenSettings, showNowPlaying = true,
@@ -137,7 +139,9 @@ export function HomeScreen({
       <div style={{
         display: "grid",
         gridTemplateColumns: "repeat(4, 1fr)",
-        gridAutoRows: 232,
+        // Two rows of 260 fill the panel down to the message strip and still
+        // leave room for the Now Playing bar underneath.
+        gridAutoRows: 260,
         gap: 18,
         flexShrink: 0,
       }}>
