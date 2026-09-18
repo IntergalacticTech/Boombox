@@ -60,9 +60,10 @@ function btnStyle(theme: Required<ChromeTheme>): CSSProperties {
   };
 }
 
-/** Home button. It carries the live-source dot + label as well, because the
- * source identity and "get me out of here" are the same slot in every skin's
- * chrome and the box has no room for two pills. */
+/** Home button. Reads "⌂ HOME" so it is unmistakably a way out, not a status
+ * pill; the live-source dot + label ride along only while an external input
+ * (AirPlay / Spotify / Bluetooth) is actually producing audio, because that
+ * slot is the only place every skin's chrome has for the source identity. */
 export function ChromeHomeBtn({
   chrome, theme: t = {},
 }: {
@@ -70,20 +71,22 @@ export function ChromeHomeBtn({
   theme?: ChromeTheme;
 }) {
   const theme = { ...DEFAULT_THEME, ...t } as Required<ChromeTheme>;
+  const mono = { fontFamily: theme.mono, fontSize: 12, letterSpacing: "0.16em" } as const;
   return (
     <button onClick={chrome.onGoHome} aria-label="Home" style={btnStyle(theme)}>
       <span style={{fontSize: 18, lineHeight: 1, flexShrink: 0}} aria-hidden="true">⌂</span>
-      <span style={{
-        width: 12, height: 12, borderRadius: 999,
-        background: chrome.sourceColor,
-        boxShadow: chrome.sourceLive ? "0 0 8px currentColor" : "none",
-        flexShrink: 0,
-      }}/>
-      <span style={{
-        fontFamily: theme.mono,
-        fontSize: 12,
-        letterSpacing: "0.16em",
-      }}>{chrome.sourceLabel}</span>
+      <span style={mono}>HOME</span>
+      {chrome.sourceLive && (
+        <>
+          <span style={{
+            width: 12, height: 12, borderRadius: 999,
+            background: chrome.sourceColor,
+            boxShadow: "0 0 8px currentColor",
+            flexShrink: 0,
+          }}/>
+          <span style={mono}>{chrome.sourceLabel}</span>
+        </>
+      )}
     </button>
   );
 }

@@ -70,10 +70,28 @@ void setup() {
     Serial.println("ready.");
 }
 
+// Set once Playing has wired its callbacks; cleared when the link drops so a
+// reconnect wires them again against the fresh client.
+static bool gPlayingWired = false;
+
 void loop() {
     lv_timer_handler();
     if (gBle) gBle->pumpEvents();   // drain any BLE state notify off-task
     gUI_obj.tickPair(millis());
+
+    // A dropped link (boombox rebooted, its remote service restarted and
+    // re-registered the GATT table, or we just walked out of range) must
+    // send us back through Scan → Connect. Reconnecting re-discovers the
+    // attribute handles; keeping the old client would leave us writing the
+    // PIN and subscribing at handles that no longer exist — which shows up
+    // on the panel as "no response" with no other clue.
+    if ((gBootState == BootState::Pair || gBootState == BootState::Playing)
+        && gBle && !gBle->isConnected()) {
+        Serial.println("[loop] link dropped — rescanning");
+        gPlayingWired = false;
+        gUI_obj.showSearching("Lost the boombox — reconnecting…");
+        gBootState = BootState::Scan;
+    }
 
     // Boot state machine — runs ONE step per loop iteration so LVGL
     // gets to tick frequently in between.
@@ -125,9 +143,8 @@ void loop() {
             break;
         }
         case BootState::Playing: {
-            static bool wired = false;
-            if (!wired) {
-                wired = true;
+            if (!gPlayingWired) {
+                gPlayingWired = true;
                 Serial.printf("[loop] entering Playing for %s\n",
                                gPendingPair.name.c_str());
                 gActions = new boombox::ActionDispatch(gBle);

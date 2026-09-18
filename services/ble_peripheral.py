@@ -243,6 +243,13 @@ class BoomboxBlePeripheral:
         log.info("[ble] advertising as %s with service %s",
                   self._boombox_name, SERVICE_UUID)
 
+        # Anything still connected from before this (re)registration holds
+        # stale attribute handles — see disconnect_stale_centrals().
+        dropped = await disconnect_stale_centrals()
+        if dropped:
+            log.info("[ble] dropped %d stale central(s) so they rediscover: %s",
+                     len(dropped), ", ".join(dropped))
+
         # Start the state push loop. Returns the task so caller can cancel.
         return asyncio.create_task(self._push_state_loop())
 
@@ -253,6 +260,54 @@ class BoomboxBlePeripheral:
             except Exception as e:
                 log.warning("[ble] stop: %s", e)
             self._server = None
+
+
+async def _run_bluetoothctl(*argv: str) -> tuple[int, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return 1, "timeout"
+    return proc.returncode or 0, out.decode(errors="replace")
+
+
+async def disconnect_stale_centrals(run=_run_bluetoothctl) -> list[str]:
+    """Disconnect every LE central BlueZ still has attached.
+
+    Called right after the GATT application is registered. bluetoothd keeps
+    LE links alive across our process restarting, but re-registering the
+    service hands out new attribute handles — a remote that stayed
+    connected keeps writing the PIN to the old pair_request handle and
+    looking for a CCCD that moved, and all it can show the user is "no
+    response". Kicking it forces a reconnect and a fresh discovery. Every
+    step is best-effort: no bluetoothctl, no adapter, or a refusal just
+    means nothing gets dropped.
+    """
+    try:
+        rc, out = await run("bluetoothctl", "devices", "Connected")
+    except Exception as e:
+        log.debug("[ble] could not list connected centrals: %s", e)
+        return []
+    if rc != 0:
+        return []
+    macs = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "Device" and parts[1].count(":") == 5:
+            macs.append(parts[1])
+    dropped = []
+    for mac in macs:
+        try:
+            rc, out = await run("bluetoothctl", "disconnect", mac)
+        except Exception as e:
+            log.warning("[ble] disconnect %s failed: %s", mac, e)
+            continue
+        if rc != 0:
+            log.warning("[ble] disconnect %s refused: %s", mac, out.strip())
+        dropped.append(mac)
+    return dropped
 
 
 async def run_ble_peripheral(*, pair_state, peers_path_cb, hash_pin_cb,
