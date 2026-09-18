@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
+/** Power/standby state, added to /api/state by boombox-state's PowerManager.
+ * Optional on purpose: an older server (or one that's down) simply doesn't
+ * report it, and the UI must then behave exactly as it always did — awake. */
+export type PowerState = {
+  state: "awake" | "asleep";
+  since: number;
+  poweroff_at: number | null;
+};
+
 export type ActiveSource = {
   source: string | null;          // raw MPRIS player id (e.g. "ShairportSync") or null
   label: string | null;           // friendly label ("AirPlay", "Spotify", "Bluetooth")
@@ -9,6 +18,7 @@ export type ActiveSource = {
   position_ms: number;
   length_ms: number;
   ts: number;
+  power?: PowerState;
 };
 
 const EMPTY: ActiveSource = {
@@ -52,6 +62,13 @@ export function useActiveSource(intervalMs = 1000): ActiveSource {
   }, [intervalMs]);
 
   return state;
+}
+
+/** True only when the server explicitly says the box is asleep. A missing
+ * `power` key (old server, or /api/state unreachable) reads as awake so the
+ * kiosk can never strand itself behind a black SleepScreen. */
+export function isAsleep(s: ActiveSource): boolean {
+  return s.power?.state === "asleep";
 }
 
 /** True if a non-Mopidy source is currently the active player. */

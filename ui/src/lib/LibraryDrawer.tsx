@@ -14,6 +14,7 @@ import { browse, browseHomeLibrary, getHistory, lookup, playUris, queueUris, sea
 import { AlbumThumb } from "./AlbumThumb";
 import { getFavorites } from "./favorites";
 import { useIncrementalRender } from "./useIncrementalRender";
+import { DrawerHomeBtn } from "./ChromeButtons";
 
 type Crumb = { uri: string | null; name: string };
 
@@ -41,9 +42,9 @@ function relativeTime(ts: number): string {
   return `${day}d ago`;
 }
 
-type Props = { onClose: () => void; bindUid?: string | null };
+type Props = { onClose: () => void; onHome?: () => void; bindUid?: string | null };
 
-export function LibraryDrawer({ onClose, bindUid: bindUidProp = null }: Props) {
+export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: Props) {
   // Stack of breadcrumbs we've drilled into. Empty = at the top-level menu.
   const [stack, setStack] = useState<Crumb[]>([]);
   const [items, setItems] = useState<Ref[]>(ROOTS);
@@ -358,6 +359,8 @@ export function LibraryDrawer({ onClose, bindUid: bindUidProp = null }: Props) {
                 minWidth: 64,
               }}
             >{stack.length > 0 ? "‹ Back" : "Close"}</button>
+
+            <DrawerHomeBtn onHome={onHome} />
 
             <div style={{flex: 1, minWidth: 0}}>
               <div style={{

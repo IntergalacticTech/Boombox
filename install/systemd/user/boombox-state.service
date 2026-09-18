@@ -5,6 +5,8 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
+# Device identity + BOOMBOX_SLEEP_POWEROFF_S (standby → poweroff grace).
+EnvironmentFile=-/etc/boombox/boombox.env
 ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-state.py
 Restart=on-failure
 RestartSec=3

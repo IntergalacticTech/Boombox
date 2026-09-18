@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from clients import Display, KioskClient, MopidyRpc, StateApi
@@ -45,9 +46,42 @@ class Dispatcher:
     display: object | None
     sleep: object | None
     disabled: set[str] | None = None
+    # (monotonic timestamp, state) of the last /power poll — see _asleep().
+    _power_cache: tuple[float, str] | None = field(default=None, repr=False)
+
+    async def _asleep(self) -> bool:
+        """Is the unit in standby? Read from boombox-state's /power, cached
+        for a second so a burst of presses is one HTTP round trip. Anything
+        unexpected (no state client, old client without /power support,
+        boombox-state down) counts as awake — never swallow a press because
+        we couldn't ask."""
+        if self.state is None:
+            return False
+        now = time.monotonic()
+        if self._power_cache and now - self._power_cache[0] < _POWER_CACHE_TTL_S:
+            return self._power_cache[1] == "asleep"
+        try:
+            snap = await self.state.power_state()
+        except Exception as exc:
+            log.debug("power_state lookup failed (assuming awake): %s", exc)
+            return False
+        state = snap.get("state") if isinstance(snap, dict) else None
+        if not isinstance(state, str):
+            return False
+        self._power_cache = (now, state)
+        return state == "asleep"
 
     async def dispatch(self, action: str, event: str = "short_press") -> None:
         if self.disabled and action in self.disabled:
+            return
+        # While asleep, the first press of anything but `power` just wakes
+        # the unit — the user is reaching for a dark boombox, not for `next`.
+        if action != "power" and await self._asleep():
+            self._power_cache = None       # we're about to change the state
+            try:
+                await self.state.power_wake()
+            except Exception as exc:
+                log.warning("power_wake failed: %s", exc)
             return
         handler = _HANDLERS.get((action, event))
         if handler is None:
@@ -57,6 +91,9 @@ class Dispatcher:
             await handler(self)
         except Exception as exc:
             log.warning("handler %s/%s raised: %s", action, event, exc)
+
+
+_POWER_CACHE_TTL_S = 1.0
 
 
 # Action handlers register themselves below. We separate (short_press) from
@@ -152,6 +189,18 @@ async def _h_repeat(d: Dispatcher):
 
 @_handler("power", "short_press")
 async def _h_power_short(d: Dispatcher):
+    """Sleep / wake the whole unit via boombox-state's PowerManager.
+
+    If that service is unreachable we fall back to blanking the panel
+    directly, so the physical button always does *something* visible."""
+    d._power_cache = None                  # the state is about to change
+    if d.state is not None:
+        try:
+            if await d.state.power_toggle() is not None:
+                return
+            log.warning("power_toggle returned nothing; falling back to display")
+        except Exception as exc:
+            log.warning("power_toggle failed (%s); falling back to display", exc)
     if d.display:
         await d.display.toggle()
 

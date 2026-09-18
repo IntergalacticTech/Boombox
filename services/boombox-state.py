@@ -25,7 +25,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import aiohttp
+import clients
 from aiohttp import web
+from power import DEFAULT_GRACE_S, PowerManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("boombox-state")
@@ -182,7 +185,11 @@ async def poll_loop():
 
 
 async def state_handler(_request: web.Request) -> web.Response:
-    return web.json_response(_state)
+    # `_state` is wholesale-replaced by poll_loop(), so power is merged in at
+    # response time rather than inside aggregate().
+    if _power is None:
+        return web.json_response(_state)
+    return web.json_response(dict(_state, power=_power.snapshot()))
 
 
 async def health_handler(_request: web.Request) -> web.Response:
@@ -895,6 +902,73 @@ async def osk_hide(_request: web.Request) -> web.Response:
     return web.json_response({"ok": ok})
 
 
+# ---------------------------------------------------------------------------
+# Power — the awake/asleep state machine (services/power.py). Owned here
+# because every surface that wants to sleep the unit (GPIO power button,
+# kiosk Off tile, Settings drawer, the LAN remote) already talks to us.
+# ---------------------------------------------------------------------------
+
+_power: PowerManager | None = None
+
+
+def build_power_manager(session: aiohttp.ClientSession) -> PowerManager:
+    """Wire the PowerManager to this device. Each hook is best-effort, so a
+    boombox with no kiosk, or no Wayland panel, still sleeps cleanly."""
+    mopidy = clients.MopidyRpc(session)
+    kiosk = clients.KioskClient(session)
+    display = clients.Display()
+
+    async def stop_audio() -> None:
+        # Mopidy owns the local library; playerctl covers AirPlay/Spotify/BT.
+        # Each is independent: a down Mopidy must not leave AirPlay playing.
+        try:
+            await mopidy.call("core.playback.stop")
+        except Exception as exc:
+            log.warning("power: mopidy stop failed: %s", exc)
+        await run("playerctl", "-a", "pause", timeout=2)
+
+    async def kiosk_home() -> None:
+        await kiosk.navigate("http://localhost/")
+
+    async def poweroff() -> None:
+        rc, out = await run("sudo", "-n", "systemctl", "poweroff", timeout=10)
+        if rc != 0:
+            log.error("power: systemctl poweroff failed (%s): %s", rc, out)
+
+    try:
+        grace_s = float(os.environ.get("BOOMBOX_SLEEP_POWEROFF_S", DEFAULT_GRACE_S))
+    except ValueError:
+        log.warning("BOOMBOX_SLEEP_POWEROFF_S is not a number; using %s", DEFAULT_GRACE_S)
+        grace_s = DEFAULT_GRACE_S
+
+    return PowerManager(
+        stop_audio=stop_audio,
+        display_off=display.off,
+        display_on=display.wake,
+        kiosk_home=kiosk_home,
+        poweroff=poweroff,
+        grace_s=grace_s,
+    )
+
+
+async def power_get(_request: web.Request) -> web.Response:
+    if _power is None:
+        return web.json_response({"error": "power manager unavailable"}, status=503)
+    return web.json_response(_power.snapshot())
+
+
+async def power_action(request: web.Request) -> web.Response:
+    """POST /power/{sleep|wake|toggle|off} — all return the new snapshot."""
+    if _power is None:
+        return web.json_response({"error": "power manager unavailable"}, status=503)
+    action = request.match_info.get("action", "").lower()
+    fn = {"sleep": _power.sleep, "wake": _power.wake,
+          "toggle": _power.toggle, "off": _power.off}.get(action)
+    if fn is None:
+        return web.json_response({"error": "unknown action"}, status=400)
+    return web.json_response(await fn())
+
+
 def make_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/state", state_handler)
@@ -921,17 +995,24 @@ def make_app() -> web.Application:
     app.router.add_post("/theme", theme_post)
     app.router.add_post("/osk/show", osk_show)
     app.router.add_post("/osk/hide", osk_hide)
+    app.router.add_get("/power", power_get)
+    app.router.add_post("/power/{action}", power_action)
     return app
 
 
 async def main():
+    global _power
     app = make_app()
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 6681)
     await site.start()
     log.info("boombox-state listening on http://127.0.0.1:6681/state")
-    await poll_loop()
+    async with aiohttp.ClientSession() as session:
+        _power = build_power_manager(session)
+        app["power"] = _power
+        await _power.start()
+        await poll_loop()
 
 
 if __name__ == "__main__":

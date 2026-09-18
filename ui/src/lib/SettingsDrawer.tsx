@@ -11,6 +11,7 @@ import { UpdatesPanel } from "./UpdatesPanel";
 import { LibraryPanel } from "./LibraryPanel";
 import { CachePanel } from "./CachePanel";
 import { setSleepMinutes, useSleepTimer } from "./sleepTimer";
+import { DrawerHomeBtn } from "./ChromeButtons";
 
 type KaraokeMic = { name: string; label: string };
 
@@ -51,13 +52,14 @@ type UsbDevice = {
 };
 type UsbList = { devices: UsbDevice[] };
 
-type Props = { onClose: () => void };
+type Props = { onClose: () => void; onHome?: () => void };
 
-export function SettingsDrawer({ onClose }: Props) {
+export function SettingsDrawer({ onClose, onHome }: Props) {
   const [karaoke, setKaraoke] = useState<KaraokeState | null>(null);
   const [sinks, setSinks] = useState<SinksState | null>(null);
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [scanState, setScanState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [offState, setOffState] = useState<"idle" | "sleeping" | "error">("idle");
   const [karaokePending, setKaraokePending] = useState(false);
   const [sinkPending, setSinkPending] = useState<string | null>(null);
   const [restartState, setRestartState] = useState<"idle" | "running" | "done" | "error">("idle");
@@ -215,6 +217,20 @@ export function SettingsDrawer({ onClose }: Props) {
     }
   };
 
+  const goOff = async () => {
+    if (!window.confirm("Turn the boombox off? Audio stops and the Pi powers down.")) return;
+    setOffState("sleeping");
+    try {
+      const r = await fetch("/api/power/sleep", { method: "POST" });
+      if (!r.ok) throw new Error("sleep failed");
+      // On success the polled power state flips to "asleep" and App drops the
+      // SleepScreen over everything, so there's no "done" state to show.
+    } catch {
+      setOffState("error");
+      setTimeout(() => setOffState("idle"), 5000);
+    }
+  };
+
   const restartMopidy = async () => {
     if (!window.confirm("Restart Mopidy? Current playback will stop briefly.")) return;
     setRestartState("running");
@@ -303,6 +319,7 @@ export function SettingsDrawer({ onClose }: Props) {
               color: "rgba(255,255,255,0.5)", marginTop: 2,
             }}>{info?.hostname ? `BOOMBOX · ${info.hostname.toUpperCase()}` : "BOOMBOX"}</div>
           </div>
+          <DrawerHomeBtn onHome={onHome} />
           <button onClick={onClose} style={{
             padding: "10px 16px",
             background: "rgba(255,255,255,0.08)",
@@ -644,6 +661,24 @@ export function SettingsDrawer({ onClose }: Props) {
                 ...primaryButton("#ff7a35"),
                 opacity: restartState === "running" ? 0.6 : 1,
               }}>{restartState === "running" ? "…" : "RESTART"}</button>
+            }
+          />
+
+          {/* Off — the digital twin of the enclosure's power button: stop
+            * audio, blank the panel, and power down after the grace period.
+            * Confirmed because there is no undo once the Pi halts. */}
+          <SettingRow
+            title="Off"
+            subtitle={
+              offState === "sleeping" ? "going to sleep…"
+              : offState === "error"  ? "power service unreachable"
+              : "stop audio, sleep the screen, power off shortly after"
+            }
+            action={
+              <button onClick={goOff} disabled={offState === "sleeping"} style={{
+                ...primaryButton("#ff5466"),
+                opacity: offState === "sleeping" ? 0.6 : 1,
+              }}>{offState === "sleeping" ? "…" : "OFF"}</button>
             }
           />
 

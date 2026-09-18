@@ -12,9 +12,14 @@ import { AlbumThumb } from "./AlbumThumb";
 import { LyricsDrawer } from "./LyricsDrawer";
 import { toggleFavorite, useFavorites } from "./favorites";
 
-type Props = { onDismiss?: () => void };
+type Props = {
+  onDismiss?: () => void;
+  /** When set, tapping the title goes here (Home uses it to enter the player)
+   * instead of opening the lyrics drawer — lyrics belong to the player view. */
+  onOpen?: () => void;
+};
 
-export function NowPlayingBar({ onDismiss }: Props = {}) {
+export function NowPlayingBar({ onDismiss, onOpen }: Props = {}) {
   const m = useMopidy();
   const ext = useActiveSource(2000);
   const elapsed = useElapsed(m.state, m.positionMs, m.positionAtMs);
@@ -61,10 +66,11 @@ export function NowPlayingBar({ onDismiss }: Props = {}) {
     }}>
       <div style={{display: "flex", alignItems: "center", gap: 10, padding: "10px 14px"}}>
         <AlbumThumb artist={artist} album={album} track={title} seed={title + artist} size={44} radius={6}/>
-        {/* Tap title to open lyrics. Buttoned for proper click semantics. */}
+        {/* Tap title to open lyrics (or to enter the player, from Home).
+          * Buttoned for proper click semantics. */}
         <button
-          onClick={() => setLyricsOpen(true)}
-          aria-label="Show lyrics"
+          onClick={() => (onOpen ? onOpen() : setLyricsOpen(true))}
+          aria-label={onOpen ? "Open player" : "Show lyrics"}
           style={{
             flex: 1, minWidth: 0,
             background: "transparent", border: "none", color: "inherit",

@@ -88,8 +88,25 @@ exposes:
 | `GET/POST /api/theme` | Remote API + kiosk: match active skin palette |
 | `GET /api/usb/devices`, `POST /api/usb/copy` | UI: USB device list and pull-to-library copy |
 | `POST /api/library/scan` | UI / `boombox-remote` file API: trigger Mopidy local scan |
+| `GET /api/power` | UI + buttons: current standby state |
+| `POST /api/power/{sleep\|wake\|toggle\|off}` | UI Off tile / Settings, GPIO power button |
 
-- **Code:** [`services/boombox-state.py`](../services/boombox-state.py)
+**Standby.** `services/power.py` holds the `awake`/`asleep` state machine.
+`sleep` stops Mopidy and every MPRIS player, navigates the kiosk back to
+Home, blanks the panel (`wlr-randr --off`) and arms a poweroff; `wake`
+cancels it and relights the panel without resuming playback; `off` halts
+immediately. Every route returns the snapshot
+`{state, since, poweroff_at}`, which also rides along on `GET /api/state`
+as `power`. The snapshot is persisted to
+`$XDG_STATE_HOME/boombox/power.json` — on startup the service always comes
+up **awake** and forces the panel on if that file said asleep, so a crash
+mid-sleep can't leave a dark screen.
+
+- **Env knobs:** `BOOMBOX_SLEEP_POWEROFF_S` (default `180`) — seconds
+  between falling asleep and `systemctl poweroff`. Set `0` to sleep the
+  screen but never halt.
+- **Code:** [`services/boombox-state.py`](../services/boombox-state.py),
+  [`services/power.py`](../services/power.py)
 - **Logs:** `journalctl --user -u boombox-state -f`
 
 ### `boombox-audio` — visualizer

@@ -29,7 +29,7 @@ For the service internals see
 |14 | web               | toggle LAN QR overlay (URL + PIN) | —|
 |15 | mic_karaoke       | toggle mic loopback | —              |
 |16 | record            | start / stop FLAC capture of current sink | —|
-|17 | power             | toggle backlight (display sleep) | **≥ 2 s** → shutdown countdown |
+|17 | power             | sleep / wake the unit (`POST /api/power/toggle`) | **≥ 2 s** → shutdown countdown |
 | ⊙ | encoder rotate    | ±5 % volume per detent | —          |
 | ⊙ | encoder push      | mute toggle | —                       |
 
@@ -37,6 +37,13 @@ Long-press threshold is **600 ms** by default; the power button uses its
 own **2 s** threshold so an accidental brush can't shut you off. Both
 values live in `/etc/boombox/buttons.json` (`long_press_ms`,
 `power_hold_ms`) and hot-reload on save.
+
+A power short-press hands off to boombox-state's power manager: asleep
+means audio stopped, kiosk parked on Home, panel dark, and the Pi halted
+after `BOOMBOX_SLEEP_POWEROFF_S` (see [SERVICES.md](./SERVICES.md)). If
+boombox-state is unreachable the handler falls back to blanking the panel
+with `wlr-randr`, as it did before. While the unit is asleep the **first**
+press of any other button just wakes it — the press itself is dropped.
 
 ---
 

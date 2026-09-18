@@ -64,6 +64,7 @@ export function Icon({ name, size = 24, stroke = "currentColor", sw = 2 }: IconP
     case "chevron": return <svg {...p}><path d="M9 6 L15 12 L9 18"/></svg>;
     case "dot":     return <svg {...p}><circle cx="12" cy="12" r="3" fill={stroke}/></svg>;
     case "back":    return <svg {...p}><path d="M15 6 L9 12 L15 18"/></svg>;
+    case "home":    return <svg {...p}><path d="M3 11 L12 4 L21 11"/><path d="M5.5 9.5 V20 H18.5 V9.5"/><path d="M10 20 V14 H14 V20"/></svg>;
     case "fwd10":   return <svg {...p}><path d="M19 8 a8 8 0 1 0 1.5 4"/><path d="M19 4 V8 H15"/><text x="12" y="15" textAnchor="middle" fontSize="7" fill={stroke} stroke="none" fontFamily="monospace" fontWeight="700">10</text></svg>;
     case "back10":  return <svg {...p}><path d="M5 8 a8 8 0 1 1 -1.5 4"/><path d="M5 4 V8 H9"/><text x="12" y="15" textAnchor="middle" fontSize="7" fill={stroke} stroke="none" fontFamily="monospace" fontWeight="700">10</text></svg>;
     default:        return <svg {...p}><circle cx="12" cy="12" r="8"/></svg>;

@@ -50,7 +50,7 @@ function SmpFrame({ children, active = "home", chrome }: { children: React.React
   // decorative for now (Video / etc.).
   const navItems: { id: string; label: string; icon: string; k: string; onClick?: () => void; badge?: string }[] = [
     {id: "home",     label: "Now Playing", icon: "play",    k: "01"},
-    {id: "sources",  label: chrome ? `Sources · ${chrome.sourceLabel}` : "Sources", icon: "cast", k: "02", onClick: chrome?.onOpenSource},
+    {id: "gohome",   label: chrome ? `Home · ${chrome.sourceLabel}` : "Home", icon: "home", k: "02", onClick: chrome?.onGoHome},
     {id: "queue",    label: chrome ? `Queue · ${chrome.queueCount}` : "Queue", icon: "queue", k: "03", onClick: chrome?.onOpenQueue},
     {id: "skin",     label: chrome ? `Skin · ${chrome.skinName}` : "Skin", icon: "search", k: "04", onClick: chrome?.onOpenSkinPicker},
     {id: "settings", label: "Settings",    icon: "search",  k: "05", onClick: chrome?.onOpenSettings},

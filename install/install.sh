@@ -107,7 +107,7 @@ sudo apt install -y \
   playerctl \
   pipewire pipewire-pulse wireplumber pulseaudio-utils \
   shairport-sync \
-  bluez bluez-tools \
+  bluez bluez-tools bluez-firmware \
   alsa-utils \
   flac \
   nodejs npm
@@ -174,7 +174,10 @@ fi
 # keep whatever identity their paired remotes already know.
 if [ ! -f /etc/boombox/boombox.env ]; then
     sudo mkdir -p /etc/boombox
-    printf 'BOOMBOX_ID=boombox-%s\nBOOMBOX_NAME=%s\n' "$(hostname)" "$(hostname)" \
+    printf 'BOOMBOX_ID=boombox-%s\nBOOMBOX_NAME=%s\n%s\n%s\n' \
+      "$(hostname)" "$(hostname)" \
+      '# Seconds asleep (screen dark, audio stopped) before the Pi halts. 0 = never halt.' \
+      '#BOOMBOX_SLEEP_POWEROFF_S=180' \
       | sudo tee /etc/boombox/boombox.env >/dev/null
     sudo chmod 644 /etc/boombox/boombox.env
 fi
@@ -272,6 +275,21 @@ fi
 # ---------------------------------------------------------------------------
 log "installing /etc/asound.conf"
 sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/asound.conf" /etc/asound.conf
+
+# ---------------------------------------------------------------------------
+# 5.5. logind: ignore the PMIC power key
+# ---------------------------------------------------------------------------
+# The power button is also wired to the Pi 5 J2 header so it can wake a
+# halted unit; without this drop-in logind would poweroff on every press
+# while running. logind only reads its config at start, and restarting it
+# under a live graphical session is not worth the risk — the drop-in takes
+# effect at the next boot, which install.sh already asks for.
+log "installing logind power-key drop-in"
+sudo mkdir -p /etc/systemd/logind.conf.d
+if ! sudo cmp -s "$ACTIVE_SCRIPT_DIR/config/logind-boombox.conf" /etc/systemd/logind.conf.d/boombox.conf; then
+  sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/logind-boombox.conf" /etc/systemd/logind.conf.d/boombox.conf
+  warn "logind power-key drop-in installed; takes effect after reboot"
+fi
 
 # ---------------------------------------------------------------------------
 # 6. Music dir + Mopidy config

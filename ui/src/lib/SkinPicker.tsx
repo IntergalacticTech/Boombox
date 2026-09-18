@@ -6,14 +6,16 @@
 
 import { useEffect } from "react";
 import { SKINS, type SkinMeta } from "./skinRegistry";
+import { DrawerHomeBtn } from "./ChromeButtons";
 import type { SkinId } from "./types";
 
 type Props = {
   activeId: SkinId;
   onClose: () => void;
+  onHome?: () => void;
 };
 
-export function SkinPickerDrawer({ activeId, onClose }: Props) {
+export function SkinPickerDrawer({ activeId, onClose, onHome }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -72,6 +74,7 @@ export function SkinPickerDrawer({ activeId, onClose }: Props) {
               color: "rgba(255,255,255,0.5)", marginTop: 2,
             }}>ACTIVE · {activeId.toUpperCase()}</div>
           </div>
+          <DrawerHomeBtn onHome={onHome} />
           <button onClick={onClose} style={{
             padding: "10px 16px",
             background: "rgba(255,255,255,0.08)",
