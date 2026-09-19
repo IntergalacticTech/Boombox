@@ -65,3 +65,47 @@ def test_sort_name_indexes_present(tmp_path: Path):
     )}
     assert "idx_albums_sort_name" in indexes
     assert "idx_artists_sort_name" in indexes
+
+
+def test_fts_rowid_is_stable_positive_and_type_scoped():
+    from boombox_library.db import fts_rowid
+    a = fts_rowid("album", "abc123")
+    assert a == fts_rowid("album", "abc123")
+    assert 0 < a < 2**63
+    assert a != fts_rowid("track", "abc123")
+    assert a != fts_rowid("album", "abc124")
+
+
+def test_migration_v3_rebuilds_search_index_with_stable_rowids(tmp_path: Path):
+    """A v2 DB has FTS rows at arbitrary rowids; v3 must re-key every row to
+    fts_rowid(content_type, id) without losing any and with search intact."""
+    from boombox_library import db as dbmod
+    from boombox_library.db import fts_rowid
+
+    db_path = tmp_path / "library.db"
+    conn = connect(db_path)
+    # Build a v2 database the old way.
+    for i, ddl in enumerate(dbmod._MIGRATIONS[:2], start=1):
+        conn.executescript(ddl)
+        conn.execute("DELETE FROM _schema_version")
+        conn.execute("INSERT INTO _schema_version(version) VALUES (?)", (i,))
+    rows = [("album", "al1", "Back in Black", "AC/DC Back in Black"),
+            ("track", "tr1", "Hells Bells", "Hells Bells"),
+            ("artist", "ar1", "AC/DC", "AC/DC")]
+    conn.executemany(
+        "INSERT INTO search_index(content_type, id, title, body) VALUES (?,?,?,?)", rows)
+    assert conn.execute("SELECT rowid FROM search_index WHERE id='al1'").fetchone()[0] \
+        != fts_rowid("album", "al1")
+
+    migrate(conn)
+
+    assert conn.execute("SELECT version FROM _schema_version").fetchone()[0] == SCHEMA_VERSION
+    assert conn.execute("SELECT COUNT(*) FROM search_index").fetchone()[0] == 3
+    for ctype, id_, *_ in rows:
+        got = conn.execute(
+            "SELECT rowid FROM search_index WHERE content_type=? AND id=?", (ctype, id_)
+        ).fetchone()[0]
+        assert got == fts_rowid(ctype, id_)
+    hit = conn.execute(
+        "SELECT id FROM search_index WHERE search_index MATCH 'hells'").fetchone()
+    assert hit[0] == "tr1"

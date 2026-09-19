@@ -189,7 +189,10 @@ class ServiceContext:
                     self._online = False
                     return
                 try:
-                    await sync_full(client, self.conn)
+                    t0 = time.monotonic()
+                    counts = await sync_full(client, self.conn)
+                    log.info("sync_full done in %.1fs: %s",
+                             time.monotonic() - t0, counts)
                     if self.cfg.sync.starred_auto_pin:
                         reconcile_starred(self.conn)
                     self._enqueue_pinned_downloads()

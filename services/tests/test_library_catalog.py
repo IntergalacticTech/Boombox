@@ -231,3 +231,62 @@ async def test_sync_full_populates_playlist_tracks(tmp_path: Path):
     assert len(rows) == 2
     assert rows[0]["track_id"] == "t1" and rows[0]["position"] == 0
     assert rows[1]["track_id"] == "t2" and rows[1]["position"] == 1
+
+
+@pytest.mark.asyncio
+async def test_resync_keeps_exactly_one_search_row_per_item(tmp_path: Path):
+    """Each hourly sync re-upserts every artist/album; the FTS row must be
+    replaced in place (keyed by rowid), never duplicated, and the old
+    title must stop matching once it changes."""
+    from boombox_library.db import fts_rowid
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    albums = [{"id": "al1", "name": "Old Name", "artistId": "ar1", "songCount": 1}]
+    client = FakeSubsonic(
+        artists=[{"id": "ar1", "name": "Artist", "albumCount": 1}],
+        albums=albums,
+        tracks_per_album={"al1": [{"id": "tr1", "title": "Song"}]},
+    )
+    await sync_full(client, db)
+    albums[0]["name"] = "New Name"
+    await sync_full(client, db)
+    await sync_full(client, db)
+
+    assert db.execute("SELECT COUNT(*) FROM search_index").fetchone()[0] == 3
+    assert db.execute("SELECT rowid FROM search_index WHERE id='al1'").fetchone()[0] \
+        == fts_rowid("album", "al1")
+    assert db.execute(
+        "SELECT COUNT(*) FROM search_index WHERE search_index MATCH 'old'").fetchone()[0] == 0
+    assert db.execute(
+        "SELECT id FROM search_index WHERE search_index MATCH 'new'").fetchone()[0] == "al1"
+
+
+@pytest.mark.asyncio
+async def test_sync_full_yields_to_the_loop_during_album_pages(tmp_path: Path):
+    """A 500-album page must not run as one uninterrupted block: another
+    task on the loop has to get scheduled while the page is being written."""
+    import asyncio
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    albums = [{"id": f"al{i}", "name": f"Album {i}", "artistId": "ar1", "songCount": 1}
+              for i in range(500)]
+    client = FakeSubsonic(
+        artists=[{"id": f"ar{i}", "name": f"Artist {i}", "albumCount": 1} for i in range(300)],
+        albums=albums,
+        tracks_per_album={f"al{i}": [{"id": f"tr{i}", "title": f"Song {i}"}] for i in range(500)},
+    )
+    await sync_full(client, db)   # cold sync fetches every album (yields per fetch)
+    # Steady state: every album short-circuits on track count, so the only
+    # yields left are the ones the artist/album write loops make themselves.
+    ticks = 0
+    async def ticker():
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0)
+    t = asyncio.create_task(ticker())
+    before = ticks
+    await sync_full(client, db)
+    t.cancel()
+    # Artists (300) + albums (500) = at least 8 chunk boundaries of 100.
+    assert ticks - before >= 8

@@ -13,6 +13,8 @@ import time
 from sqlite3 import Connection
 from typing import Protocol
 
+from .db import fts_rowid
+
 log = logging.getLogger("boombox-library.catalog")
 
 _ALBUM_PAGE_SIZE = 500
@@ -40,12 +42,20 @@ def _upsert_artist(conn: Connection, a: dict, now: float) -> None:
         (a["id"], a["name"], a.get("sortName", a["name"]).lower(),
          int(a.get("albumCount", 0)), a.get("coverArt"), now),
     )
-    # FTS index for artist
-    conn.execute("DELETE FROM search_index WHERE content_type='artist' AND id=?",
-                 (a["id"],))
+    _reindex(conn, "artist", a["id"], a["name"], a["name"])
+
+
+def _reindex(conn: Connection, content_type: str, id_: str,
+             title: str, body: str) -> None:
+    """Replace one search_index row. Keyed by fts_rowid so the delete is an
+    O(log n) rowid lookup — the column-predicate form was a full FTS scan
+    per row (see db.fts_rowid)."""
+    rid = fts_rowid(content_type, id_)
+    conn.execute("DELETE FROM search_index WHERE rowid=?", (rid,))
     conn.execute(
-        "INSERT INTO search_index(content_type, id, title, body) VALUES (?,?,?,?)",
-        ("artist", a["id"], a["name"], a["name"]),
+        "INSERT INTO search_index(rowid, content_type, id, title, body) "
+        "VALUES (?,?,?,?,?)",
+        (rid, content_type, id_, title, body),
     )
 
 
@@ -76,12 +86,7 @@ def _upsert_album(conn: Connection, al: dict, now: float, starred_ids: set[str])
     )
     body = " ".join(filter(None, [al.get("name"), al.get("artist"),
                                    str(al.get("year") or ""), al.get("genre")]))
-    conn.execute("DELETE FROM search_index WHERE content_type='album' AND id=?",
-                 (al["id"],))
-    conn.execute(
-        "INSERT INTO search_index(content_type, id, title, body) VALUES (?,?,?,?)",
-        ("album", al["id"], al.get("name", ""), body),
-    )
+    _reindex(conn, "album", al["id"], al.get("name", ""), body)
 
 
 def _upsert_track(conn: Connection, tr: dict, album_id: str, now: float,
@@ -108,12 +113,7 @@ def _upsert_track(conn: Connection, tr: dict, album_id: str, now: float,
          int(tr.get("size", 0)), tr.get("contentType", ""),
          1 if tr["id"] in starred_ids else 0, now),
     )
-    conn.execute("DELETE FROM search_index WHERE content_type='track' AND id=?",
-                 (tr["id"],))
-    conn.execute(
-        "INSERT INTO search_index(content_type, id, title, body) VALUES (?,?,?,?)",
-        ("track", tr["id"], tr.get("title", ""), tr.get("title", "")),
-    )
+    _reindex(conn, "track", tr["id"], tr.get("title", ""), tr.get("title", ""))
 
 
 def _upsert_playlist(conn: Connection, pl: dict, now: float) -> None:
@@ -134,13 +134,22 @@ def _upsert_playlist(conn: Connection, pl: dict, now: float) -> None:
 _TXN_CHUNK = 100  # commit every N items so other writers (boombox-rfid) aren't starved
 
 
-def _chunk_commit(conn: Connection, counter: int) -> int:
-    """Commit + reopen the txn every _TXN_CHUNK items. Returns counter+1."""
-    counter += 1
-    if counter % _TXN_CHUNK == 0:
-        conn.execute("COMMIT")
+async def _write_chunked(conn: Connection, items, write) -> None:
+    """Apply `write(item)` to every item in transactions of _TXN_CHUNK rows,
+    yielding to the event loop after each commit so API handlers (and other
+    SQLite writers) get a turn. A tiny non-zero sleep for the same reason as
+    the track loop below: sleep(0) re-takes the write lock too fast."""
+    for start in range(0, len(items), _TXN_CHUNK):
         conn.execute("BEGIN")
-    return counter
+        try:
+            for item in items[start:start + _TXN_CHUNK]:
+                write(item)
+            conn.execute("COMMIT")
+        except Exception:
+            try: conn.execute("ROLLBACK")
+            except Exception: pass
+            raise
+        await asyncio.sleep(0.005)
 
 
 async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
@@ -157,17 +166,11 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
     starred_album_ids = {a["id"] for a in starred.get("album", [])}
     starred_song_ids = {s["id"] for s in starred.get("song", [])}
 
-    # Artists: HTTP first, then a single short transaction.
+    # Artists: HTTP first, then short transactions of _TXN_CHUNK rows with a
+    # yield between them — the whole write phase used to run as one block on
+    # the event loop, so the HTTP API stopped answering for its duration.
     artists = await client.get_artists()
-    conn.execute("BEGIN")
-    try:
-        for a in artists:
-            _upsert_artist(conn, a, now)
-        conn.execute("COMMIT")
-    except Exception:
-        try: conn.execute("ROLLBACK")
-        except Exception: pass
-        raise
+    await _write_chunked(conn, artists, lambda a: _upsert_artist(conn, a, now))
 
     # Albums: each HTTP page → one short txn. We capture each album's
     # expected songCount so the next loop can skip the per-album HTTP
@@ -179,16 +182,10 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
         page = await client.get_album_list(offset=offset, size=_ALBUM_PAGE_SIZE)
         if not page:
             break
-        conn.execute("BEGIN")
-        try:
-            for al in page:
-                _upsert_album(conn, al, now, starred_album_ids)
-                all_albums_seen.append((al["id"], int(al.get("songCount", 0))))
-            conn.execute("COMMIT")
-        except Exception:
-            try: conn.execute("ROLLBACK")
-            except Exception: pass
-            raise
+        await _write_chunked(
+            conn, page, lambda al: _upsert_album(conn, al, now, starred_album_ids))
+        all_albums_seen.extend(
+            (al["id"], int(al.get("songCount", 0))) for al in page)
         album_count += len(page)
         if len(page) < _ALBUM_PAGE_SIZE:
             break
