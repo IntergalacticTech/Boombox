@@ -2,7 +2,7 @@
 [Unit]
 Description=Boombox RFID reader (USB HID kbd → bound playback)
 After=default.target network-online.target boombox-library.service
-Wants=network-online.target
+Wants=network-online.target boombox-library.service
 
 [Service]
 Type=simple
@@ -11,6 +11,9 @@ Restart=on-failure
 RestartSec=5
 # Reads /etc/boombox/rfid.yml + /dev/input/by-id/<reader>-event-kbd.
 # Shares the library SQLite DB at /opt/boombox/state/library.db.
+# Streamed tracks play through boombox-library's local proxy
+# (127.0.0.1:6687), hence the Wants=/After= on it; a tap during a
+# boombox-library restart waits briefly for the proxy (playback.py).
 # The kiosk user needs read access to /dev/input — handled by the
 # 'input' group membership added in install.sh.
 

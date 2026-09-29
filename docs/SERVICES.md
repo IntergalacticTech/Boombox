@@ -419,8 +419,13 @@ reference — see [ACCESS.md](./ACCESS.md).
 Pulls the user's Navidrome (Subsonic) catalog into a local SQLite cache
 (`/opt/boombox/state/library.db`), manages a USB-stick offline cache,
 and resolves playback URIs (`file://` when a track is on the cache
-drive, a direct Navidrome `/rest/stream.view?…` URL when only available
-online).
+drive, a credential-free `http://127.0.0.1:6687/api/library/stream/<id>`
+URL on its own stream proxy when only available online — the proxy adds
+the Subsonic token+salt server-side and relays Navidrome's
+`/rest/stream.view`). Streamed playback therefore depends on this
+service: restarting it cuts a streamed track (in-flight relays are
+aborted on shutdown so the stop is fast), and `boombox-rfid` /
+`boombox-resume` are ordered after it.
 
 The kiosk's **Settings → Home Library** + **Settings → Offline Cache**
 panels are the user surface; the touchscreen also gets a sync-status

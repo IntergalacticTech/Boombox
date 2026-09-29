@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -23,7 +24,7 @@ from .config import LibraryConfig, SourceConfig
 from .models import PinKind, PinSource
 from .pins import pin as _pin_fn
 from .pins import unpin as _unpin_fn
-from .resolver import PlaybackResolution, resolve_playback
+from .resolver import PlaybackResolution, cached_local_paths, resolve_playback
 from .snapshots import compute_etag, snapshot_path
 from .subsonic import make_auth_params
 
@@ -236,18 +237,33 @@ async def _sync_run(req: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
-def _resolve_one(ctx: Context, track_id: str, online: bool) -> PlaybackResolution:
+async def _existing_cache_files(ctx: Context, track_ids: list[str]) -> frozenset[str]:
+    """Stat the candidate cache files off the event loop. The loop also
+    feeds every live stream relay (stream_proxy), so a slow/wedged cache
+    mount must not stall it for a whole batch of stat() calls."""
+    paths = cached_local_paths(ctx.conn, track_ids)
+    if not paths:
+        return frozenset()
+    return await asyncio.to_thread(
+        lambda: frozenset(p for p in paths if os.path.exists(p)))
+
+
+def _resolve_one(
+    ctx: Context, track_id: str, online: bool, existing: frozenset[str],
+) -> PlaybackResolution:
     src = ctx.cfg.source
     return resolve_playback(
         ctx.conn, track_id, online,
         source_url=src.url, source_username=src.username, source_password=src.password,
+        file_exists=existing.__contains__,
     )
 
 
 async def _resolver(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
     track_id = req.match_info["track_id"]
-    r = _resolve_one(ctx, track_id, await ctx.is_online())
+    existing = await _existing_cache_files(ctx, [track_id])
+    r = _resolve_one(ctx, track_id, await ctx.is_online(), existing)
     return web.json_response({
         "source": r.source.value,
         "uri": r.uri,
@@ -274,9 +290,10 @@ async def _resolve_batch(req: web.Request) -> web.Response:
         return web.json_response(
             {"error": f"too many ids (max {RESOLVE_BATCH_MAX})"}, status=400)
     online = await ctx.is_online()
+    existing = await _existing_cache_files(ctx, ids)
     items = []
     for tid in ids:
-        r = _resolve_one(ctx, tid, online)
+        r = _resolve_one(ctx, tid, online, existing)
         items.append({
             "id": tid,
             "source": r.source.value,

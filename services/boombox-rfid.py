@@ -24,7 +24,11 @@ from boombox_rfid.bindings import get_binding, record_tap
 from boombox_rfid.config import LIBRARY_DB_PATH, load_config
 from boombox_rfid.db import connect, migrate
 from boombox_rfid.mopidy_client import MopidyClient
-from boombox_rfid.playback import expand_to_track_ids, resolve_uris
+from boombox_rfid.playback import (
+    expand_to_track_ids,
+    resolve_uris,
+    wait_for_stream_proxy,
+)
 from boombox_rfid.reader import auto_detect_device, read_uids
 
 logging.basicConfig(level=logging.INFO,
@@ -120,6 +124,9 @@ class ServiceContext:
         if not uris:
             log.warning("no playable URIs for binding %s (offline?)", uid)
             return
+        if not await wait_for_stream_proxy(uris):
+            log.error("boombox-library stream proxy (127.0.0.1:6687) is down; "
+                      "streamed tracks for %s will fail until it is back", uid)
         try:
             async with MopidyClient(self.cfg.mopidy_rpc) as m:
                 await m.play_uris(uris)

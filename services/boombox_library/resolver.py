@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 from sqlite3 import Connection
-from typing import Optional
+from typing import Callable, Iterable, Optional
 from urllib.parse import quote, urlencode
 
 from .subsonic import make_auth_params
@@ -65,6 +65,21 @@ def make_stream_url(
     return f"{base_url.rstrip('/')}/rest/stream.view?{urlencode(params)}"
 
 
+def cached_local_paths(conn: Connection, track_ids: Iterable[str]) -> list[str]:
+    """local_path of every 'present' cache row among track_ids — the only
+    paths resolve_playback would stat. Chunked under SQLite's host-param
+    limit."""
+    ids = list(dict.fromkeys(track_ids))
+    out: list[str] = []
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        marks = ",".join("?" * len(chunk))
+        out.extend(r[0] for r in conn.execute(
+            f"SELECT local_path FROM cache_state WHERE status='present' "
+            f"AND local_path IS NOT NULL AND track_id IN ({marks})", chunk))
+    return out
+
+
 def resolve_playback(
     conn: Connection,
     track_id: str,
@@ -74,6 +89,7 @@ def resolve_playback(
     source_username: str = "",
     source_password: str = "",
     stream_base_url: Optional[str] = None,
+    file_exists: Callable[[str], bool] = os.path.exists,
 ) -> PlaybackResolution:
     """Decide which URI form to play.
 
@@ -90,6 +106,10 @@ def resolve_playback(
     treated as not cached rather than handing Mopidy a dead file:// URI.
     The source credentials only gate STREAM (the proxy needs a configured
     source); they never appear in the URI.
+
+    file_exists defaults to a live stat of the cache drive. Async callers
+    pass a precomputed membership test instead (see cached_local_paths) so
+    a slow or wedged USB mount never stats on the event loop.
     """
     row = conn.execute(
         "SELECT status, local_path FROM cache_state WHERE track_id=?",
@@ -97,7 +117,7 @@ def resolve_playback(
     ).fetchone()
 
     cached = (row is not None and row["status"] == "present"
-              and row["local_path"] and os.path.exists(row["local_path"]))
+              and row["local_path"] and file_exists(row["local_path"]))
     if cached:
         # file:// URI plays through Mopidy's bundled stream backend (GStreamer
         # filesrc) — independent of Mopidy-Local's index. urllib.parse.quote

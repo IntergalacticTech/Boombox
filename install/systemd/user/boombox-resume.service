@@ -1,7 +1,10 @@
 [Unit]
 Description=Boombox auto-resume (Mopidy snapshot + restore)
-After=network-online.target
-Wants=network-online.target
+# Snapshots of streamed Home Library tracks hold boombox-library's local
+# proxy URLs (127.0.0.1:6687); order after it so a boot-time restore
+# doesn't race it (boombox-resume.py also waits for the port).
+After=network-online.target boombox-library.service
+Wants=network-online.target boombox-library.service
 
 [Service]
 Type=simple

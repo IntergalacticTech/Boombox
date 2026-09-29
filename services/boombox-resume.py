@@ -19,6 +19,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -30,6 +31,12 @@ SNAPSHOT_PATH = Path(os.environ.get("BOOMBOX_RESUME_FILE", "/var/lib/boombox/las
 SNAPSHOT_EVERY_S = 5
 RESUME_AGE_LIMIT_S = 24 * 60 * 60       # don't resume snapshots older than a day
 STARTUP_GRACE_S = 5                     # let Mopidy finish booting before deciding
+# Streamed Home Library tracks are URLs on boombox-library's local stream
+# proxy, so restoring them needs that service listening — at boot it may
+# still be starting. Same override variable as boombox_library.resolver.
+LIBRARY_STREAM_BASE = (os.environ.get("BOOMBOX_LIBRARY_STREAM_BASE")
+                       or "http://127.0.0.1:6687/api/library/stream").rstrip("/")
+LIBRARY_WAIT_S = 60
 
 
 _id = 0
@@ -91,11 +98,40 @@ def read_snapshot() -> dict | None:
         return None
 
 
+def needs_stream_proxy(snap: dict) -> bool:
+    uris = list(snap.get("tracklist") or []) + [snap.get("track_uri") or ""]
+    return any(str(u).startswith(LIBRARY_STREAM_BASE + "/") for u in uris)
+
+
+async def wait_for_stream_proxy(timeout: float = LIBRARY_WAIT_S) -> bool:
+    """True once boombox-library's stream proxy accepts TCP connections."""
+    parts = urlsplit(LIBRARY_STREAM_BASE)
+    host = parts.hostname or "127.0.0.1"
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        try:
+            _r, w = await asyncio.wait_for(asyncio.open_connection(host, port), 1.0)
+            w.close()
+            return True
+        except (OSError, asyncio.TimeoutError):
+            pass
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(1)
+
+
 async def maybe_restore(sess: aiohttp.ClientSession) -> None:
     snap = read_snapshot()
     if not snap:
         log.info("no snapshot to restore")
         return
+    if needs_stream_proxy(snap) and not await wait_for_stream_proxy():
+        # Restore anyway: cached/other entries still play, and Mopidy
+        # rescans the proxy URLs once boombox-library is back.
+        log.warning("boombox-library stream proxy not reachable after %d s; "
+                    "streamed tracks in the snapshot may fail", LIBRARY_WAIT_S)
     state = await rpc(sess, "core.playback.get_state")
     if state == "playing":
         log.info("Mopidy already playing — not restoring")

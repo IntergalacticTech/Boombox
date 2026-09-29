@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import re
+import weakref
 from typing import Any
 
 import aiohttp
@@ -55,6 +56,12 @@ class _SessionHolder:
 
 
 _SESSION_KEY = web.AppKey("stream_proxy_http", _SessionHolder)
+# Handler tasks of in-flight relays. A relay lives as long as Mopidy has
+# the track loaded (playing *or* paused), so on shutdown they are cut
+# rather than waited on — aiohttp's graceful shutdown would otherwise
+# sit out its full shutdown_timeout per phase (~120 s by default, past
+# systemd's 90 s stop timeout → SIGKILL on every restart).
+_ACTIVE_KEY = web.AppKey("stream_proxy_active", weakref.WeakSet)
 
 
 def valid_track_id(track_id: str) -> bool:
@@ -79,7 +86,21 @@ def setup(app: web.Application) -> None:
     session. Called from api.build_app."""
     app.router.add_get("/api/library/stream/{track_id}", _stream)  # HEAD too
     app[_SESSION_KEY] = _SessionHolder()
+    app[_ACTIVE_KEY] = weakref.WeakSet()
+    app.on_shutdown.append(_abort_streams)
     app.on_cleanup.append(_close_session)
+
+
+async def _abort_streams(app: web.Application) -> None:
+    """on_shutdown: end every in-flight relay now. The player sees a
+    truncated stream (restarting boombox-library interrupts a streamed
+    track — Mopidy skips or stops, exactly as for a network drop)."""
+    active: weakref.WeakSet[asyncio.Task[Any]] = app[_ACTIVE_KEY]
+    tasks = [t for t in active if not t.done()]
+    for t in tasks:
+        t.cancel()
+    if tasks:
+        log.info("shutdown: aborted %d active stream(s)", len(tasks))
 
 
 async def _close_session(app: web.Application) -> None:
@@ -107,7 +128,9 @@ def _subsonic_error_status(body: bytes) -> tuple[int, str]:
     try:
         err = json.loads(body)["subsonic-response"]["error"]
         code = int(err.get("code", 0))
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, AttributeError):
+        # AttributeError: a non-dict "error" (string/list) from a
+        # non-Navidrome server.
         return 502, "upstream error"
     if code == 70:
         return 404, "track not found upstream"
@@ -142,6 +165,23 @@ async def _stream(req: web.Request) -> web.StreamResponse:
         headers["Range"] = req.headers["Range"]
 
     session = _session_for(req)
+    # The handler runs on the connection's task (reused across keep-alive
+    # requests), so register only for the relay's lifetime.
+    active = req.app[_ACTIVE_KEY]
+    task = asyncio.current_task()
+    if task is not None:
+        active.add(task)
+    try:
+        return await _fetch_and_relay(req, session, url, params, headers, track_id)
+    finally:
+        if task is not None:
+            active.discard(task)
+
+
+async def _fetch_and_relay(
+    req: web.Request, session: aiohttp.ClientSession, url: str,
+    params: dict[str, Any], headers: dict[str, str], track_id: str,
+) -> web.StreamResponse:
     try:
         async with session.get(url, params=params, headers=headers,
                                timeout=UPSTREAM_TIMEOUT) as up:
@@ -156,7 +196,6 @@ async def _stream(req: web.Request) -> web.StreamResponse:
         # full URL, token and salt included.
         log.warning("stream %s: upstream unreachable (%s)", track_id, type(e).__name__)
         return web.Response(status=502, text="upstream unreachable")
-
 
 async def _relay(
     req: web.Request, up: aiohttp.ClientResponse, track_id: str,

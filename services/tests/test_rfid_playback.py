@@ -83,3 +83,30 @@ def test_resolve_uris_skips_offline_miss(tmp_path: Path):
     _seed(conn)
     uris = resolve_uris(conn, ["t1", "t2"], online=False)
     assert uris == []  # neither cached + offline → both skipped
+
+
+# ----- stream-proxy readiness (boombox-library restarting) -----
+
+async def test_wait_for_stream_proxy_skips_when_all_cached(monkeypatch):
+    from boombox_rfid.playback import wait_for_stream_proxy
+    # Unreachable base, but no URI points at it → no wait, True.
+    monkeypatch.setenv("BOOMBOX_LIBRARY_STREAM_BASE", "http://127.0.0.1:1/s")
+    assert await wait_for_stream_proxy(["file:///m/a.mp3"], timeout=0) is True
+
+
+async def test_wait_for_stream_proxy_detects_listener(monkeypatch):
+    import asyncio
+
+    from boombox_rfid.playback import wait_for_stream_proxy
+    server = await asyncio.start_server(lambda r, w: w.close(), "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    base = f"http://127.0.0.1:{port}/api/library/stream"
+    monkeypatch.setenv("BOOMBOX_LIBRARY_STREAM_BASE", base)
+    try:
+        assert await wait_for_stream_proxy([f"{base}/t1"], timeout=1) is True
+    finally:
+        server.close()
+        await server.wait_closed()
+    # Now nothing listens on that port: gives up after the timeout.
+    assert await wait_for_stream_proxy(
+        [f"{base}/t1"], timeout=0.2, interval=0.05) is False

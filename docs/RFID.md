@@ -136,9 +136,12 @@ Bound tap pipeline (per the data flow in
    - **playlist** → tracks in playlist position order.
    - **track** → that one track.
 4. **`resolve_uris(tracks)`** — ask Phase 1's resolver for each
-   track's playback form: `file://<cache>` when cached, direct
-   Navidrome `stream.view` URL when online, dropped silently when
-   offline-miss.
+   track's playback form: `file://<cache>` when cached, a
+   boombox-library stream-proxy URL
+   (`http://127.0.0.1:6687/api/library/stream/<id>`, auth added
+   server-side) when online, dropped silently when offline-miss. If any
+   URI needs the proxy, the tap waits up to ~10 s for port 6687 (a
+   boombox-library restart) and logs an error if it never appears.
 5. **MopidyClient.play_uris()** — `core.tracklist.clear`,
    `core.tracklist.add({uris})` (with a Track-objects fallback if
    the URI add returns empty), `core.playback.play({tlid})`, and a

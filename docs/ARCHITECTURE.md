@@ -160,8 +160,10 @@ For each tap:
 3. **Bound** → `expand_to_track_ids(kind, target_id)` resolves the
    binding to an ordered track list, then
    `boombox_library.resolver.resolve_playback` decides each track's
-   playable form: `file://<cache-path>` when cached, a direct
-   `/rest/stream.view?…` URL with token+salt auth when online,
+   playable form: `file://<cache-path>` when cached, a credential-free
+   `http://127.0.0.1:6687/api/library/stream/<id>` URL on
+   boombox-library's stream proxy (which adds token+salt auth
+   server-side) when online,
    `offline_miss` otherwise. The URI list goes to Mopidy via
    `core.tracklist.clear`/`add` + `core.playback.play({tlid})` plus a
    `resume` belt-and-suspenders.

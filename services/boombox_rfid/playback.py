@@ -8,11 +8,16 @@ streaming). The source credentials passed in only gate whether streaming
 is possible; they never end up in a URI.
 
 Skips tracks the resolver marks 'offline_miss' (not cached + not online).
+
+Streamed URIs depend on boombox-library being up (it is the proxy);
+wait_for_stream_proxy lets a tap ride out a boombox-library restart.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from sqlite3 import Connection
+from urllib.parse import urlsplit
 
 from .models import BindingKind
 
@@ -66,3 +71,32 @@ def resolve_uris(
             continue
         out.append(r.uri)
     return out
+
+
+async def wait_for_stream_proxy(
+    uris: list[str], timeout: float = 10.0, interval: float = 0.5,
+) -> bool:
+    """True once boombox-library's stream proxy accepts TCP connections,
+    or immediately when no URI points at it (all cached). False after
+    `timeout` — the caller plays anyway (cached entries still work) but
+    can log why streamed ones won't."""
+    from boombox_library.resolver import stream_base
+
+    base = stream_base()
+    if not any(u.startswith(base + "/") for u in uris):
+        return True
+    parts = urlsplit(base)
+    host = parts.hostname or "127.0.0.1"
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        try:
+            _r, w = await asyncio.wait_for(asyncio.open_connection(host, port), 1.0)
+            w.close()
+            return True
+        except (OSError, asyncio.TimeoutError):
+            pass
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(interval)

@@ -78,10 +78,20 @@ class Upstream:
             return web.json_response(
                 {"subsonic-response": {"status": "failed",
                                        "error": {"code": 40, "message": "bad creds"}}})
+        if self.mode == "string_error":
+            return web.json_response(
+                {"subsonic-response": {"status": "failed", "error": "bad"}})
         if self.mode == "http500":
             return web.Response(status=500, text="boom")
         if self.mode == "slow":
             await asyncio.sleep(2)
+        if self.mode == "endless":
+            # A paused/playing track: the relay never finishes on its own.
+            resp = web.StreamResponse(headers={"Content-Type": "audio/mpeg"})
+            await resp.prepare(req)
+            while True:
+                await resp.write(b"x" * 4096)
+                await asyncio.sleep(0.01)
         if self.mode == "trickle":
             resp = web.StreamResponse(headers={"Content-Type": "audio/mpeg"})
             await resp.prepare(req)
@@ -250,6 +260,42 @@ async def test_stream_client_disconnect_releases_upstream(env):
     await asyncio.wait_for(up.aborted.wait(), timeout=5)
 
 
+async def test_stream_non_dict_subsonic_error_is_502(env):
+    c, _, up, _ = env
+    up.mode = "string_error"
+    r = await c.get("/api/library/stream/t1")
+    assert r.status == 502
+
+
+def test_subsonic_error_status_tolerates_odd_envelopes():
+    f = stream_proxy._subsonic_error_status
+    assert f(b'{"subsonic-response":{"error":"bad"}}') == (502, "upstream error")
+    assert f(b'{"subsonic-response":{"error":["x"]}}') == (502, "upstream error")
+    assert f(b"<xml/>") == (502, "upstream error")
+    assert f(b'{"subsonic-response":{"error":{"code":70}}}')[0] == 404
+
+
+async def test_shutdown_aborts_active_streams_promptly(env):
+    """A long-lived relay must not hold runner.cleanup() for aiohttp's
+    default 60 s shutdown_timeout (x2) — past systemd's stop timeout."""
+    _, ctx, up, _ = env
+    up.mode = "endless"
+    runner = web.AppRunner(build_app(ctx))  # default shutdown_timeout
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+    async with aiohttp.ClientSession() as cs:
+        r = await cs.get(f"http://127.0.0.1:{port}/api/library/stream/t1")
+        assert r.status == 200
+        await r.content.readexactly(4096)
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await asyncio.wait_for(runner.cleanup(), timeout=15)
+        assert loop.time() - t0 < 5
+        r.close()
+
+
 async def test_stream_uses_ctx_http_session_when_present(env):
     c, ctx, up, _ = env
     async with aiohttp.ClientSession() as shared:
@@ -289,6 +335,36 @@ async def test_batch_resolve_preserves_order_one_online_check(env, tmp_path):
     assert items[1]["cache_status"] == "present"
     assert items[2]["source"] == "offline_miss" and items[2]["uri"] is None
     assert ctx.online_calls == 1
+
+
+async def test_batch_resolve_stats_cache_files_off_loop(env, tmp_path, monkeypatch):
+    """Cache-file existence checks run in a worker thread, never on the
+    loop that feeds live stream relays."""
+    import threading
+
+    from boombox_library import api as api_mod
+    c, _, _, conn = env
+    present = tmp_path / "t1.mp3"
+    present.write_bytes(b"ID3")
+    conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,"
+                 "downloaded_at) VALUES('t1','present',?,3,0)", (str(present),))
+    conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,"
+                 "downloaded_at) VALUES('t2','present',?,3,0)",
+                 (str(tmp_path / "gone.mp3"),))
+    main = threading.get_ident()
+    seen: list[int] = []
+    real_exists = api_mod.os.path.exists
+
+    def spy(p):
+        seen.append(threading.get_ident())
+        return real_exists(p)
+
+    monkeypatch.setattr(api_mod.os.path, "exists", spy)
+    r = await c.post("/api/library/resolve", json={"ids": ["t1", "t2", "t3"]})
+    items = (await r.json())["items"]
+    assert [i["source"] for i in items] == ["cache", "stream", "stream"]
+    assert items[1]["cache_status"] == "absent"   # row said present, file gone
+    assert len(seen) == 2 and main not in seen
 
 
 async def test_batch_resolve_offline(env):
