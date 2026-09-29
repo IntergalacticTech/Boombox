@@ -33,6 +33,22 @@ log()  { printf '\033[1;36m[apply]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[apply]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[apply]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Re-sync the nginx site file + shared snippet from $CURRENT through the root
+# helper: it renders the LAN port from the root-owned web-auth.env, installs
+# both files together, runs `nginx -t` and restores the previous pair if that
+# fails. Never install the snippet alone — the kiosk's `location /` lives in
+# the site file. A helper too old to know the action changes nothing (and
+# verify's LAN-app probe then fails, so the release is rolled back).
+nginx_sync() {
+  local out
+  out="$(printf '{"action":"nginx-sync"}' | sudo -n /usr/local/sbin/boombox-setup-apply 2>&1)" || true
+  if [[ "$out" == *'"ok": true'* ]]; then
+    log "nginx site + snippet in sync with $(readlink "$CURRENT")"
+  else
+    warn "nginx config not synced: ${out:-no output} — reinstall /usr/local/sbin/boombox-setup-apply (install.sh) to enable per-deploy nginx sync"
+  fi
+}
+
 # A ref names a release directory under $RELEASES and is interpolated into
 # `rm -rf "$RELEASES/$ref"` and `git clone --branch "$ref"`. Restrict it to a
 # git tag / short-or-full SHA so it can never contain a path separator or `..`
@@ -159,22 +175,9 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     install -m 0644 "$CURRENT/install/systemd/user/"*.service \
       "$HOME/.config/systemd/user/"
     systemctl --user daemon-reload
-    # Sync the nginx snippet so source-controlled location blocks (e.g. the
-    # /remote/ PWA mount, /api/remote/) land without re-running install.sh.
-    # The reload happens in the `restart` step; this just stages the file.
-    # The exact path is required to match the narrow sudoers entry. On a
-    # box where install.sh hasn't run since the entry was added, sudo will
-    # refuse — that's fine, the nginx config falls back to whatever
-    # install.sh last staged, and the next install.sh run repairs the path.
-    if [[ -f "$CURRENT/install/config/nginx-boombox-common.conf" ]]; then
-      if sudo -n /usr/bin/install -m 0644 \
-           /opt/boombox/current/install/config/nginx-boombox-common.conf \
-           /etc/nginx/snippets/boombox-common.conf 2>/dev/null; then
-        sudo /usr/sbin/nginx -t || warn "nginx -t failed after snippet sync"
-      else
-        warn "sudoers missing nginx-snippet entry; run install.sh once to enable per-deploy nginx sync"
-      fi
-    fi
+    # Site file + snippet move together (see nginx_sync). The reload happens
+    # in the `restart` step; this only stages the files.
+    nginx_sync
     # Root-executed helpers live as root-owned copies outside the release
     # tree precisely so this (unprivileged) deploy can NOT rewrite them —
     # granting sudo to copy them from here would reopen that hole. So they
@@ -289,8 +292,13 @@ PYRELOAD
       done
       fail "$name"
     }
-    probe http://localhost/                  "nginx /"
-    probe http://localhost/remote/           "/remote/"
+    probe http://localhost/                  "nginx / (kiosk UI)"
+    # The LAN app at / on the LAN port, without Basic auth. A 401 here means
+    # the nginx pair wasn't synced (old boombox-setup-apply) — fail so the
+    # release rolls back instead of leaving the LAN on the old config.
+    lan_port="$(sed -n 's/^BOOMBOX_WEB_PORT=//p' /etc/boombox/web-auth.env 2>/dev/null | head -n1)" || true
+    lan_port="${lan_port:-8090}"
+    probe "http://127.0.0.1:$lan_port/"      "LAN app / (nginx site not synced? reinstall boombox-setup-apply)"
     probe http://localhost/api/state         "/api/state"
     # /api/buttons/ has no index handler — probe a real GET endpoint.
     probe http://localhost/api/buttons/config "/api/buttons/config"
@@ -321,6 +329,8 @@ PYRELOAD
     install -m 0644 "$CURRENT/install/systemd/user/"*.service \
       "$HOME/.config/systemd/user/"
     systemctl --user daemon-reload
+    # Put the reverted release's nginx pair back before the reload below.
+    nginx_sync
     # (see restart case for why these units — and why others — are omitted)
     units=(
       boombox-state boombox-audio boombox-orchestrator boombox-buttons

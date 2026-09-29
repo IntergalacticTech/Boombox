@@ -26,6 +26,9 @@
 #   web-password {current_password, new_password}
 #                                     → rotate web login + Samba (rolls back on
 #                                       failure) + built-in Jellyfin admin
+#   nginx-sync {}                     → install the active release's nginx site
+#                                       (port from web-auth.env) + shared snippet
+#                                       together; nginx -t; restore both on failure
 #
 # Result is always JSON: {"ok": bool, ...} on stdout, exit 0. Hard errors
 # (bad JSON, unknown action) exit non-zero with {"ok": false, "error": ...}.
@@ -49,6 +52,13 @@ SHAIRPORT_CONF_CANDIDATES = ["/etc/shairport-sync.conf",
 RASPOTIFY_CONF = "/etc/raspotify/conf"
 WEB_AUTH_ENV = "/etc/boombox/web-auth.env"
 HTPASSWD = "/etc/nginx/boombox.htpasswd"
+NGINX_SITE = "/etc/nginx/sites-available/boombox"
+NGINX_SNIPPET = "/etc/nginx/snippets/boombox-common.conf"
+# The release being activated. Templates are read from here and nowhere
+# else — no path comes from the caller.
+RELEASE_CONFIG_DIR = "/opt/boombox/current/install/config"
+NGINX_BIN = "/usr/sbin/nginx"
+DEFAULT_WEB_PORT = "8090"
 HOSTS_FILE = "/etc/hosts"
 WLAN_IF = "wlan0"
 
@@ -878,6 +888,60 @@ def _builtin_jellyfin_password(old: str, new: str) -> bool:
         return False
 
 
+def web_port() -> str:
+    """BOOMBOX_WEB_PORT from the root-owned web-auth.env (default 8090)."""
+    raw = _read_env_file(WEB_AUTH_ENV).get("BOOMBOX_WEB_PORT", "") or DEFAULT_WEB_PORT
+    if not raw.isdigit() or not 1 <= int(raw) <= 65535:
+        raise ValueError("BOOMBOX_WEB_PORT in web-auth.env is not a port number")
+    return str(int(raw))
+
+
+def render_site(template: str, port: str) -> str:
+    return template.replace("__REMOTE_WEB_PORT__", port)
+
+
+def _read_or_none(path: str) -> str | None:
+    try:
+        with open(path) as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def action_nginx_sync(_body: dict) -> dict:
+    """Install the active release's nginx site + shared snippet as ONE unit.
+
+    The kiosk's `location /` lives in the site file, so a new snippet with an
+    old site file (or the reverse) is broken or duplicated. Runs `nginx -t`
+    and restores both previous files if it fails. Does not reload — the
+    apply-release restart step does."""
+    port = web_port()
+    with open(os.path.join(RELEASE_CONFIG_DIR, "nginx.conf")) as f:
+        site = render_site(f.read(), port)
+    with open(os.path.join(RELEASE_CONFIG_DIR, "nginx-boombox-common.conf")) as f:
+        snippet = f.read()
+    old = {NGINX_SITE: _read_or_none(NGINX_SITE), NGINX_SNIPPET: _read_or_none(NGINX_SNIPPET)}
+    if old[NGINX_SITE] == site and old[NGINX_SNIPPET] == snippet:
+        return {"ok": True, "changed": False}
+    _atomic_write(NGINX_SNIPPET, snippet, 0o644)
+    _atomic_write(NGINX_SITE, site, 0o644)
+    r = _run([NGINX_BIN, "-t"], timeout=30)
+    if r.returncode == 0:
+        return {"ok": True, "changed": True}
+    for path, text in old.items():
+        if text is None:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        else:
+            _atomic_write(path, text, 0o644)
+    lines = (r.stderr or r.stdout or "").strip().splitlines()
+    return {"ok": False,
+            "error": "nginx rejected the new config; the previous one was restored",
+            "detail": lines[-1][:300] if lines else ""}
+
+
 ACTIONS = {
     "identity": action_identity,
     "wifi-scan": action_wifi_scan,
@@ -886,6 +950,7 @@ ACTIONS = {
     "streaming-status": action_streaming_status,
     "streaming": action_streaming,
     "web-password": action_web_password,
+    "nginx-sync": action_nginx_sync,
 }
 
 
