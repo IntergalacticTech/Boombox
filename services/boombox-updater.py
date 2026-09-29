@@ -23,6 +23,7 @@ from boombox_updater.config import CONFIG_PATH, load_config
 from boombox_updater.installer import Installer, StepResult
 from boombox_updater.poller import GitHubPoller
 from boombox_updater.scheduler import should_attempt_install
+from boombox_updater.scripts import target_apply_script
 from boombox_updater.state import (
     AttemptResult,
     LastAttempt,
@@ -43,27 +44,45 @@ PLAYBACK_URL = "http://127.0.0.1/api/state"
 
 
 class ShellSteps:
-    """Real Steps implementation — shells out to apply-release.sh."""
+    """Real Steps implementation — shells out to apply-release.sh.
+
+    fetch runs `current`'s script (the target isn't on disk yet), so a fix
+    to fetch itself — e.g. fetching a commit SHA — only helps once the
+    device already runs a release containing it; the tag (stable) path
+    works regardless. build/preflight/swap then run the freshly fetched
+    TARGET release's script when it's safely there (see
+    boombox_updater.scripts), so fixes to those steps apply on the update
+    that ships them instead of one release later. restart/verify/revert/
+    cleanup use current's — after swap, current IS the target.
+    """
 
     def __init__(self, log_path: Path) -> None:
         self._log = log_path
         self._log.parent.mkdir(parents=True, exist_ok=True)
 
-    def _run(self, *args: str) -> StepResult:
+    def _run(self, *args: str, script: Optional[Path] = None) -> StepResult:
+        script = script or APPLY
         with self._log.open("a") as fh:
-            fh.write(f"\n$ {APPLY} {' '.join(args)}\n")
+            fh.write(f"\n$ {script} {' '.join(args)}\n")
             fh.flush()
             proc = subprocess.run(
-                [str(APPLY), *args],
+                [str(script), *args],
                 stdout=fh, stderr=subprocess.STDOUT,
                 env={**os.environ, "BOOMBOX_ROOT": str(REPO_ROOT)},
             )
         return StepResult.OK if proc.returncode == 0 else StepResult.FAIL
 
+    def _run_target(self, step: str, ref: str) -> StepResult:
+        """Run `step` with the target release's script, else current's."""
+        script = target_apply_script(REPO_ROOT, ref)
+        if script is None:
+            log.info("%s %s: using current's apply-release.sh", step, ref)
+        return self._run(step, ref, script=script)
+
     def do_fetch(self, ref: str) -> StepResult:    return self._run("fetch", ref)
-    def do_build(self, ref: str) -> StepResult:    return self._run("build", ref)
-    def do_preflight(self, ref: str) -> StepResult: return self._run("preflight", ref)
-    def do_swap(self, ref: str) -> StepResult:     return self._run("swap", ref)
+    def do_build(self, ref: str) -> StepResult:    return self._run_target("build", ref)
+    def do_preflight(self, ref: str) -> StepResult: return self._run_target("preflight", ref)
+    def do_swap(self, ref: str) -> StepResult:     return self._run_target("swap", ref)
     def do_restart(self) -> StepResult:            return self._run("restart")
     def do_verify(self) -> StepResult:             return self._run("verify")
     def do_revert(self) -> StepResult:             return self._run("revert")

@@ -8,6 +8,12 @@ Type=simple
 Environment=BOOMBOX_KIOSK_CDP=http://127.0.0.1:9222
 Environment=BOOMBOX_KIOSK_HOME=http://localhost/
 Environment=BOOMBOX_KIOSK_POLL=15
+# Optional: BOOMBOX_JELLYFIN_BASE's host is allowed so the WATCH button's
+# navigation to an off-device Jellyfin isn't yanked back home. The leading
+# '-' makes it a no-op when the file is absent. Extra exact hostnames (e.g. a
+# Cloudflare Access login host) go in BOOMBOX_KIOSK_ALLOWED_HOSTS,
+# comma-separated, via a `systemctl --user edit` drop-in.
+EnvironmentFile=-/etc/boombox/jellyfin.env
 ExecStart=/opt/boombox/.venv/bin/python /opt/boombox/current/services/boombox-kiosk-guard.py
 Restart=on-failure
 RestartSec=3

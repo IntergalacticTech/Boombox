@@ -3,7 +3,7 @@
 import React from "react";
 import { Icon, useTicker, vu, mmss } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
-import { ChromeSourceBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
+import { ChromeHomeBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
 import { SyncIndicator } from "../../lib/SyncIndicator";
 import { SeekableBar } from "../../lib/SeekableBar";
 import type { ChromeApi } from "../../lib/skinRegistry";
@@ -52,7 +52,7 @@ function MtrChrome({ children, label = "01 · NOW PLAYING", chrome }: { children
         <span style={{flex: 1}}></span>
         {chrome && (
           <>
-            <ChromeSourceBtn chrome={chrome} theme={chromeTheme}/>
+            <ChromeHomeBtn chrome={chrome} theme={chromeTheme}/>
             <SyncIndicator />
             <ChromeQueueBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSkinBtn chrome={chrome} theme={chromeTheme}/>

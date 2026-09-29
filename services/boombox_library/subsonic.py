@@ -5,6 +5,7 @@ call generates a fresh salt so request signatures are not replayable.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import secrets
@@ -52,6 +53,20 @@ class SubsonicUnreachable(SubsonicError):
     """Network-level failure reaching the server (timeout, DNS, refused)."""
 
 
+def _is_edge_interstitial(resp: aiohttp.ClientResponse) -> bool:
+    """True when the response is an edge proxy's own page, not the origin's.
+
+    Cloudflare marks challenge/interstitial responses with `cf-mitigated`
+    (typically on a 403). A 403 with an HTML body is the WAF/Access block
+    page. Navidrome itself only ever answers the REST API with JSON.
+    """
+    headers = resp.headers
+    if headers.get("cf-mitigated"):
+        return True
+    ctype = (headers.get("Content-Type") or "").lower()
+    return resp.status == 403 and "text/html" in ctype
+
+
 class SubsonicClient:
     def __init__(
         self,
@@ -81,7 +96,8 @@ class SubsonicClient:
     async def _call(self, endpoint: str, extra_params: dict | None = None) -> dict:
         """Issue a Subsonic call; return the parsed 'subsonic-response' body.
 
-        Raises SubsonicUnreachable on network failure,
+        Raises SubsonicUnreachable on network failure, timeout, 5xx, or an
+        edge-proxy (Cloudflare) challenge/HTML page in place of the API,
         SubsonicAuthError on auth rejection,
         SubsonicError on other API-reported failures.
         """
@@ -100,17 +116,34 @@ class SubsonicClient:
                     # Fronting proxy / reverse-proxy auth, before any Subsonic
                     # JSON envelope is produced. Surface as an auth failure.
                     raise SubsonicAuthError("http 401")
+                if _is_edge_interstitial(resp):
+                    # Cloudflare (or similar edge) answered instead of the
+                    # origin: a bot challenge, WAF block or error page. The
+                    # server is effectively unreachable from here — not a
+                    # config error — so the sync loop backs off and retries.
+                    raise SubsonicUnreachable(f"edge proxy page (http {resp.status})")
                 if resp.status >= 400:
                     # Other 4xx from something in front of (or instead of) the
                     # Subsonic API — body is likely HTML, not a Subsonic
                     # envelope. Fail before attempting json() to avoid
                     # masking the real cause as "unreachable".
                     raise SubsonicError(f"http {resp.status}")
-                body = await resp.json()
+                try:
+                    # content_type=None: parse regardless of the declared
+                    # type; a body that isn't JSON at all (an HTML page on a
+                    # 200) raises ValueError below.
+                    body = await resp.json(content_type=None)
+                except ValueError as e:
+                    raise SubsonicUnreachable("non-JSON response body") from e
         except aiohttp.ClientError as e:
             raise SubsonicUnreachable(str(e)) from e
+        except asyncio.TimeoutError as e:
+            # ClientTimeout(total=...) raises a bare asyncio.TimeoutError,
+            # which is not an aiohttp.ClientError. A slow/stalled link is a
+            # reachability failure, same as a refused connection.
+            raise SubsonicUnreachable("timeout") from e
 
-        if "subsonic-response" not in body:
+        if not isinstance(body, dict) or "subsonic-response" not in body:
             raise SubsonicError("malformed response — not a Subsonic API")
         sub = body["subsonic-response"]
         status = sub.get("status")

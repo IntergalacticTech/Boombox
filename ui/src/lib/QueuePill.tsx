@@ -1,8 +1,8 @@
 // QueuePill — small persistent pill at top-center of the screen showing the
 // current queue length and opening the QueueDrawer when tapped.
 //
-// Companion to SourceSwitcher (top-left) and SkinPicker (top-right). Together
-// they form a symmetric trio of always-visible touch entry points.
+// Superseded by the per-skin chrome (ChromeQueueBtn); kept as a standalone
+// floating control in case a skin wants one back. Nothing imports it today.
 
 import { useEffect, useRef, useState } from "react";
 import { getQueue } from "./library";

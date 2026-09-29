@@ -3,7 +3,7 @@
 import React from "react";
 import { Icon, useTicker, vu, mmss } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
-import { ChromeSourceBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
+import { ChromeHomeBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
 import { SyncIndicator } from "../../lib/SyncIndicator";
 import { SeekableBar } from "../../lib/SeekableBar";
 import type { ChromeApi } from "../../lib/skinRegistry";
@@ -54,7 +54,7 @@ function TsChrome({ children, label, chrome }: { children: React.ReactNode; labe
         <span style={{flex: 1}}></span>
         {chrome && (
           <>
-            <ChromeSourceBtn chrome={chrome} theme={chromeTheme}/>
+            <ChromeHomeBtn chrome={chrome} theme={chromeTheme}/>
             <SyncIndicator />
             <ChromeQueueBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSkinBtn chrome={chrome} theme={chromeTheme}/>
@@ -272,7 +272,7 @@ export function TapeshiftAudio({ track, state, elapsed, volume, shuffle, repeat,
         <TsBtn w={88} h={88} active={repeat} onClick={onToggleRepeat}><Icon name="repeat" size={22} stroke={TS.ink}/></TsBtn>
         <div style={{flex: 1}}></div>
         <TsBtn w={88} h={88} onClick={chrome?.onOpenQueue}><Icon name="queue" size={22} stroke={TS.ink}/></TsBtn>
-        <TsBtn w={88} h={88} onClick={chrome?.onOpenSource}><Icon name="search" size={22} stroke={TS.ink}/></TsBtn>
+        <TsBtn w={88} h={88} onClick={chrome?.onGoHome}><Icon name="home" size={22} stroke={TS.ink}/></TsBtn>
         <TsBtn w={120} h={88}>VOL · <span style={{color: TS.ember}}>{volume ?? "—"}</span></TsBtn>
       </div>
     </TsChrome>

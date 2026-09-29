@@ -6,13 +6,28 @@ we rely on the system sqlite shipped with Python 3.11+ on Debian/Ubuntu.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import sqlite3
 from pathlib import Path
 
 log = logging.getLogger("boombox-library.db")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
+
+
+def fts_rowid(content_type: str, id_: str) -> int:
+    """Stable, positive 63-bit rowid for a search_index row.
+
+    FTS5 cannot index a plain column predicate, so
+    `DELETE FROM search_index WHERE content_type=? AND id=?` is a full
+    scan of the whole index — and sync_full ran one per artist and per
+    album, every hour: O(rows²), minutes of a pinned core on the Pi (and
+    the thermal/undervoltage spiral that goes with it). Keying rows by a
+    rowid derived from (type, id) makes the delete an O(log n) lookup.
+    """
+    digest = hashlib.blake2b(f"{content_type}:{id_}".encode(), digest_size=8).digest()
+    return (int.from_bytes(digest, "big") & 0x7FFF_FFFF_FFFF_FFFF) or 1
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -129,7 +144,45 @@ _MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_albums_sort_name ON albums(sort_name);
     CREATE INDEX IF NOT EXISTS idx_artists_sort_name ON artists(sort_name);
     """,
+    # v3 — search_index rows are re-keyed to fts_rowid(content_type, id).
+    # No DDL; the data rewrite lives in _rebuild_search_index_rowids below
+    # because the rowid is computed in Python.
+    "SELECT 1;",
+    # v4 — small key/value store for sync bookkeeping that must survive a
+    # restart (the prune guard's deferred-removal hold-off, see catalog.py).
+    """
+    CREATE TABLE IF NOT EXISTS sync_state (
+        key    TEXT PRIMARY KEY,
+        value  TEXT NOT NULL
+    );
+    """,
 ]
+
+
+def _rebuild_search_index_rowids(conn: sqlite3.Connection) -> None:
+    """One-off for v3: rewrite every FTS row under its stable rowid.
+
+    ~100 k rows on a full catalog; a few seconds once, versus minutes on
+    every hourly sync before this."""
+    rows = conn.execute(
+        "SELECT content_type, id, title, body FROM search_index").fetchall()
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DELETE FROM search_index")
+        conn.executemany(
+            "INSERT INTO search_index(rowid, content_type, id, title, body) "
+            "VALUES (?,?,?,?,?)",
+            [(fts_rowid(r[0], r[1]), r[0], r[1], r[2], r[3]) for r in rows],
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    log.info("search_index re-keyed: %d rows", len(rows))
+
+
+# Python-side data migrations that run right after the DDL of the same version.
+_POST_MIGRATE = {3: _rebuild_search_index_rowids}
 
 
 def migrate(conn: sqlite3.Connection) -> None:
@@ -147,5 +200,8 @@ def migrate(conn: sqlite3.Connection) -> None:
             continue
         log.info("applying schema migration %d", i)
         conn.executescript(ddl)
+        hook = _POST_MIGRATE.get(i)
+        if hook:
+            hook(conn)
         conn.execute("DELETE FROM _schema_version")
         conn.execute("INSERT INTO _schema_version(version) VALUES (?)", (i,))

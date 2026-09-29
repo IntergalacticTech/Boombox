@@ -139,3 +139,130 @@ async def test_source_action_unknown_value_returns_error():
                            recorder=None, display=None, sleep=None)
     result = await actions.fire(d, "source", "nonsense", source="test")
     assert result == {"ok": False, "error": "handler_raised"}
+
+
+# ---------- power button --------------------------------------------------
+
+class PowerStateApi:
+    """StateApi stub for the /power endpoints. `state` is what /power
+    reports; `fail` makes every call raise (boombox-state down)."""
+
+    def __init__(self, state="awake", fail=False, toggle_returns=True):
+        self.state = state
+        self.fail = fail
+        self.toggle_returns = toggle_returns
+        self.calls: list[str] = []
+        self.polls = 0
+
+    async def power_state(self):
+        self.polls += 1
+        if self.fail:
+            raise RuntimeError("state api down")
+        return {"state": self.state, "since": 1.0, "poweroff_at": None}
+
+    async def power_toggle(self):
+        self.calls.append("toggle")
+        if self.fail:
+            raise RuntimeError("state api down")
+        return {"state": "asleep"} if self.toggle_returns else None
+
+    async def power_wake(self):
+        self.calls.append("wake")
+        self.state = "awake"
+        return {"state": "awake"}
+
+
+class FakeDisplay:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    async def toggle(self):
+        self.calls.append("toggle")
+
+
+@pytest.mark.asyncio
+async def test_power_short_press_toggles_via_state_api():
+    s, disp = PowerStateApi(), FakeDisplay()
+    d = _make_dispatcher(state=s, display=disp)
+    await d.dispatch("power", "short_press")
+    assert s.calls == ["toggle"]
+    assert disp.calls == []
+
+
+@pytest.mark.asyncio
+async def test_power_short_press_falls_back_to_display_when_state_api_errors():
+    s, disp = PowerStateApi(fail=True), FakeDisplay()
+    d = _make_dispatcher(state=s, display=disp)
+    await d.dispatch("power", "short_press")
+    assert disp.calls == ["toggle"]
+
+
+@pytest.mark.asyncio
+async def test_power_short_press_falls_back_when_state_api_returns_nothing():
+    """StateApi swallows HTTP errors and returns None — that's a failure too."""
+    s, disp = PowerStateApi(toggle_returns=False), FakeDisplay()
+    d = _make_dispatcher(state=s, display=disp)
+    await d.dispatch("power", "short_press")
+    assert disp.calls == ["toggle"]
+
+
+@pytest.mark.asyncio
+async def test_power_short_press_uses_display_when_there_is_no_state_client():
+    disp = FakeDisplay()
+    d = _make_dispatcher(state=None, display=disp)
+    await d.dispatch("power", "short_press")
+    assert disp.calls == ["toggle"]
+
+
+@pytest.mark.asyncio
+async def test_press_while_asleep_wakes_and_is_dropped():
+    s = PowerStateApi(state="asleep")
+    m_calls = []
+
+    class StubMopidy:
+        async def call(self, method, params=None):
+            m_calls.append(method)
+            return {}
+
+    d = _make_dispatcher(state=s, mopidy=StubMopidy())
+    await d.dispatch("stop", "short_press")
+    assert s.calls == ["wake"]
+    assert m_calls == []            # the press itself is swallowed
+
+
+@pytest.mark.asyncio
+async def test_power_press_while_asleep_is_not_swallowed():
+    """The power button must still reach its own handler when asleep,
+    otherwise it could never wake the unit through the normal path."""
+    s = PowerStateApi(state="asleep")
+    d = _make_dispatcher(state=s, display=FakeDisplay())
+    await d.dispatch("power", "short_press")
+    assert s.calls == ["toggle"]
+
+
+@pytest.mark.asyncio
+async def test_power_lookup_is_cached_across_a_burst_of_presses():
+    s = PowerStateApi(state="awake")
+    d = _make_dispatcher(state=s)
+    for _ in range(5):
+        await d.dispatch("next", "short_press")
+    assert s.polls == 1
+
+
+@pytest.mark.asyncio
+async def test_state_client_without_power_support_is_treated_as_awake():
+    """Older/foreign state stubs have no power_state(); don't drop presses."""
+    m_calls = []
+
+    class LegacyState:
+        async def active_external(self):
+            return None
+
+    class StubMopidy:
+        async def call(self, method, params=None):
+            m_calls.append(method)
+            return {}
+
+    d = _make_dispatcher(state=LegacyState(), mopidy=StubMopidy())
+    await d.dispatch("next", "short_press")
+    assert m_calls == ["core.playback.next"]

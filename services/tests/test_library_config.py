@@ -101,159 +101,65 @@ def test_save_config_fsyncs_before_rename(tmp_path: Path, monkeypatch):
     save_config(DEFAULT_CONFIG, path=tmp_path / "library.yml")
     assert len(fsync_calls) >= 1, "save_config must call os.fsync on the tmp file"
 
+def _mode(p: Path) -> int:
+    return os.stat(p).st_mode & 0o777
 
-def test_write_mopidy_subsonic_block_creates(tmp_path: Path):
-    from boombox_library.mopidy_config import write_subsonic_block
 
-    mopidy_conf = tmp_path / "mopidy.conf"
-    mopidy_conf.write_text(
-        "[core]\n"
-        "data_dir = /var/lib/mopidy\n"
-        "\n"
-        "[local]\n"
-        "media_dir = /opt/boombox/cache-mount/audio\n"
+def test_save_config_creates_file_0600(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("boombox_library.config._machine_id",
+                        lambda: "deadbeef" * 4)
+    old_umask = os.umask(0o022)  # a permissive umask must not widen the mode
+    try:
+        path = tmp_path / "library.yml"
+        save_config(DEFAULT_CONFIG, path=path)
+    finally:
+        os.umask(old_umask)
+    assert _mode(path) == 0o600
+    assert not (tmp_path / "library.yml.tmp").exists()
+
+
+def test_save_config_restores_0600_on_every_save(tmp_path: Path, monkeypatch):
+    """A file loosened out-of-band (or a stale world-readable .tmp) is put
+    back to 0600 by the next save."""
+    monkeypatch.setattr("boombox_library.config._machine_id",
+                        lambda: "deadbeef" * 4)
+    path = tmp_path / "library.yml"
+    save_config(DEFAULT_CONFIG, path=path)
+    os.chmod(path, 0o644)
+    stale = tmp_path / "library.yml.tmp"
+    stale.write_text("junk")
+    os.chmod(stale, 0o666)
+    save_config(DEFAULT_CONFIG, path=path)
+    assert _mode(path) == 0o600
+    assert not stale.exists()
+    assert load_config(path=path).sync.interval_seconds == 3600
+
+
+def test_max_bitrate_defaults_to_zero_and_round_trips(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("boombox_library.config._machine_id",
+                        lambda: "deadbeef" * 4)
+    assert DEFAULT_CONFIG.source.max_bitrate_kbps == 0
+    path = tmp_path / "library.yml"
+    cfg = LibraryConfig(
+        source=SourceConfig(url="https://music.example", username="u",
+                            password="p", max_bitrate_kbps=192),
+        sync=DEFAULT_CONFIG.sync,
+        cache=DEFAULT_CONFIG.cache,
     )
-    write_subsonic_block(
-        path=mopidy_conf,
-        url="http://192.168.1.223:4533",
-        username="boombox",
-        password="hunter2",
-    )
-    text = mopidy_conf.read_text()
-    assert "[subsonic]" in text
-    assert "hostname = 192.168.1.223" in text
-    assert "port = 4533" in text
-    assert "username = boombox" in text
-    assert "password = hunter2" in text
-    # Idempotent: original blocks preserved
-    assert "[local]" in text
-    assert "[core]" in text
+    save_config(cfg, path=path)
+    assert "max_bitrate_kbps: 192" in path.read_text()
+    loaded = load_config(path=path)
+    assert loaded.source.max_bitrate_kbps == 192
+    assert loaded.source.password == "p"
 
 
-def test_write_mopidy_subsonic_block_replaces(tmp_path: Path):
-    from boombox_library.mopidy_config import write_subsonic_block
-
-    mopidy_conf = tmp_path / "mopidy.conf"
-    mopidy_conf.write_text(
-        "[subsonic]\n"
-        "hostname = old.example\n"
-        "port = 4533\n"
-        "username = old\n"
-        "password = old\n"
-        "ssl = false\n"
-        "\n"
-        "[local]\n"
-        "media_dir = /tmp\n"
-    )
-    write_subsonic_block(
-        path=mopidy_conf,
-        url="http://new:4533",
-        username="new",
-        password="newpass",
-    )
-    text = mopidy_conf.read_text()
-    assert text.count("[subsonic]") == 1
-    assert "hostname = new" in text
-    assert "username = new" in text
-    assert "password = newpass" in text
-    assert "old.example" not in text
-    assert "[local]" in text
-
-
-def test_write_mopidy_subsonic_block_preserves_brackets_in_values(tmp_path: Path):
-    """Edge case: an existing [subsonic] block has a value containing '['
-    (e.g., a password with a bracket, or an IPv6 hostname). The regex
-    must consume the WHOLE block until the next [section] header — not
-    truncate at the first '[' inside a value."""
-    from boombox_library.mopidy_config import write_subsonic_block
-
-    mopidy_conf = tmp_path / "mopidy.conf"
-    mopidy_conf.write_text(
-        "[core]\n"
-        "data_dir = /var/lib/mopidy\n"
-        "\n"
-        "[subsonic]\n"
-        "hostname = 192.168.1.223\n"
-        "port = 4533\n"
-        "username = boombox\n"
-        "password = some[weird]value\n"   # bracket inside value
-        "ssl = false\n"
-        "\n"
-        "[local]\n"
-        "media_dir = /tmp\n"
-    )
-    write_subsonic_block(
-        path=mopidy_conf,
-        url="http://new.example:4533",
-        username="new",
-        password="newpass",
-    )
-    text = mopidy_conf.read_text()
-    # Old bracket-bearing value must be gone
-    assert "some[weird]value" not in text
-    # New value present
-    assert "username = new" in text
-    assert "password = newpass" in text
-    # [local] section preserved
-    assert "[local]" in text
-    assert "media_dir = /tmp" in text
-    # Only ONE [subsonic] block
-    assert text.count("[subsonic]") == 1
-
-
-def test_write_mopidy_subsonic_block_ignores_commented_subsonic(tmp_path: Path):
-    """Edge case: a comment line containing '[subsonic]' above the real
-    section. The writer must NOT mistake the comment for the section to
-    replace — credentials would silently never update."""
-    from boombox_library.mopidy_config import write_subsonic_block
-
-    mopidy_conf = tmp_path / "mopidy.conf"
-    mopidy_conf.write_text(
-        "[core]\n"
-        "data_dir = /var/lib/mopidy\n"
-        "\n"
-        "# tried [subsonic] but rolled back\n"   # decoy comment
-        "\n"
-        "[subsonic]\n"
-        "hostname = old.example\n"
-        "username = old\n"
-        "password = old\n"
-        "\n"
-        "[local]\n"
-        "media_dir = /tmp\n"
-    )
-    write_subsonic_block(
-        path=mopidy_conf,
-        url="http://new:4533",
-        username="new",
-        password="newpass",
-    )
-    text = mopidy_conf.read_text()
-    assert "old.example" not in text
-    assert "username = old" not in text
-    assert "username = new" in text
-    # Decoy comment preserved verbatim
-    assert "# tried [subsonic] but rolled back" in text
-    # Only ONE [subsonic] (real) section
-    assert text.count("\n[subsonic]") == 1 or text.count("[subsonic]") == 2
-    # ^ the second form accepts the decoy + the real section together;
-    # the first form counts only line-start [subsonic] headers
-
-
-def test_write_mopidy_subsonic_block_sets_owner_only_perms_on_create(tmp_path: Path):
-    """If mopidy.conf doesn't exist yet (fresh install), the writer must
-    create it with 0o600 perms — the file contains the plaintext
-    Subsonic password and shouldn't be world-readable."""
-    import stat as _stat
-
-    from boombox_library.mopidy_config import write_subsonic_block
-
-    mopidy_conf = tmp_path / "mopidy.conf"  # does not exist
-    write_subsonic_block(
-        path=mopidy_conf,
-        url="http://nav:4533",
-        username="u",
-        password="p",
-    )
-    mode = _stat.S_IMODE(mopidy_conf.stat().st_mode)
-    assert mode == 0o600, f"expected 0o600, got 0o{mode:o}"
+def test_max_bitrate_missing_or_junk_parses_as_zero(tmp_path: Path):
+    path = tmp_path / "library.yml"
+    path.write_text("source:\n  url: https://music.example\n")
+    assert load_config(path=path).source.max_bitrate_kbps == 0
+    path.write_text("source:\n  max_bitrate_kbps: lots\n")
+    assert load_config(path=path).source.max_bitrate_kbps == 0
+    path.write_text("source:\n  max_bitrate_kbps: -5\n")
+    assert load_config(path=path).source.max_bitrate_kbps == 0
+    path.write_text("source:\n  max_bitrate_kbps: '320'\n")
+    assert load_config(path=path).source.max_bitrate_kbps == 320

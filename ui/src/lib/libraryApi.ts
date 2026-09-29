@@ -53,11 +53,44 @@ export type CacheCandidate = {
   total_bytes: number | null;
 };
 
+export type CacheStatus = "present" | "absent" | "queued" | "downloading" | "error";
+
 export type PlaybackResolution = {
   source: "cache" | "stream" | "offline_miss";
   uri: string | null;
-  cache_status: "present" | "absent" | "queued" | "downloading" | "error";
+  cache_status: CacheStatus;
 };
+
+/** One row of POST /resolve — PlaybackResolution tagged with its track id. */
+export type ResolvedTrack = PlaybackResolution & { id: string };
+
+// Drilldown shapes (GET /artist/<id>, /album/<id>, /playlist/<id>).
+export type LibraryArtist = { id: string; name: string; art_id?: string };
+
+export type LibraryAlbumSummary = {
+  id: string;
+  name: string;
+  year?: number;
+  art_id?: string;
+};
+
+export type LibraryAlbum = LibraryAlbumSummary & {
+  artist?: string;
+  artist_id?: string;
+};
+
+export type LibraryTrack = {
+  id: string;
+  title: string;
+  artist?: string;
+  album_id?: string;
+  disc?: number;
+  track?: number;
+  duration?: number;            // seconds (Subsonic convention)
+  cache_status?: CacheStatus;
+};
+
+export type LibraryPlaylist = { id: string; name: string };
 
 async function jsonOrThrow<T>(r: Response): Promise<T> {
   if (!r.ok) {
@@ -97,6 +130,38 @@ export async function browse(type: BrowseType): Promise<BrowseItem[]> {
   const r = await fetch(`/api/library/browse?type=${type}`);
   const body = await jsonOrThrow<{ items: BrowseItem[] }>(r);
   return body.items;
+}
+
+export async function getArtist(
+  id: string,
+): Promise<{ artist: LibraryArtist; albums: LibraryAlbumSummary[] }> {
+  return jsonOrThrow(await fetch(`/api/library/artist/${encodeURIComponent(id)}`));
+}
+
+export async function getAlbum(
+  id: string,
+): Promise<{ album: LibraryAlbum; tracks: LibraryTrack[] }> {
+  return jsonOrThrow(await fetch(`/api/library/album/${encodeURIComponent(id)}`));
+}
+
+export async function getPlaylist(
+  id: string,
+): Promise<{ playlist: LibraryPlaylist; tracks: LibraryTrack[] }> {
+  return jsonOrThrow(await fetch(`/api/library/playlist/${encodeURIComponent(id)}`));
+}
+
+/** Batch-resolve track ids to playable URIs (cache file:// or the local
+ * stream proxy). Items come back in request order. */
+export async function resolveTracks(ids: string[]): Promise<ResolvedTrack[]> {
+  if (ids.length === 0) return [];
+  const body = await jsonOrThrow<{ items: ResolvedTrack[] }>(
+    await fetch("/api/library/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }),
+  );
+  return body.items ?? [];
 }
 
 export async function search(q: string): Promise<SearchResult[]> {

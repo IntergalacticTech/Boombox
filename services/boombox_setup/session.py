@@ -21,6 +21,11 @@ from dataclasses import dataclass
 # only mintable with physical access to the kiosk, only authorizes setup
 # actions, and is cleared the moment setup completes.
 TOKEN_TTL_S = 24 * 3600
+# Re-opening setup on an already-complete device (Settings → Setup wizard)
+# gets a short IDLE timeout instead: each authenticated request slides it
+# (touch), but a wizard that was merely opened and abandoned closes itself
+# rather than leaving setup writable for a day.
+REOPEN_TTL_S = 15 * 60
 
 
 def _hash(token: str) -> str:
@@ -39,6 +44,7 @@ class SetupSession:
 
     _token_hash: str | None = None
     _expires_at: float = 0.0
+    _ttl: float = TOKEN_TTL_S
     _code_hash: str | None = None
     _code_attempts: int = 0
     # Kept in the clear only so redeem/idempotent-mint can return them;
@@ -46,8 +52,10 @@ class SetupSession:
     _token: str | None = None
     _code: str | None = None
 
-    def mint(self, now: float | None = None) -> tuple[str, str, float]:
-        """Returns (token, code, expires_at).
+    def mint(self, now: float | None = None,
+             ttl: float = TOKEN_TTL_S) -> tuple[str, str, float]:
+        """Returns (token, code, expires_at). `ttl` is REOPEN_TTL_S when
+        setup is already complete (see touch()).
 
         Idempotent while a session is live: the kiosk mints on every Welcome
         render, and re-minting there must NOT invalidate a token a phone is
@@ -66,7 +74,8 @@ class SetupSession:
         self._token_hash = _hash(token)
         self._code_hash = _hash(code)
         self._code_attempts = 0
-        self._expires_at = now + TOKEN_TTL_S
+        self._ttl = ttl
+        self._expires_at = now + ttl
         return token, code, self._expires_at
 
     def verify(self, token: str, now: float | None = None) -> bool:
@@ -76,6 +85,24 @@ class SetupSession:
         if now >= self._expires_at:
             return False
         return hmac.compare_digest(_hash(token), self._token_hash)
+
+    def active(self, now: float | None = None) -> bool:
+        """Is a session live? Once setup is complete this doubles as the
+        "setup re-opened" flag: only the kiosk (physical presence) can mint
+        one — Settings → Setup wizard lands on Welcome, which mints — and
+        POST /complete, POST /session/close (the kiosk leaving the wizard)
+        or REOPEN_TTL_S of idleness closes it again."""
+        now = time.time() if now is None else now
+        return self._token_hash is not None and now < self._expires_at
+
+    def touch(self, now: float | None = None) -> None:
+        """Slide a live session's expiry forward by its TTL — called on each
+        authenticated request, so a short re-open TTL is an idle timeout, not
+        a hard cap on how long a real edit may take. Never revives an expired
+        session."""
+        now = time.time() if now is None else now
+        if self.active(now):
+            self._expires_at = max(self._expires_at, now + self._ttl)
 
     def redeem_code(self, code: str, now: float | None = None) -> str | None:
         """Exchange the on-screen code for the setup token. Constant-time
@@ -97,6 +124,7 @@ class SetupSession:
     def clear(self) -> None:
         self._token_hash = None
         self._expires_at = 0.0
+        self._ttl = TOKEN_TTL_S
         self._code_hash = None
         self._code_attempts = 0
         self._token = None

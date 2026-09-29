@@ -146,6 +146,37 @@ class StateApi:
         except Exception as e:
             log.warning("state.bluetooth_pair failed: %s", e)
 
+    async def power_state(self) -> dict | None:
+        """The PowerManager snapshot ({state, since, poweroff_at}), or None
+        when boombox-state is down — callers treat that as 'awake'."""
+        try:
+            async with self._sess.get(f"{STATE_BASE}/power",
+                                      timeout=aiohttp.ClientTimeout(total=1)) as r:
+                if r.status != 200:
+                    return None
+                return await r.json()
+        except Exception:
+            return None
+
+    async def _power_post(self, action: str) -> dict | None:
+        """POST /power/<action>; returns the new snapshot or None on failure
+        so the caller can fall back to driving the panel directly."""
+        try:
+            async with self._sess.post(f"{STATE_BASE}/power/{action}",
+                                       timeout=aiohttp.ClientTimeout(total=5)) as r:
+                if r.status != 200:
+                    return None
+                return await r.json()
+        except Exception as e:
+            log.warning("state.power_%s failed: %s", action, e)
+            return None
+
+    async def power_toggle(self) -> dict | None:
+        return await self._power_post("toggle")
+
+    async def power_wake(self) -> dict | None:
+        return await self._power_post("wake")
+
     async def album_art_url(
         self, artist: str | None, album: str | None, track: str | None,
     ) -> str | None:
@@ -376,6 +407,23 @@ class Display:
                         err.decode(errors="replace").strip())
             return
         self._on = not self._on
+
+    async def off(self) -> None:
+        out = await self._detect_output()
+        if not out:
+            return
+        # Mirror of wake(): unconditional --off, so a stale cached _on (some
+        # other tool turned the panel on) still lands the right way.
+        proc = await asyncio.create_subprocess_exec(
+            "wlr-randr", "--output", out, "--off",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            log.warning("wlr-randr --off failed (%s): %s", proc.returncode,
+                        err.decode(errors="replace").strip())
+            return
+        self._on = False
 
     async def wake(self) -> None:
         out = await self._detect_output()

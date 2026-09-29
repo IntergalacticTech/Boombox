@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hmac
 import io
 import json
 import logging
@@ -46,7 +45,9 @@ ART_SIZE = (240, 240)
 # Process-local pairing state. One active PIN at a time; resets if the
 # service restarts mid-pairing. PIN is stored as a SHA-256 hex digest so
 # memory inspection doesn't leak it; comparison uses hmac.compare_digest.
-_PAIR_STATE: dict = {"pin_hash": None, "expires_at": 0}
+# `attempts` counts wrong guesses in the current window; remote_access.
+# redeem_pin burns the PIN at PAIR_MAX_ATTEMPTS (shared with the BLE path).
+_PAIR_STATE: dict = {"pin_hash": None, "expires_at": 0, "attempts": 0}
 PAIR_PIN_TTL_S = int(os.environ.get("BOOMBOX_REMOTE_PAIR_TTL_S", "120"))
 
 
@@ -519,6 +520,7 @@ async def _post_pair_start(request: web.Request) -> web.Response:
     pin = _make_pin()
     _PAIR_STATE["pin_hash"] = _hash_pin(pin)
     _PAIR_STATE["expires_at"] = time.time() + PAIR_PIN_TTL_S
+    _PAIR_STATE["attempts"] = 0
     log.info("pairing PIN issued, expires in %ds", PAIR_PIN_TTL_S)
     return web.json_response({
         "ok": True,
@@ -578,8 +580,7 @@ async def _post_admin_unpair(request: web.Request) -> web.Response:
     peers = _load_peers()
     peers.pop(token, None)
     path = Path(os.environ.get("BOOMBOX_REMOTE_PEERS", str(DEFAULT_PEERS)))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(peers, indent=2))
+    remote_access.write_json_atomic(path, peers)
     log.info("unpaired one remote")
     return web.json_response({"ok": True})
 
@@ -601,19 +602,13 @@ async def _post_pair(request: web.Request) -> web.Response:
         return web.json_response(
             {"ok": False, "error": "bad_pin"}, status=403)
 
-    if (_PAIR_STATE["pin_hash"] is None or
-            time.time() > _PAIR_STATE["expires_at"]):
-        return web.json_response(
-            {"ok": False, "error": "no_active_pin"}, status=403)
+    # Expiry, single use, and the wrong-guess cap (PIN burned after
+    # PAIR_MAX_ATTEMPTS) all live in the shared check.
+    err = remote_access.redeem_pin(_PAIR_STATE, pin, _hash_pin)
+    if err is not None:
+        return web.json_response({"ok": False, "error": err}, status=403)
 
-    if not hmac.compare_digest(_hash_pin(pin), _PAIR_STATE["pin_hash"]):
-        return web.json_response(
-            {"ok": False, "error": "bad_pin"}, status=403)
-
-    # PIN verified — invalidate it (single-use), mint a token, persist.
-    _PAIR_STATE["pin_hash"] = None
-    _PAIR_STATE["expires_at"] = 0
-
+    # PIN verified (and consumed) — mint a token, persist.
     token = secrets.token_hex(32)
     peers = _load_peers()
     peers[token] = {
@@ -621,8 +616,7 @@ async def _post_pair(request: web.Request) -> web.Response:
         "paired_at": int(time.time()),
     }
     path = Path(os.environ.get("BOOMBOX_REMOTE_PEERS", str(DEFAULT_PEERS)))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(peers, indent=2))
+    remote_access.write_json_atomic(path, peers)
     log.info("paired remote label=%s", peers[token]["label"])
 
     return web.json_response({

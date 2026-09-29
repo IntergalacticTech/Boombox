@@ -13,19 +13,21 @@ import { SpectrumAudio } from "../skins/spectrum/Spectrum";
 import { TapeshiftAudio } from "../skins/tapeshift/Tapeshift";
 
 /** Skin-chrome API: identity + actions a skin needs to integrate its chrome
- * with the rest of the boombox (source switching, queue, skin picker). Each
- * skin renders these as part of its own top bar / nav / status row, in its
- * own visual style — they replace the previous floating overlay pills.
+ * with the rest of the boombox (home, queue, skin picker). Each skin renders
+ * these as part of its own top bar / nav / status row, in its own visual
+ * style — they replace the previous floating overlay pills.
  *
  * sourceColor is the accent color for the active source's dot indicator,
- * provided so skins can tint their chrome consistently. */
+ * provided so skins can tint their chrome consistently. The source identity
+ * still travels with the Home button: it doubles as the "what's playing
+ * through the speakers" badge, which is the only place a skin shows it. */
 export type ChromeApi = {
   sourceLabel: string;     // "LIBRARY", "AIRPLAY", "SPOTIFY", "BLUETOOTH", "IDLE"
   sourceColor: string;     // hex accent for that source
   sourceLive: boolean;     // true when an external (non-Mopidy) source is producing audio
   queueCount: number;      // length of the Mopidy tracklist (0 if unknown)
   skinName: string;        // human-readable skin name
-  onOpenSource: () => void;
+  onGoHome: () => void;
   onOpenQueue: () => void;
   onOpenSkinPicker: () => void;
   onOpenSettings: () => void;

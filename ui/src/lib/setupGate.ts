@@ -26,7 +26,17 @@ export async function redirectToSetupIfIncomplete(): Promise<boolean> {
           window.location.replace("/setup/");
           return true;
         }
-        return false; // definitively complete — show the player
+        // Definitively complete — show the player. Landing here means the
+        // kiosk isn't in the wizard, so close any setup session a Settings →
+        // Setup wizard visit re-opened and then abandoned (otherwise it'd
+        // stay writable until its idle timeout). Fire-and-forget: a no-op
+        // server-side when nothing is open.
+        void fetch("/api/setup/session/close", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        }).catch(() => {});
+        return false;
       }
     } catch {
       // service not up yet — fall through to the backoff and retry

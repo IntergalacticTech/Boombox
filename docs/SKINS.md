@@ -123,10 +123,16 @@ result; the user's taps call back into the supplied handlers.
 
 ### The chrome contract
 
-The `chrome` prop is how a skin renders source-switching, queue, picker, and
-settings buttons **in its own visual style** (some skins put them in a top
-bar, some in a sidebar, some in a docked footer). It's effectively a small
-RPC for opening the global drawers:
+The `chrome` prop is how a skin renders its home, queue, picker, and settings
+buttons **in its own visual style** (some skins put them in a top bar, some in
+a sidebar, some in a docked footer). It's effectively a small RPC for leaving
+the player and for opening the global drawers.
+
+`onGoHome` returns the kiosk to the Home screen (the input picker that boots
+first and that replaced the old Source drawer). The `source*` fields are not
+tied to it — they describe which input is producing audio right now, and the
+convention is to show them on the Home button as a dot + label, so the chrome
+reads "⌂ AIRPLAY ●" while a phone is streaming.
 
 ```ts
 export type ChromeApi = {
@@ -135,7 +141,7 @@ export type ChromeApi = {
   sourceLive:        boolean;      // true when an external source is producing audio
   queueCount:        number;       // tracklist length (0 when unknown)
   skinName:          string;       // human-readable name of the active skin
-  onOpenSource:      () => void;
+  onGoHome:          () => void;
   onOpenQueue:       () => void;
   onOpenSkinPicker:  () => void;
   onOpenSettings:    () => void;
@@ -147,10 +153,10 @@ distinct skin) or drop in the prebuilt strip:
 
 ```tsx
 import {
-  ChromeSourceBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn,
+  ChromeHomeBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn,
 } from "../../lib/ChromeButtons";
 
-<ChromeSourceBtn   chrome={chrome} theme={myTheme}/>
+<ChromeHomeBtn     chrome={chrome} theme={myTheme}/>
 <ChromeQueueBtn    chrome={chrome} theme={myTheme}/>
 <ChromeSkinBtn     chrome={chrome} theme={myTheme}/>
 <ChromeSettingsBtn chrome={chrome} theme={myTheme}/>
@@ -252,7 +258,7 @@ id from `?skin=retro80` and from `localStorage`.
 import { Icon, useTicker, mmss } from "../../lib/shared";
 import { SeekableBar } from "../../lib/SeekableBar";
 import {
-  ChromeSourceBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn,
+  ChromeHomeBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn,
 } from "../../lib/ChromeButtons";
 import type { SkinAudioProps } from "../../lib/skinRegistry";
 
@@ -287,7 +293,7 @@ export function Retro80Audio({
         </span>
         <span style={{ flex: 1 }} />
         {chrome && <>
-          <ChromeSourceBtn   chrome={chrome} theme={{ bg: R.panel, fg: R.ink, border: R.pink }}/>
+          <ChromeHomeBtn     chrome={chrome} theme={{ bg: R.panel, fg: R.ink, border: R.pink }}/>
           <ChromeQueueBtn    chrome={chrome} theme={{ bg: R.panel, fg: R.ink, border: R.pink }}/>
           <ChromeSkinBtn     chrome={chrome} theme={{ bg: R.panel, fg: R.ink, border: R.pink }}/>
           <ChromeSettingsBtn chrome={chrome} theme={{ bg: R.panel, fg: R.ink, border: R.pink }}/>

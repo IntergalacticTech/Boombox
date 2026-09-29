@@ -12,6 +12,13 @@ drive it; that same port lets anything in user space navigate the tab away.
 Pause: touch `$XDG_RUNTIME_DIR/boombox-kiosk-guard.pause` to suppress the
 guard (e.g. while another agent is driving the kiosk). Remove the file (or
 restart the service) to resume.
+
+Allowed hosts: loopback, plus the host of the configured Jellyfin server
+(the WATCH button navigates the kiosk there — see jellyfin_env), plus any
+exact hostnames listed in BOOMBOX_KIOSK_ALLOWED_HOSTS (comma-separated, e.g.
+a Cloudflare Access login host). Matching is exact-hostname only: allowing
+video.example.com does NOT allow evil-video.example.com or
+video.example.com.evil.net.
 """
 from __future__ import annotations
 
@@ -24,6 +31,7 @@ import urllib.parse
 import urllib.request
 
 import websockets
+from jellyfin_env import jellyfin_base, jellyfin_base_from_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("kiosk-guard")
@@ -36,6 +44,7 @@ PAUSE_FILE = os.path.join(
     "boombox-kiosk-guard.pause",
 )
 ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+EXTRA_HOSTS_ENV = "BOOMBOX_KIOSK_ALLOWED_HOSTS"
 INTERNAL_SCHEMES = ("about:", "chrome:", "chrome-extension:", "devtools:", "data:")
 
 
@@ -78,16 +87,47 @@ def navigate(ws_url: str, target_url: str) -> bool:
         return False
 
 
-def is_on_target(url: str) -> bool:
+def _host_of(url: str | None) -> str | None:
+    """Lowercased hostname of `url` (urlparse lowercases), with a trailing
+    root dot stripped so "video.example.com." can't dodge an exact match."""
+    if not url:
+        return None
+    try:
+        host = urllib.parse.urlparse(url).hostname
+    except Exception:
+        return None
+    return (host.rstrip(".") or None) if host else None
+
+
+def allowed_hosts() -> frozenset[str]:
+    """Loopback + the Jellyfin server's host + BOOMBOX_KIOSK_ALLOWED_HOSTS.
+
+    Recomputed every tick (cheap: one env read + one small file read) so the
+    setup wizard repointing Jellyfin takes effect without a guard restart.
+    Both the inherited env value and the file's current value are allowed,
+    since the env is only refreshed when the unit restarts.
+    """
+    hosts = set(ALLOWED_HOSTS)
+    for base in (jellyfin_base(), jellyfin_base_from_file()):
+        h = _host_of(base)
+        if h:
+            hosts.add(h)
+    for raw in os.environ.get(EXTRA_HOSTS_ENV, "").split(","):
+        h = raw.strip().lower().rstrip(".")
+        if h:
+            hosts.add(h)
+    return frozenset(hosts)
+
+
+def is_on_target(url: str, hosts: frozenset[str] | None = None) -> bool:
     if not url:
         return True
     if url.startswith(INTERNAL_SCHEMES):
         return True
-    try:
-        host = urllib.parse.urlparse(url).hostname or ""
-    except Exception:
+    host = _host_of(url)
+    if host is None:
         return False
-    return host in ALLOWED_HOSTS
+    return host in (allowed_hosts() if hosts is None else hosts)
 
 
 def tick() -> None:
@@ -95,8 +135,9 @@ def tick() -> None:
     if not pages:
         return
 
-    drifted = [t for t in pages if not is_on_target(t.get("url", ""))]
-    on_target = [t for t in pages if is_on_target(t.get("url", ""))]
+    hosts = allowed_hosts()
+    drifted = [t for t in pages if not is_on_target(t.get("url", ""), hosts)]
+    on_target = [t for t in pages if is_on_target(t.get("url", ""), hosts)]
 
     if drifted and on_target:
         # We already have a healthy tab — close the bad ones (kiosk shows the
@@ -122,8 +163,10 @@ def tick() -> None:
 
 def main() -> None:
     log.info(
-        "kiosk guard active (cdp=%s home=%s poll=%.1fs pause-file=%s)",
+        "kiosk guard active (cdp=%s home=%s poll=%.1fs pause-file=%s "
+        "allowed=%s)",
         CDP_BASE, HOME_URL, POLL_INTERVAL_S, PAUSE_FILE,
+        ",".join(sorted(allowed_hosts())),
     )
     while True:
         try:

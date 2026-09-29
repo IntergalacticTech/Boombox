@@ -25,7 +25,6 @@ dbus_next introspection incompatibility on BlueZ 5.82.
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import logging
 import secrets
@@ -33,6 +32,7 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
+import remote_access
 from bless import (
     BlessGATTCharacteristic,
     BlessServer,
@@ -109,16 +109,13 @@ class BoomboxBlePeripheral:
         if len(pin) != 6 or not pin.isdigit():
             self._set_pair_response({"ok": False, "error": "bad_pin"})
             return
-        st = self._pair_state
-        if st["pin_hash"] is None or time.time() > st["expires_at"]:
-            self._set_pair_response({"ok": False, "error": "no_active_pin"})
+        # Same check as the HTTP path, sharing its state: expiry, single use,
+        # and the wrong-guess cap (PIN burned after PAIR_MAX_ATTEMPTS, so it
+        # can't be brute-forced over BLE within the TTL either).
+        err = remote_access.redeem_pin(self._pair_state, pin, self._hash_pin_cb)
+        if err is not None:
+            self._set_pair_response({"ok": False, "error": err})
             return
-        if not hmac.compare_digest(self._hash_pin_cb(pin), st["pin_hash"]):
-            self._set_pair_response({"ok": False, "error": "bad_pin"})
-            return
-        # Verified — single-use, invalidate now.
-        st["pin_hash"] = None
-        st["expires_at"] = 0
 
         token = secrets.token_hex(32)
         path = Path(self._peers_path_cb())
@@ -127,8 +124,7 @@ class BoomboxBlePeripheral:
         except Exception:
             peers = {}
         peers[token] = {"label": "ble-paired", "paired_at": int(time.time())}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(peers, indent=2))
+        remote_access.write_json_atomic(path, peers)
         log.info("[ble] paired peer")
 
         self._set_pair_response({
@@ -243,6 +239,13 @@ class BoomboxBlePeripheral:
         log.info("[ble] advertising as %s with service %s",
                   self._boombox_name, SERVICE_UUID)
 
+        # Anything still connected from before this (re)registration holds
+        # stale attribute handles — see disconnect_stale_centrals().
+        dropped = await disconnect_stale_centrals()
+        if dropped:
+            log.info("[ble] dropped %d stale central(s) so they rediscover: %s",
+                     len(dropped), ", ".join(dropped))
+
         # Start the state push loop. Returns the task so caller can cancel.
         return asyncio.create_task(self._push_state_loop())
 
@@ -253,6 +256,54 @@ class BoomboxBlePeripheral:
             except Exception as e:
                 log.warning("[ble] stop: %s", e)
             self._server = None
+
+
+async def _run_bluetoothctl(*argv: str) -> tuple[int, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return 1, "timeout"
+    return proc.returncode or 0, out.decode(errors="replace")
+
+
+async def disconnect_stale_centrals(run=_run_bluetoothctl) -> list[str]:
+    """Disconnect every LE central BlueZ still has attached.
+
+    Called right after the GATT application is registered. bluetoothd keeps
+    LE links alive across our process restarting, but re-registering the
+    service hands out new attribute handles — a remote that stayed
+    connected keeps writing the PIN to the old pair_request handle and
+    looking for a CCCD that moved, and all it can show the user is "no
+    response". Kicking it forces a reconnect and a fresh discovery. Every
+    step is best-effort: no bluetoothctl, no adapter, or a refusal just
+    means nothing gets dropped.
+    """
+    try:
+        rc, out = await run("bluetoothctl", "devices", "Connected")
+    except Exception as e:
+        log.debug("[ble] could not list connected centrals: %s", e)
+        return []
+    if rc != 0:
+        return []
+    macs = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "Device" and parts[1].count(":") == 5:
+            macs.append(parts[1])
+    dropped = []
+    for mac in macs:
+        try:
+            rc, out = await run("bluetoothctl", "disconnect", mac)
+        except Exception as e:
+            log.warning("[ble] disconnect %s failed: %s", mac, e)
+            continue
+        if rc != 0:
+            log.warning("[ble] disconnect %s refused: %s", mac, out.strip())
+        dropped.append(mac)
+    return dropped
 
 
 async def run_ble_peripheral(*, pair_state, peers_path_cb, hash_pin_cb,

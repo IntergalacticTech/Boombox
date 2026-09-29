@@ -92,3 +92,36 @@ async def test_pair_without_active_pin_rejects(app_with_pairing,
     resp = await client.post("/api/remote/pair",
                               json={"pin": "123456", "label": "x"})
     assert resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_pair_pin_burned_after_max_wrong_attempts(app_with_pairing,
+                                                         aiohttp_client):
+    import remote_access
+    app, peers_path = app_with_pairing
+    client = await aiohttp_client(app)
+    pin = (await (await client.post("/api/remote/pair/start")).json())["pin"]
+    wrong = "000000" if pin != "000000" else "111111"
+    for _ in range(remote_access.PAIR_MAX_ATTEMPTS):
+        r = await client.post("/api/remote/pair", json={"pin": wrong})
+        assert (await r.json())["error"] == "bad_pin"
+    # The window is burned — the real PIN no longer pairs…
+    r = await client.post("/api/remote/pair", json={"pin": pin})
+    assert r.status == 403
+    assert (await r.json())["error"] == "no_active_pin"
+    assert json.loads(peers_path.read_text()) == {}
+    # …until the kiosk mints a fresh one, which gets a fresh attempt budget.
+    pin2 = (await (await client.post("/api/remote/pair/start")).json())["pin"]
+    r = await client.post("/api/remote/pair", json={"pin": pin2})
+    assert r.status == 200
+
+
+@pytest.mark.asyncio
+async def test_peers_json_written_0600(app_with_pairing, aiohttp_client):
+    import stat
+    app, peers_path = app_with_pairing
+    client = await aiohttp_client(app)
+    pin = (await (await client.post("/api/remote/pair/start")).json())["pin"]
+    r = await client.post("/api/remote/pair", json={"pin": pin})
+    assert r.status == 200
+    assert stat.S_IMODE(peers_path.stat().st_mode) == 0o600

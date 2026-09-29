@@ -8,8 +8,10 @@ StopWhenUnneeded=yes
 Type=oneshot
 RemainAfterExit=yes
 # %I is the systemd-unescaped instance name (e.g. "sda1"); we feed back
-# /dev/sda1 to the script.
-ExecStart=/opt/boombox/current/services/boombox-usb-mount.sh mount /dev/%I
-ExecStop=/opt/boombox/current/services/boombox-usb-mount.sh unmount /dev/%I
+# /dev/sda1 to the script. The script is the ROOT-OWNED copy install.sh puts
+# in /usr/local/sbin — never the release tree, which the (unprivileged)
+# boombox user owns and could otherwise rewrite to run code as root.
+ExecStart=/usr/local/sbin/boombox-usb-mount mount /dev/%I
+ExecStop=/usr/local/sbin/boombox-usb-mount unmount /dev/%I
 TimeoutStartSec=30
 TimeoutStopSec=15

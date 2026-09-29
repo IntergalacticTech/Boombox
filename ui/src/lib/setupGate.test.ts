@@ -34,6 +34,30 @@ describe('redirectToSetupIfIncomplete', () => {
     expect(replace).not.toHaveBeenCalled()
   })
 
+  it('closes an abandoned re-opened setup session once complete', async () => {
+    stubLocation('localhost')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ complete: true }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await redirectToSetupIfIncomplete()
+    expect(fetchMock).toHaveBeenCalledWith('/api/setup/session/close',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }))
+  })
+
+  it('does not close the session while setup is incomplete', async () => {
+    stubLocation('localhost')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ complete: false }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await redirectToSetupIfIncomplete()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('never redirects a LAN (non-localhost) client', async () => {
     const replace = stubLocation('192.168.1.81')
     const fetchMock = vi.fn()

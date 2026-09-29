@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMopidy, useElapsed } from "./lib/mopidy";
-import { useActiveSource, isExternalActive, controlExternal } from "./lib/activeSource";
+import { useActiveSource, isExternalActive, isAsleep, controlExternal } from "./lib/activeSource";
 import { ScaleToFit } from "./lib/scaleToFit";
 import { SkinPickerDrawer } from "./lib/SkinPicker";
-import { SourceDrawer } from "./lib/SourceSwitcher";
+import { HomeScreen } from "./lib/HomeScreen";
+import { SleepScreen } from "./lib/SleepScreen";
+import { activeIdFor, accentFor, chromeLabelFor, isExternalId } from "./lib/sources";
 import { QueueDrawer } from "./lib/QueueDrawer";
 import { LibraryDrawer } from "./lib/LibraryDrawer";
 import { SettingsDrawer } from "./lib/SettingsDrawer";
@@ -28,14 +30,6 @@ function getActiveSkin(): SkinId {
   return "deckos";
 }
 
-const SOURCE_COLOR: Record<string, string> = {
-  library: "#5be7ff",
-  airplay: "#a78bfa",
-  spotify: "#1ed760",
-  bluetooth: "#5b9aff",
-  idle:   "rgba(255,255,255,0.35)",
-};
-
 function App() {
   const m = useMopidy();
   const elapsed = useElapsed(m.state, m.positionMs, m.positionAtMs);
@@ -45,7 +39,10 @@ function App() {
   const skin = SKIN_BY_ID[skinId] ?? SKINS[0];
   const Audio = skin.Audio;
 
-  const [sourceOpen, setSourceOpen] = useState(false);
+  // The box boots to Home and only enters the player once the user picks an
+  // input (or taps the Now Playing strip). Nothing is persisted: a reboot is
+  // meant to land on Home, and that's what a fresh mount does.
+  const [view, setView] = useState<"home" | "player">("home");
   const [queueOpen, setQueueOpen] = useState(false);
   const [skinPickerOpen, setSkinPickerOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -123,6 +120,25 @@ function App() {
     return () => { cancelled = true; clearInterval(id); };
   }, [syncStatus.cachePresent]);
 
+  // Standby. `asleep` is whatever boombox-state last said; a server that
+  // doesn't report power (or is down) reads as awake, so the kiosk can never
+  // strand itself behind the black SleepScreen.
+  const asleep = isAsleep(ext);
+  const wasAsleep = useRef(asleep);
+  useEffect(() => {
+    // Waking is an "appliance turned on" moment, not a resume: the user gets
+    // the Home picker with nothing else on top, whatever they left open.
+    if (wasAsleep.current && !asleep) {
+      setView("home");
+      setQueueOpen(false);
+      setLibraryOpen(false);
+      setSkinPickerOpen(false);
+      setSettingsOpen(false);
+      setBindUid(null);
+    }
+    wasAsleep.current = asleep;
+  }, [asleep]);
+
   // Publish the active skin's theme so external surfaces (the LAN upload
   // page, etc.) can match the kiosk's look. Best-effort; offline is fine.
   useEffect(() => {
@@ -166,14 +182,17 @@ function App() {
 
   // Source identity for the chrome bar — shows which input is currently
   // producing audio; falls back to "LIBRARY" when Mopidy is the producer.
-  const sourceId = computeSourceId(ext.source, ext.status, m.state === "playing");
+  const sourceId = activeIdFor(ext.source, ext.status, m.state === "playing");
+  const goHome = () => { setNpbDismissed(false); setView("home"); };
+  const anyDrawerOpen = queueOpen || libraryOpen || skinPickerOpen || settingsOpen;
+
   const chrome: ChromeApi = {
-    sourceLabel: sourceId.toUpperCase(),
-    sourceColor: SOURCE_COLOR[sourceId] ?? SOURCE_COLOR.idle,
-    sourceLive: sourceId !== "idle" && sourceId !== "library",
+    sourceLabel: chromeLabelFor(sourceId),
+    sourceColor: accentFor(sourceId),
+    sourceLive: isExternalId(sourceId),
     queueCount,
     skinName: skin.name,
-    onOpenSource: () => { setNpbDismissed(false); setSourceOpen(true); },
+    onGoHome: goHome,
     onOpenQueue: () => { setNpbDismissed(false); setQueueOpen(true); },
     onOpenSkinPicker: () => { setNpbDismissed(false); setSkinPickerOpen(true); },
     onOpenSettings: () => { setNpbDismissed(false); setSettingsOpen(true); },
@@ -183,56 +202,70 @@ function App() {
     <>
       <OverlayRoot />
       <ScaleToFit width={1280} height={800}>
-        <Audio
-          track={trackForSkin}
-          state={stateForSkin}
-          elapsed={elapsedForSkin}
-          volume={m.volume}
-          shuffle={m.shuffle}
-          repeat={m.repeat}
-          chrome={chrome}
-          onToggle={onToggle}
-          onNext={onNext}
-          onPrev={onPrev}
-          onToggleShuffle={m.toggleShuffle}
-          onToggleRepeat={m.toggleRepeat}
-          onSeek={onSeek}
-        />
+        {view === "home" ? (
+          // The skin's Audio component is deliberately unmounted on Home: its
+          // spectrum/VU animations would keep running (and keep the Pi's GPU
+          // busy) behind a screen that isn't showing them.
+          <HomeScreen
+            theme={skin.theme}
+            queueCount={queueCount}
+            onGoPlayer={() => setView("player")}
+            onOpenLibrary={() => { setNpbDismissed(false); setLibraryOpen(true); }}
+            onOpenSettings={() => { setNpbDismissed(false); setSettingsOpen(true); }}
+            showNowPlaying={!anyDrawerOpen}
+          />
+        ) : (
+          <Audio
+            track={trackForSkin}
+            state={stateForSkin}
+            elapsed={elapsedForSkin}
+            volume={m.volume}
+            shuffle={m.shuffle}
+            repeat={m.repeat}
+            chrome={chrome}
+            onToggle={onToggle}
+            onNext={onNext}
+            onPrev={onPrev}
+            onToggleShuffle={m.toggleShuffle}
+            onToggleRepeat={m.toggleRepeat}
+            onSeek={onSeek}
+          />
+        )}
       </ScaleToFit>
       <VolumeGesture />
-      {sourceOpen && (
-        <SourceDrawer
-          ext={ext}
-          mopidyPlaying={m.state === "playing"}
-          onClose={() => setSourceOpen(false)}
-          onOpenLibrary={() => { setNpbDismissed(false); setLibraryOpen(true); setSourceOpen(false); }}
+      {queueOpen && (
+        <QueueDrawer
+          onClose={() => setQueueOpen(false)}
+          onHome={() => { setQueueOpen(false); goHome(); }}
         />
       )}
-      {queueOpen && <QueueDrawer onClose={() => setQueueOpen(false)} />}
       {libraryOpen && (
         <LibraryDrawer
           onClose={() => { setLibraryOpen(false); setBindUid(null); }}
+          onHome={() => { setLibraryOpen(false); setBindUid(null); goHome(); }}
           bindUid={bindUid}
         />
       )}
-      {skinPickerOpen && <SkinPickerDrawer activeId={skinId} onClose={() => setSkinPickerOpen(false)} />}
-      {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)} />}
-      {(sourceOpen || queueOpen || libraryOpen || skinPickerOpen || settingsOpen) && !npbDismissed && (
+      {skinPickerOpen && (
+        <SkinPickerDrawer
+          activeId={skinId}
+          onClose={() => setSkinPickerOpen(false)}
+          onHome={() => { setSkinPickerOpen(false); goHome(); }}
+        />
+      )}
+      {settingsOpen && (
+        <SettingsDrawer
+          onClose={() => setSettingsOpen(false)}
+          onHome={() => { setSettingsOpen(false); goHome(); }}
+        />
+      )}
+      {anyDrawerOpen && !npbDismissed && (
         <NowPlayingBar onDismiss={() => setNpbDismissed(true)} />
       )}
+      {/* Last child, highest z-index: while asleep nothing below is reachable. */}
+      {asleep && <SleepScreen />}
     </>
   );
-}
-
-function computeSourceId(source: string | null, status: string, mopidyPlaying: boolean): "library" | "airplay" | "spotify" | "bluetooth" | "idle" {
-  const live = status === "playing" || status === "paused";
-  if (live && source) {
-    const s = source.toLowerCase();
-    if (s.includes("shairport") || s.includes("airplay")) return "airplay";
-    if (s.includes("spotify") || s.includes("librespot") || s.includes("raspotify")) return "spotify";
-    if (s.includes("bluez") || s.includes("blue")) return "bluetooth";
-  }
-  return mopidyPlaying ? "library" : "idle";
 }
 
 function formatTime(ms: number): string {

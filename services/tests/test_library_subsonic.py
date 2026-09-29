@@ -38,6 +38,7 @@ def test_make_auth_params_random_salt_each_call():
 def _mock_response(payload: dict, status: int = 200):
     resp = MagicMock()
     resp.status = status
+    resp.headers = {"Content-Type": "application/json"}
     resp.json = AsyncMock(return_value=payload)
     resp.__aenter__ = AsyncMock(return_value=resp)
     resp.__aexit__ = AsyncMock(return_value=None)
@@ -88,6 +89,7 @@ async def test_ping_http_401_raises_auth_error():
                             username="u", password="p")
     resp = MagicMock()
     resp.status = 401
+    resp.headers = {}
     resp.json = AsyncMock(return_value={})
     resp.__aenter__ = AsyncMock(return_value=resp)
     resp.__aexit__ = AsyncMock(return_value=None)
@@ -105,6 +107,7 @@ async def test_ping_http_403_raises_subsonic_error():
                             username="u", password="p")
     resp = MagicMock()
     resp.status = 403
+    resp.headers = {"Content-Type": "text/plain"}
     resp.json = AsyncMock(return_value={})
     resp.__aenter__ = AsyncMock(return_value=resp)
     resp.__aexit__ = AsyncMock(return_value=None)
@@ -187,3 +190,119 @@ async def test_get_album_list_pages():
         session.get = MagicMock(return_value=_mock_response(payload))
         albums = await client.get_album_list(offset=0, size=500)
     assert len(albums) == 2
+
+
+# ---- timeouts + Cloudflare edge pages (remote homelab over the internet) ----
+
+_OK_ENVELOPE = {"subsonic-response": {"status": "ok", "version": "1.16.1"}}
+
+
+async def _serve(aiohttp_server, handler):
+    from aiohttp import web
+    app = web.Application()
+    app.router.add_get("/rest/ping.view", handler)
+    server = await aiohttp_server(app)
+    return str(server.make_url("")).rstrip("/")
+
+
+@pytest.mark.asyncio
+async def test_ping_timeout_raises_unreachable(aiohttp_server):
+    """ClientTimeout(total=...) raises asyncio.TimeoutError, which is not an
+    aiohttp.ClientError — it must still surface as SubsonicUnreachable."""
+    import asyncio
+
+    from aiohttp import web
+
+    async def slow(request):
+        await asyncio.sleep(2)
+        return web.json_response(_OK_ENVELOPE)
+
+    base = await _serve(aiohttp_server, slow)
+    async with SubsonicClient(base, "u", "p", timeout_seconds=0.2) as c:
+        with pytest.raises(SubsonicUnreachable):
+            await c.ping()
+
+
+@pytest.mark.asyncio
+async def test_ping_cloudflare_challenge_403_is_unreachable(aiohttp_server):
+    from aiohttp import web
+
+    async def challenge(request):
+        return web.Response(status=403, text="<html>Just a moment...</html>",
+                            content_type="text/html",
+                            headers={"cf-mitigated": "challenge"})
+
+    base = await _serve(aiohttp_server, challenge)
+    async with SubsonicClient(base, "u", "p") as c:
+        with pytest.raises(SubsonicUnreachable):
+            await c.ping()
+
+
+@pytest.mark.asyncio
+async def test_ping_html_403_block_page_is_unreachable(aiohttp_server):
+    from aiohttp import web
+
+    async def blocked(request):
+        return web.Response(status=403, text="<html>Access denied</html>",
+                            content_type="text/html")
+
+    base = await _serve(aiohttp_server, blocked)
+    async with SubsonicClient(base, "u", "p") as c:
+        with pytest.raises(SubsonicUnreachable):
+            await c.ping()
+
+
+@pytest.mark.asyncio
+async def test_ping_cloudflare_503_html_is_unreachable(aiohttp_server):
+    from aiohttp import web
+
+    async def origin_down(request):
+        return web.Response(status=503, text="<html>origin down</html>",
+                            content_type="text/html")
+
+    base = await _serve(aiohttp_server, origin_down)
+    async with SubsonicClient(base, "u", "p") as c:
+        with pytest.raises(SubsonicUnreachable):
+            await c.ping()
+
+
+@pytest.mark.asyncio
+async def test_ping_html_body_on_200_is_unreachable(aiohttp_server):
+    """An interstitial served with 200 + HTML (no JSON) is not the API."""
+    from aiohttp import web
+
+    async def interstitial(request):
+        return web.Response(status=200, text="<html>checking your browser</html>",
+                            content_type="text/html")
+
+    base = await _serve(aiohttp_server, interstitial)
+    async with SubsonicClient(base, "u", "p") as c:
+        with pytest.raises(SubsonicUnreachable):
+            await c.ping()
+
+
+@pytest.mark.asyncio
+async def test_ping_real_json_ok_over_http(aiohttp_server):
+    from aiohttp import web
+
+    async def ok(request):
+        return web.json_response(_OK_ENVELOPE)
+
+    base = await _serve(aiohttp_server, ok)
+    async with SubsonicClient(base, "u", "p") as c:
+        assert await c.ping() is True
+
+
+@pytest.mark.asyncio
+async def test_ping_plain_404_stays_generic_error(aiohttp_server):
+    """A wrong path (no edge markers) is a config error, not unreachable."""
+    from aiohttp import web
+
+    async def missing(request):
+        return web.Response(status=404, text="not found")
+
+    base = await _serve(aiohttp_server, missing)
+    async with SubsonicClient(base, "u", "p") as c:
+        with pytest.raises(SubsonicError) as exc_info:
+            await c.ping()
+        assert not isinstance(exc_info.value, SubsonicUnreachable)

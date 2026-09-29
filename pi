@@ -174,7 +174,7 @@ exec chromium --kiosk "$url" \\
   --ozone-platform=wayland \\
   --enable-features=UseOzonePlatform \\
   --remote-debugging-port=$port \\
-  --remote-allow-origins=* \\
+  --remote-allow-origins=http://127.0.0.1:$port,http://localhost:$port \\
   --noerrdialogs --disable-session-crashed-bubble \\
   --overscroll-history-navigation=0 \\
   --user-data-dir="$HOME/.config/chromium"

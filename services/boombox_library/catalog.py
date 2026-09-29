@@ -8,14 +8,38 @@ Sync is upsert-based and keeps the FTS5 search index in lockstep.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
 from sqlite3 import Connection
 from typing import Protocol
 
+from .db import fts_rowid
+
 log = logging.getLogger("boombox-library.catalog")
 
 _ALBUM_PAGE_SIZE = 500
+
+# Prune guard. A sync that would reap more than this fraction of the local
+# albums AND more than this many albums is treated as suspect (a truncated
+# album listing from a flaky remote, a Navidrome rescan in progress, a
+# library folder temporarily unmounted on the server) and deferred — the
+# next healthy sync prunes normally. Small deltas always prune.
+#
+# A deferral is a hold-off, not a permanent block: when the SAME set of
+# albums is missing on PRUNE_CONFIRM_ROUNDS consecutive complete syncs
+# spanning at least PRUNE_CONFIRM_MIN_SECONDS, it's a real removal (folder
+# deleted, Navidrome regenerated its album IDs) and is reaped. A one-shot
+# override (request_forced_prune, POST /api/library/sync/prune) reaps on
+# the next complete sync. The pending state lives in sync_state so a
+# restart doesn't reset the count.
+PRUNE_MAX_FRACTION = 0.10
+PRUNE_MIN_ALBUMS = 50
+PRUNE_CONFIRM_ROUNDS = 3
+PRUNE_CONFIRM_MIN_SECONDS = 30 * 60
+_PRUNE_DEFERRED_KEY = "prune_deferred"
+_PRUNE_FORCE_KEY = "prune_force"
 
 
 class SubsonicProto(Protocol):
@@ -40,12 +64,20 @@ def _upsert_artist(conn: Connection, a: dict, now: float) -> None:
         (a["id"], a["name"], a.get("sortName", a["name"]).lower(),
          int(a.get("albumCount", 0)), a.get("coverArt"), now),
     )
-    # FTS index for artist
-    conn.execute("DELETE FROM search_index WHERE content_type='artist' AND id=?",
-                 (a["id"],))
+    _reindex(conn, "artist", a["id"], a["name"], a["name"])
+
+
+def _reindex(conn: Connection, content_type: str, id_: str,
+             title: str, body: str) -> None:
+    """Replace one search_index row. Keyed by fts_rowid so the delete is an
+    O(log n) rowid lookup — the column-predicate form was a full FTS scan
+    per row (see db.fts_rowid)."""
+    rid = fts_rowid(content_type, id_)
+    conn.execute("DELETE FROM search_index WHERE rowid=?", (rid,))
     conn.execute(
-        "INSERT INTO search_index(content_type, id, title, body) VALUES (?,?,?,?)",
-        ("artist", a["id"], a["name"], a["name"]),
+        "INSERT INTO search_index(rowid, content_type, id, title, body) "
+        "VALUES (?,?,?,?,?)",
+        (rid, content_type, id_, title, body),
     )
 
 
@@ -76,12 +108,7 @@ def _upsert_album(conn: Connection, al: dict, now: float, starred_ids: set[str])
     )
     body = " ".join(filter(None, [al.get("name"), al.get("artist"),
                                    str(al.get("year") or ""), al.get("genre")]))
-    conn.execute("DELETE FROM search_index WHERE content_type='album' AND id=?",
-                 (al["id"],))
-    conn.execute(
-        "INSERT INTO search_index(content_type, id, title, body) VALUES (?,?,?,?)",
-        ("album", al["id"], al.get("name", ""), body),
-    )
+    _reindex(conn, "album", al["id"], al.get("name", ""), body)
 
 
 def _upsert_track(conn: Connection, tr: dict, album_id: str, now: float,
@@ -108,12 +135,110 @@ def _upsert_track(conn: Connection, tr: dict, album_id: str, now: float,
          int(tr.get("size", 0)), tr.get("contentType", ""),
          1 if tr["id"] in starred_ids else 0, now),
     )
-    conn.execute("DELETE FROM search_index WHERE content_type='track' AND id=?",
-                 (tr["id"],))
+    _reindex(conn, "track", tr["id"], tr.get("title", ""), tr.get("title", ""))
+
+
+def refresh_starred(conn: Connection, album_ids: set[str],
+                    song_ids: set[str]) -> None:
+    """Rewrite navidrome_starred on every album + track from getStarred2.
+
+    The album/track upserts only run for albums whose track count changed,
+    so without this a star/unstar in Navidrome would never reach the local
+    flags (and starred_auto_pin would act on stale data). Only rows whose
+    flag actually differs are touched, so a steady-state sync writes
+    nothing. One short transaction; no awaits inside.
+    """
+    conn.execute("BEGIN")
+    try:
+        for table, ids in (("albums", album_ids), ("tracks", song_ids)):
+            tmp = f"_starred_{table}"
+            conn.execute(f"CREATE TEMP TABLE IF NOT EXISTS {tmp} "
+                         "(id TEXT PRIMARY KEY)")
+            conn.execute(f"DELETE FROM {tmp}")
+            conn.executemany(f"INSERT OR IGNORE INTO {tmp}(id) VALUES (?)",
+                             ((i,) for i in ids))
+            conn.execute(
+                f"UPDATE {table} SET navidrome_starred=1 "
+                f"WHERE navidrome_starred=0 AND id IN (SELECT id FROM {tmp})")
+            conn.execute(
+                f"UPDATE {table} SET navidrome_starred=0 "
+                f"WHERE navidrome_starred=1 AND id NOT IN (SELECT id FROM {tmp})")
+        conn.execute("COMMIT")
+    except Exception:
+        try: conn.execute("ROLLBACK")
+        except Exception: pass
+        raise
+
+
+def _prune_is_safe(existing: int, removing: int) -> bool:
+    """False when a prune looks like a truncated listing, not real deletes."""
+    if removing <= PRUNE_MIN_ALBUMS:
+        return True
+    return removing <= existing * PRUNE_MAX_FRACTION
+
+
+def _state_get(conn: Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM sync_state WHERE key=?",
+                       (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _state_set(conn: Connection, key: str, value: str) -> None:
     conn.execute(
-        "INSERT INTO search_index(content_type, id, title, body) VALUES (?,?,?,?)",
-        ("track", tr["id"], tr.get("title", ""), tr.get("title", "")),
-    )
+        "INSERT INTO sync_state(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+
+
+def _state_del(conn: Connection, key: str) -> None:
+    conn.execute("DELETE FROM sync_state WHERE key=?", (key,))
+
+
+def request_forced_prune(conn: Connection) -> None:
+    """Let the next complete sync reap albums even past the prune guard."""
+    _state_set(conn, _PRUNE_FORCE_KEY, "1")
+
+
+def prune_deferred_status(conn: Connection) -> dict | None:
+    """The pending (guard-deferred) removal, or None. Surfaced by /health."""
+    try:
+        raw = _state_get(conn, _PRUNE_DEFERRED_KEY)
+        if raw is None:
+            return None
+        d = json.loads(raw)
+        return {"albums": int(d["albums"]), "rounds": int(d["rounds"]),
+                "since": float(d["since"]),
+                "confirm_rounds": PRUNE_CONFIRM_ROUNDS}
+    except Exception:  # noqa: BLE001 — health must never 500 on bad state
+        return None
+
+
+def _prune_hold_off(conn: Connection, removing_ids: list[str],
+                    now: float) -> tuple[bool, dict]:
+    """Guard tripped: record this round against the deferred removal.
+
+    Returns (prune_now, state). The count continues only while the exact
+    same album set is missing; a different set restarts it at round 1.
+    """
+    fp = hashlib.sha1("\n".join(sorted(removing_ids)).encode()).hexdigest()
+    prev: dict = {}
+    raw = _state_get(conn, _PRUNE_DEFERRED_KEY)
+    if raw:
+        try:
+            prev = json.loads(raw)
+        except ValueError:
+            prev = {}
+    if prev.get("fingerprint") == fp:
+        state = {**prev, "rounds": int(prev.get("rounds", 0)) + 1}
+    else:
+        state = {"fingerprint": fp, "albums": len(removing_ids),
+                 "rounds": 1, "since": now}
+    confirmed = (state["rounds"] >= PRUNE_CONFIRM_ROUNDS
+                 and now - float(state["since"]) >= PRUNE_CONFIRM_MIN_SECONDS)
+    if confirmed:
+        _state_del(conn, _PRUNE_DEFERRED_KEY)
+    else:
+        _state_set(conn, _PRUNE_DEFERRED_KEY, json.dumps(state))
+    return confirmed, state
 
 
 def _upsert_playlist(conn: Connection, pl: dict, now: float) -> None:
@@ -134,13 +259,22 @@ def _upsert_playlist(conn: Connection, pl: dict, now: float) -> None:
 _TXN_CHUNK = 100  # commit every N items so other writers (boombox-rfid) aren't starved
 
 
-def _chunk_commit(conn: Connection, counter: int) -> int:
-    """Commit + reopen the txn every _TXN_CHUNK items. Returns counter+1."""
-    counter += 1
-    if counter % _TXN_CHUNK == 0:
-        conn.execute("COMMIT")
+async def _write_chunked(conn: Connection, items, write) -> None:
+    """Apply `write(item)` to every item in transactions of _TXN_CHUNK rows,
+    yielding to the event loop after each commit so API handlers (and other
+    SQLite writers) get a turn. A tiny non-zero sleep for the same reason as
+    the track loop below: sleep(0) re-takes the write lock too fast."""
+    for start in range(0, len(items), _TXN_CHUNK):
         conn.execute("BEGIN")
-    return counter
+        try:
+            for item in items[start:start + _TXN_CHUNK]:
+                write(item)
+            conn.execute("COMMIT")
+        except Exception:
+            try: conn.execute("ROLLBACK")
+            except Exception: pass
+            raise
+        await asyncio.sleep(0.005)
 
 
 async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
@@ -157,17 +291,11 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
     starred_album_ids = {a["id"] for a in starred.get("album", [])}
     starred_song_ids = {s["id"] for s in starred.get("song", [])}
 
-    # Artists: HTTP first, then a single short transaction.
+    # Artists: HTTP first, then short transactions of _TXN_CHUNK rows with a
+    # yield between them — the whole write phase used to run as one block on
+    # the event loop, so the HTTP API stopped answering for its duration.
     artists = await client.get_artists()
-    conn.execute("BEGIN")
-    try:
-        for a in artists:
-            _upsert_artist(conn, a, now)
-        conn.execute("COMMIT")
-    except Exception:
-        try: conn.execute("ROLLBACK")
-        except Exception: pass
-        raise
+    await _write_chunked(conn, artists, lambda a: _upsert_artist(conn, a, now))
 
     # Albums: each HTTP page → one short txn. We capture each album's
     # expected songCount so the next loop can skip the per-album HTTP
@@ -179,16 +307,10 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
         page = await client.get_album_list(offset=offset, size=_ALBUM_PAGE_SIZE)
         if not page:
             break
-        conn.execute("BEGIN")
-        try:
-            for al in page:
-                _upsert_album(conn, al, now, starred_album_ids)
-                all_albums_seen.append((al["id"], int(al.get("songCount", 0))))
-            conn.execute("COMMIT")
-        except Exception:
-            try: conn.execute("ROLLBACK")
-            except Exception: pass
-            raise
+        await _write_chunked(
+            conn, page, lambda al: _upsert_album(conn, al, now, starred_album_ids))
+        all_albums_seen.extend(
+            (al["id"], int(al.get("songCount", 0))) for al in page)
         album_count += len(page)
         if len(page) < _ALBUM_PAGE_SIZE:
             break
@@ -236,6 +358,10 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
             except Exception: pass
             raise
 
+    # Starred flags: the per-album upserts above skip unchanged albums, so
+    # re-derive every flag from the getStarred2 result fetched up front.
+    refresh_starred(conn, starred_album_ids, starred_song_ids)
+
     # Playlists: HTTP then short txn.
     playlists = await client.get_playlists()
     conn.execute("BEGIN")
@@ -272,7 +398,9 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
     # Tracks cascade via the FK. Only run after we've walked the full
     # source-of-truth list — if the walk above raised, the whole
     # sync_full caller catches it and we never reach here, so a partial
-    # walk can never drive a destructive delete.
+    # walk can never drive a destructive delete. A listing that completed
+    # but came back suspiciously short is caught by _prune_is_safe and
+    # held off (not blocked forever) by _prune_hold_off.
     seen_album_ids = {aid for aid, _ in all_albums_seen}
     if seen_album_ids:
         conn.execute("BEGIN")
@@ -282,10 +410,43 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
             conn.execute("DELETE FROM _seen_albums")
             conn.executemany("INSERT INTO _seen_albums(id) VALUES (?)",
                              ((aid,) for aid in seen_album_ids))
-            cursor = conn.execute(
-                "DELETE FROM albums WHERE id NOT IN (SELECT id FROM _seen_albums)"
-            )
-            removed = cursor.rowcount or 0
+            existing = conn.execute("SELECT COUNT(*) FROM albums").fetchone()[0]
+            removing_ids = [r[0] for r in conn.execute(
+                "SELECT id FROM albums "
+                "WHERE id NOT IN (SELECT id FROM _seen_albums)")]
+            removing = len(removing_ids)
+            forced = _state_get(conn, _PRUNE_FORCE_KEY) is not None
+            _state_del(conn, _PRUNE_FORCE_KEY)  # one-shot, used or not
+            prune = bool(removing)
+            if removing and not _prune_is_safe(existing, removing):
+                if forced:
+                    log.warning("sync_full: forced prune of %d of %d albums",
+                                removing, existing)
+                    _state_del(conn, _PRUNE_DEFERRED_KEY)
+                else:
+                    prune, st = _prune_hold_off(conn, removing_ids, now)
+                    if prune:
+                        log.warning(
+                            "sync_full: pruning %d of %d albums — the same "
+                            "albums were missing on %d consecutive syncs",
+                            removing, existing, st["rounds"])
+                    else:
+                        log.warning(
+                            "sync_full: refusing to prune %d of %d albums "
+                            "(> %d%% and > %d) — listing looks truncated; "
+                            "deferred (round %d of %d)",
+                            removing, existing, int(PRUNE_MAX_FRACTION * 100),
+                            PRUNE_MIN_ALBUMS, st["rounds"],
+                            PRUNE_CONFIRM_ROUNDS)
+            else:
+                # Healthy listing: any earlier suspect shortfall is over.
+                _state_del(conn, _PRUNE_DEFERRED_KEY)
+            removed = 0
+            if prune:
+                cursor = conn.execute(
+                    "DELETE FROM albums WHERE id NOT IN (SELECT id FROM _seen_albums)"
+                )
+                removed = cursor.rowcount or 0
             conn.execute("COMMIT")
             if removed:
                 log.info("sync_full reaped %d removed albums", removed)

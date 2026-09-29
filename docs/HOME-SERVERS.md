@@ -147,14 +147,37 @@ docker compose -f docker-compose.yml -f docker-compose.cloudflared.yml up -d
 
 5. Set `JELLYFIN_PUBLISHED_URL=https://video.example.com` in `.env` and
    `docker compose up -d` again so Jellyfin emits correct links.
-6. **Strongly recommended:** add a **Cloudflare Access** policy in front of each
-   hostname (email OTP, or your identity provider). This puts a second auth gate
-   in front of the servers' own logins. Note: native Jellyfin *apps* don't carry
-   Access cookies, so if you gate `video.example.com` with Access you'll use
-   service tokens or a bypass for the app path — keep the boombox's server URL on
-   an Access policy that permits its credential. For most people, gating the
-   music hostname with Access and relying on Jellyfin's own strong login for
-   video is the pragmatic split.
+6. **Cloudflare Access — only in front of the browser UIs, never the APIs the
+   boombox calls.** Access puts an SSO/email-OTP gate ahead of an app, but it
+   only lets through requests carrying an Access cookie or an Access service
+   token. **The boombox sends neither** — its Subsonic client and its Jellyfin
+   client make plain API calls, and it has no setting for
+   `CF-Access-Client-Id` / `CF-Access-Client-Secret` service-token headers yet.
+   Put Access over a whole hostname the boombox uses and **library sync,
+   streaming and video all break** (Access answers with a login redirect, not
+   your server). So:
+
+   - **Music (`music.example.com`):** Access is worthwhile for Navidrome's web
+     UI, but add a **Bypass** policy for the Subsonic API path **`/rest/*`**
+     (in Zero Trust: a second self-hosted application for
+     `music.example.com/rest` with a *Bypass → Everyone* policy). The boombox
+     syncs and streams entirely through `/rest/…`; the web UI stays gated.
+     `/rest/*` is then protected only by Navidrome's own login — which is why
+     the next point matters.
+   - **Video (`video.example.com`):** Jellyfin's API is spread across the whole
+     hostname (and native Jellyfin apps don't carry Access cookies either), so
+     there's no clean path to bypass. Leave Access off this hostname and rely
+     on Jellyfin's own strong login + Cloudflare's edge rate-limiting.
+   - A **service token** (Access → Service Auth) is the "right" long-term
+     answer for both, but it needs boombox support that doesn't exist yet —
+     don't configure one expecting the device to use it.
+
+   **Give the boombox its own non-admin Navidrome user.** Create a dedicated
+   user (e.g. `boombox`, *not* an admin, access to just the libraries it should
+   play) with a long random password, and enter *that* in the boombox — never
+   your admin login. The device stores the password (encrypted, but recoverable
+   by anyone who has the device), and `/rest/*` is reachable from the internet
+   with it, so keep its blast radius to "can play music".
 
 ### Option B — Router port-forward + reverse proxy + TLS
 
@@ -243,8 +266,38 @@ Every Jellyfin address in the boombox now resolves through
 `BOOMBOX_JELLYFIN_BASE` — the transport proxy, the **WATCH** button's kiosk
 navigation, and both library-refresh triggers (post-upload and USB-mount). Set
 the one env var and the whole device — touchscreen included — points at your
-server, local or remote. (Both `boombox-remote` and `boombox-buttons` load
-`/etc/boombox/jellyfin.env`, so the value reaches every consumer.)
+server, local or remote. (`boombox-remote`, `boombox-buttons` and
+`boombox-kiosk-guard` load `/etc/boombox/jellyfin.env`, and anything that
+doesn't falls back to reading the file, so the value reaches every consumer.)
+
+3. **Pin the kiosk's Jellyfin session** so the phone remote's video transport
+   (play/pause/seek/volume) controls *this* boombox and not another TV on the
+   same server. A remote server can't recognise the kiosk by a loopback
+   address, so without a pin the boombox refuses to control any session (and
+   logs a one-time hint). Add to `/etc/boombox/jellyfin.env`, then
+   `systemctl --user restart boombox-remote`:
+
+   ```ini
+   # Exact match, preferred. Find it in Jellyfin's Dashboard → Devices (open
+   # the "Chrome"/"Chromium" entry last used by the kiosk) or GET /Sessions.
+   BOOMBOX_JELLYFIN_DEVICE_ID=5d1c…
+   # Alternative/fallback: exact DeviceName (most recent wins if several).
+   BOOMBOX_JELLYFIN_DEVICE_NAME=Chromium
+   ```
+
+   An on-device or LAN server (loopback / private IP / `.local`) keeps the old
+   behaviour without a pin: the kiosk's loopback session (only trusted when
+   the server itself is on-device — a remote server behind a same-host proxy
+   or tunnel reports `127.0.0.1` for every client), else the most recently
+   active one. A set pin that matches nothing controls nothing. The DeviceId
+   lives in the kiosk browser's storage, so re-pin if that profile is ever
+   wiped.
+
+The kiosk guard (which keeps the touchscreen on the local UI) allows the
+Jellyfin base URL's exact hostname, so **WATCH** can open a remote server. If
+the server sits behind a login on another host (e.g. Cloudflare Access), list
+those exact hostnames, comma-separated, in `BOOMBOX_KIOSK_ALLOWED_HOSTS` via
+`systemctl --user edit boombox-kiosk-guard` (`Environment=BOOMBOX_KIOSK_ALLOWED_HOSTS=team.cloudflareaccess.com`).
 
 ### Getting video onto the system
 
@@ -284,19 +337,24 @@ project. Do it deliberately.
 - **Keep the servers patched.** Pin image versions in `docker-compose.yml`
   (this repo does), then bump them on a schedule and re-`up`. Watch Jellyfin and
   Navidrome release notes for security fixes. On a VPS, patch the OS too.
-- **Prefer a mesh VPN or Cloudflare Access if you're unsure.** Publishing a media
-  server on the open internet is strictly riskier than not exposing it at all. A
-  **mesh VPN** (Tailscale / WireGuard) puts the boombox and the servers on one
-  private network with no public surface — often the best answer for a single
-  appliance you control. If you do go public, put **Cloudflare Access** (or
-  equivalent SSO) in front so a login gate stands ahead of the app itself.
+- **Prefer a mesh VPN if you're unsure.** Publishing a media server on the open
+  internet is strictly riskier than not exposing it at all. A **mesh VPN**
+  (Tailscale / WireGuard) puts the boombox and the servers on one private
+  network with no public surface — often the best answer for a single appliance
+  you control. If you do go public, use **Cloudflare Access** (or equivalent
+  SSO) only the way [Option A step 6](#option-a--cloudflare-tunnel-no-inbound-ports)
+  describes: gate Navidrome's **web UI** but **Bypass `/rest/*`**, and leave
+  Access **off the video hostname**. The boombox can't pass an Access login, so
+  Access over a whole hostname it calls breaks library sync, streaming and
+  video.
 - **The boombox transmits credentials to these servers — TLS protects them.**
   Navidrome auth is token+salt (password not sent in the clear), but Jellyfin
   uses an API key and native apps send passwords; without TLS those are exposed.
   This is exactly why raw HTTP exposure is banned above.
 
-Rule of thumb: **mesh VPN > public + Cloudflare Access > public + reverse-proxy
-with rate-limiting > raw port-forward (never).**
+Rule of thumb: **mesh VPN > public + Cloudflare Access on the web UIs only (per
+Option A step 6 — `/rest/*` bypassed, video hostname un-gated) > public +
+reverse-proxy with rate-limiting > raw port-forward (never).**
 
 ---
 

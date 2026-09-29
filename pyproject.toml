@@ -1,3 +1,18 @@
+# Dev/CI tooling (PEP 735 dependency group: `uv sync --group dev` or
+# `pip install --group dev` with pip >= 25.1). Runtime deps live in
+# install/config/requirements.txt; CI's install list mirrors both.
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-aiohttp>=1.0",
+    "ruff",
+    "mypy",
+    # boombox_library/config.py + boombox_rfid/config.py import yaml; without
+    # the stubs mypy fails with "Library stubs not installed for yaml".
+    "types-PyYAML",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["services/tests"]
 python_files = ["test_*.py"]

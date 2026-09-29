@@ -22,8 +22,10 @@ For the service internals see
   removes only the favorite-driven pin, so a parallel explicit pin still
   survives.
 - **Online streaming when nothing's cached.** The playback resolver
-  hands Mopidy a direct `/rest/stream.view?…` URL with token+salt auth
-  so streams play through the same audio path as local files.
+  hands Mopidy a credential-free URL on boombox-library's local stream
+  proxy (`http://127.0.0.1:6687/api/library/stream/<id>`), which adds the
+  Subsonic token+salt auth server-side, so streams play through the same
+  audio path as local files.
 - **Source badge on the now-playing bar.** ⬇ Cache · ⚡ Stream · 🎵 USB
   · 📱 AirPlay · 🎙 BT — at a glance, you can tell which pipeline is
   feeding the speakers.
@@ -144,15 +146,31 @@ URI. GStreamer's built-in filesrc plays it directly — no Mopidy-Local
 scan, no metadata round-trip.
 
 When the track isn't cached but Navidrome is reachable, the resolver
-emits a direct stream URL:
+emits a URL on boombox-library's own local stream proxy:
 
 ```
-http://<navidrome-host>:4533/rest/stream.view?u=<user>&t=<token>&s=<salt>&v=1.16.1&c=boombox-library&f=json&id=<track-id>
+http://127.0.0.1:6687/api/library/stream/<track-id>
 ```
 
-Token+salt auth means the password never appears in URLs; salt is fresh
-per call so signatures aren't replayable. Mopidy's built-in stream
-backend pipes the HTTP body through GStreamer.
+The proxy (`services/boombox_library/stream_proxy.py`) builds the
+Subsonic token+salt auth per request from the live config and relays
+Navidrome's `/rest/stream.view` body chunk-by-chunk (Range/206/416
+passed through). No reusable credential ever lands in Mopidy's
+tracklist, `last.json`, the phone remote or the screen, and a password
+change takes effect on the next request. Mopidy's built-in stream
+backend pipes the HTTP body through GStreamer. Override the base with
+`BOOMBOX_LIBRARY_STREAM_BASE` (tests / non-default port).
+
+Consequences of routing audio through boombox-library:
+
+- **Streamed playback needs boombox-library up.** `boombox-rfid` and
+  `boombox-resume` are ordered `After=`/`Wants=boombox-library.service`,
+  and both wait for port 6687 (RFID ~10 s, boot resume ~60 s) before
+  queueing proxy URLs. Cached `file://` tracks never depend on it.
+- **Restarting boombox-library cuts a streamed track.** On shutdown the
+  proxy aborts every in-flight relay (so a restart takes seconds, not
+  aiohttp's graceful ~120 s), and Mopidy sees a truncated stream — skip
+  or re-press play. Cached tracks are unaffected.
 
 > **Note for Debian Trixie + Mopidy 3.4.2 setups:** the system
 > `python3-gi` upgrade broke `mopidy/audio/scan.py`. `install.sh`

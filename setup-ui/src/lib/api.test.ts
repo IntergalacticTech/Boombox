@@ -33,7 +33,7 @@ describe("parseHashToken", () => {
 });
 
 describe("SetupApi auth attachment", () => {
-  it("kiosk (no token): sends no Authorization header and no ?t= query", async () => {
+  it("kiosk (no token): sends no Authorization header", async () => {
     const fetchFn = mockFetch({ ok: true });
     const api = makeApi("", "localhost"); // on-device, no token → kiosk
     expect(api.isKiosk).toBe(true);
@@ -47,7 +47,7 @@ describe("SetupApi auth attachment", () => {
     expect(headers.Authorization).toBeUndefined();
   });
 
-  it("phone (token): attaches Bearer header AND ?t= query on every request", async () => {
+  it("phone (token): attaches the Bearer header (never a ?t= query) on every request", async () => {
     const fetchFn = mockFetch({ ok: true });
     const api = makeApi("#t=TOK42", "192.168.1.50"); // LAN client
     expect(api.isKiosk).toBe(false);
@@ -57,12 +57,12 @@ describe("SetupApi auth attachment", () => {
     await api.put("identity", { name: "X", rename_host: true });
 
     const [getUrl, getInit] = fetchFn.mock.calls[0];
-    expect(getUrl).toBe("/api/setup/status?t=TOK42");
+    expect(getUrl).toBe("/api/setup/status");
     expect((getInit.headers as Record<string, string>).Authorization)
       .toBe("Bearer TOK42");
 
     const [putUrl, putInit] = fetchFn.mock.calls[1];
-    expect(putUrl).toBe("/api/setup/identity?t=TOK42");
+    expect(putUrl).toBe("/api/setup/identity");
     expect(putInit.method).toBe("PUT");
     expect((putInit.headers as Record<string, string>).Authorization)
       .toBe("Bearer TOK42");
@@ -70,6 +70,26 @@ describe("SetupApi auth attachment", () => {
       .toBe("application/json");
     expect(JSON.parse(putInit.body as string))
       .toEqual({ name: "X", rename_host: true });
+  });
+
+  it("bodyless POSTs still send JSON (the server requires it on mutations)", async () => {
+    const fetchFn = mockFetch({ ok: true });
+    const api = makeApi("", "localhost");
+    await api.post("complete");
+    const [, init] = fetchFn.mock.calls[0];
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["Content-Type"])
+      .toBe("application/json");
+    expect(init.body).toBe("{}");
+  });
+
+  it("GETs send no body and no Content-Type", async () => {
+    const fetchFn = mockFetch({ ok: true });
+    const api = makeApi("", "localhost");
+    await api.get("status");
+    const [, init] = fetchFn.mock.calls[0];
+    expect(init.body).toBeUndefined();
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
   });
 
   it("parses a JSON body even on a 400 (validation errors carry a body)", async () => {
@@ -96,7 +116,7 @@ describe("adoptToken (typed-URL code redemption)", () => {
     await api.get("status");
 
     const [url, init] = fetchFn.mock.calls[0];
-    expect(url).toBe("/api/setup/status?t=CODE-TOK");
+    expect(url).toBe("/api/setup/status");
     expect((init.headers as Record<string, string>).Authorization)
       .toBe("Bearer CODE-TOK");
     expect(api.isKiosk).toBe(false);

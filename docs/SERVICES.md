@@ -88,8 +88,25 @@ exposes:
 | `GET/POST /api/theme` | Remote API + kiosk: match active skin palette |
 | `GET /api/usb/devices`, `POST /api/usb/copy` | UI: USB device list and pull-to-library copy |
 | `POST /api/library/scan` | UI / `boombox-remote` file API: trigger Mopidy local scan |
+| `GET /api/power` | UI + buttons: current standby state |
+| `POST /api/power/{sleep\|wake\|toggle\|off}` | UI Off tile / Settings, GPIO power button |
 
-- **Code:** [`services/boombox-state.py`](../services/boombox-state.py)
+**Standby.** `services/power.py` holds the `awake`/`asleep` state machine.
+`sleep` stops Mopidy and every MPRIS player, navigates the kiosk back to
+Home, blanks the panel (`wlr-randr --off`) and arms a poweroff; `wake`
+cancels it and relights the panel without resuming playback; `off` halts
+immediately. Every route returns the snapshot
+`{state, since, poweroff_at}`, which also rides along on `GET /api/state`
+as `power`. The snapshot is persisted to
+`$XDG_STATE_HOME/boombox/power.json` — on startup the service always comes
+up **awake** and forces the panel on if that file said asleep, so a crash
+mid-sleep can't leave a dark screen.
+
+- **Env knobs:** `BOOMBOX_SLEEP_POWEROFF_S` (default `180`) — seconds
+  between falling asleep and `systemctl poweroff`. Set `0` to sleep the
+  screen but never halt.
+- **Code:** [`services/boombox-state.py`](../services/boombox-state.py),
+  [`services/power.py`](../services/power.py)
 - **Logs:** `journalctl --user -u boombox-state -f`
 
 ### `boombox-audio` — visualizer
@@ -402,8 +419,13 @@ reference — see [ACCESS.md](./ACCESS.md).
 Pulls the user's Navidrome (Subsonic) catalog into a local SQLite cache
 (`/opt/boombox/state/library.db`), manages a USB-stick offline cache,
 and resolves playback URIs (`file://` when a track is on the cache
-drive, a direct Navidrome `/rest/stream.view?…` URL when only available
-online).
+drive, a credential-free `http://127.0.0.1:6687/api/library/stream/<id>`
+URL on its own stream proxy when only available online — the proxy adds
+the Subsonic token+salt server-side and relays Navidrome's
+`/rest/stream.view`). Streamed playback therefore depends on this
+service: restarting it cuts a streamed track (in-flight relays are
+aborted on shutdown so the stop is fast), and `boombox-rfid` /
+`boombox-resume` are ordered after it.
 
 The kiosk's **Settings → Home Library** + **Settings → Offline Cache**
 panels are the user surface; the touchscreen also gets a sync-status
@@ -413,12 +435,13 @@ buttons and offline-miss CTAs.
 
 | Endpoint | Used by |
 |----------|---------|
-| `GET  /api/library/health` | UI: sync indicator (`navidrome_reachable`, `cache_present`, `last_sync_ts`, `syncing`) |
+| `GET  /api/library/health` | UI: sync indicator (`navidrome_reachable`, `cache_present`, `last_sync_ts`, `syncing`, `prune_deferred` — a large album removal the prune guard is holding off, or `null`) |
 | `GET  /api/library/source` / `PUT` / `POST /source/test` | Settings → Home Library: source config + Test/Save |
 | `GET  /api/library/browse?type=artists\|albums\|playlists` | LibraryDrawer Home Library root; served from precomputed ETag-tagged JSON snapshots when present, falls back to SQLite |
 | `GET  /api/library/search?q=` | Search bar; FTS5-backed |
 | `POST /api/library/pin` | `{kind, id, mode: pin\|unpin, source?: user\|favorite}` — schedules downloads and is the auto-coupling target for the favorite heart |
 | `POST /api/library/sync/run` | Settings → "Sync now" |
+| `POST /api/library/sync/prune` | Admin/curl: override the prune guard once — the next complete sync reaps every album Navidrome no longer lists (otherwise a >10% & >50-album removal is reaped only after 3 consecutive syncs over ≥30 min see the same missing set) |
 | `GET  /api/library/track/{id}/playback` | Resolver: decide cache vs stream vs offline-miss for a given Subsonic track id |
 | `GET  /api/library/cache/stats` | CachePanel: stacked-bar of reserved / pinned / streamed / free |
 | `GET  /api/library/cache/candidates` | App polling: surfaces newly-plugged USB drives (writable only) for the adopt overlay |

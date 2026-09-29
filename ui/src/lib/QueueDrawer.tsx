@@ -5,7 +5,8 @@
 // Tap × on a row → remove from queue (current track stays playing).
 
 import { useEffect, useRef, useState } from "react";
-import { getQueue, getCurrentTlid, playTlid, removeTlid, type TlTrack } from "./library";
+import { friendlyTrackTitle, getQueue, getCurrentTlid, playTlid, removeTlid, type TlTrack } from "./library";
+import { DrawerHomeBtn } from "./ChromeButtons";
 
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -18,9 +19,9 @@ function joinArtists(t: TlTrack): string {
   return (t.track.artists ?? []).map(a => a?.name).filter(Boolean).join(", ");
 }
 
-type Props = { onClose: () => void };
+type Props = { onClose: () => void; onHome?: () => void };
 
-export function QueueDrawer({ onClose }: Props) {
+export function QueueDrawer({ onClose, onHome }: Props) {
   const [items, setItems] = useState<TlTrack[]>([]);
   const [currentTlid, setCurrentTlid] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -119,6 +120,7 @@ export function QueueDrawer({ onClose }: Props) {
               {items.length} track{items.length === 1 ? "" : "s"}
             </div>
           </div>
+          <DrawerHomeBtn onHome={onHome} />
         </div>
 
         <div style={{flex: 1, overflowY: "auto", overflowX: "hidden"}}>
@@ -167,7 +169,7 @@ export function QueueDrawer({ onClose }: Props) {
                     <div style={{
                       fontSize: 15, fontWeight: 600,
                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                    }}>{t.track.name || t.track.uri}</div>
+                    }}>{friendlyTrackTitle(t.track.name, t.track.uri)}</div>
                     <div style={{
                       fontSize: 12, color: "rgba(255,255,255,0.55)",
                       fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.04em",

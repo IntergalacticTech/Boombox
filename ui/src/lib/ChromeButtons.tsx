@@ -1,9 +1,9 @@
 // ChromeButtons — shared building block each skin renders inside its own
-// chrome (top bar, sidebar, etc.) to expose source / queue / skin pickers.
+// chrome (top bar, sidebar, etc.) to expose home / queue / skin pickers.
 //
 // We provide:
 //   - <ChromeButtons />   ready-made strip with sensible defaults
-//   - <ChromeSourceBtn /> / <ChromeQueueBtn /> / <ChromeSkinBtn />
+//   - <ChromeHomeBtn /> / <ChromeQueueBtn /> / <ChromeSkinBtn />
 //                         individual buttons skins can lay out themselves
 //
 // The buttons live INSIDE the skin's design coordinate space (1280×800), so
@@ -60,27 +60,53 @@ function btnStyle(theme: Required<ChromeTheme>): CSSProperties {
   };
 }
 
-export function ChromeSourceBtn({
+/** Home button. Reads "⌂ HOME" so it is unmistakably a way out, not a status
+ * pill; the live-source dot + label ride along only while an external input
+ * (AirPlay / Spotify / Bluetooth) is actually producing audio, because that
+ * slot is the only place every skin's chrome has for the source identity. */
+export function ChromeHomeBtn({
   chrome, theme: t = {},
 }: {
   chrome: ChromeApi;
   theme?: ChromeTheme;
 }) {
   const theme = { ...DEFAULT_THEME, ...t } as Required<ChromeTheme>;
+  const mono = { fontFamily: theme.mono, fontSize: 12, letterSpacing: "0.16em" } as const;
   return (
-    <button onClick={chrome.onOpenSource} style={btnStyle(theme)}>
-      <span style={{
-        width: 12, height: 12, borderRadius: 999,
-        background: chrome.sourceColor,
-        boxShadow: chrome.sourceLive ? "0 0 8px currentColor" : "none",
-        flexShrink: 0,
-      }}/>
-      <span style={{
-        fontFamily: theme.mono,
-        fontSize: 12,
-        letterSpacing: "0.16em",
-      }}>{chrome.sourceLabel}</span>
+    <button onClick={chrome.onGoHome} aria-label="Home" style={btnStyle(theme)}>
+      <span style={{fontSize: 18, lineHeight: 1, flexShrink: 0}} aria-hidden="true">⌂</span>
+      <span style={mono}>HOME</span>
+      {chrome.sourceLive && (
+        <>
+          <span style={{
+            width: 12, height: 12, borderRadius: 999,
+            background: chrome.sourceColor,
+            boxShadow: "0 0 8px currentColor",
+            flexShrink: 0,
+          }}/>
+          <span style={mono}>{chrome.sourceLabel}</span>
+        </>
+      )}
     </button>
+  );
+}
+
+/** Home link for the drawers' headers. The drawers aren't skinned — they all
+ * use the same dark panel — so this one is styled to match their Close button
+ * rather than taking a ChromeTheme. */
+export function DrawerHomeBtn({ onHome }: { onHome?: () => void }) {
+  if (!onHome) return null;
+  return (
+    <button onClick={onHome} aria-label="Home" style={{
+      padding: "10px 16px",
+      background: "rgba(255,255,255,0.08)",
+      color: "#fff",
+      border: "1px solid rgba(255,255,255,0.15)",
+      borderRadius: 999,
+      fontSize: 14, cursor: "pointer",
+      minWidth: 64,
+      flexShrink: 0,
+    }}>⌂ Home</button>
   );
 }
 
@@ -141,7 +167,7 @@ export function ChromeSettingsBtn({
   );
 }
 
-/** Default 3-button strip with source/queue/skin buttons in a flex row.
+/** Default 3-button strip with home/queue/skin buttons in a flex row.
  * Skins are free to compose them individually for tighter integration. */
 export function ChromeButtons({
   chrome, theme: t = {}, children, align = "spread",
@@ -159,7 +185,7 @@ export function ChromeButtons({
     : "space-between";
   return (
     <div style={{display: "flex", alignItems: "center", gap: 10, justifyContent: justify, width: "100%"}}>
-      <ChromeSourceBtn chrome={chrome} theme={t}/>
+      <ChromeHomeBtn chrome={chrome} theme={t}/>
       <SyncIndicator />
       {children}
       <div style={{display: "flex", gap: 10}}>

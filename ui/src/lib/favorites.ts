@@ -5,7 +5,8 @@
 // since toggling publishes to all hooks.
 //
 // Phase 2: when the toggled URI is a Home Library track (subsonic:track:<id>
-// canonical form, or a file:// URI we can map back), we ALSO call the
+// canonical form, home:track:<id>, the library stream-proxy URL, or a
+// file:// URI we can map back), we ALSO call the
 // libraryApi pin/unpin endpoints with source='favorite' so the heart and
 // the offline pin stay in sync.
 
@@ -39,6 +40,14 @@ function publish() {
 export function subsonicIdFromUri(uri: string | null | undefined): string | null {
   if (!uri) return null;
   if (uri.startsWith("subsonic:track:")) return uri.slice("subsonic:track:".length);
+  if (uri.startsWith("home:track:")) return uri.slice("home:track:".length) || null;
+  // boombox-library stream proxy — what Mopidy plays for uncached Home
+  // Library tracks: http://127.0.0.1:6687/api/library/stream/<id>[?…], or
+  // the nginx-relative /api/library/stream/<id>.
+  const m = /^(?:https?:\/\/[^/]+)?\/api\/library\/stream\/([^/?#]+)/i.exec(uri);
+  if (m) {
+    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+  }
   // file:///cache-mount/audio/<id>.<suffix> — Phase 1 downloader names files
   // <track_id>.<suffix>, so basename-minus-suffix recovers the id.
   if (uri.startsWith("file://")) {

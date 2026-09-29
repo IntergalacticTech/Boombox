@@ -103,11 +103,11 @@ sudo apt install -y \
   python3-dbus python3-gi python3-gi-cairo gir1.2-glib-2.0 \
   mopidy mopidy-mpd mopidy-local mpc \
   nginx apache2-utils samba \
-  chromium unclutter grim wvkbd \
+  chromium unclutter grim wvkbd wlr-randr \
   playerctl \
-  pipewire pipewire-pulse wireplumber pulseaudio-utils \
+  pipewire pipewire-pulse wireplumber pulseaudio-utils gstreamer1.0-pulseaudio \
   shairport-sync \
-  bluez bluez-tools \
+  bluez bluez-tools bluez-firmware \
   alsa-utils \
   flac \
   nodejs npm
@@ -174,7 +174,10 @@ fi
 # keep whatever identity their paired remotes already know.
 if [ ! -f /etc/boombox/boombox.env ]; then
     sudo mkdir -p /etc/boombox
-    printf 'BOOMBOX_ID=boombox-%s\nBOOMBOX_NAME=%s\n' "$(hostname)" "$(hostname)" \
+    printf 'BOOMBOX_ID=boombox-%s\nBOOMBOX_NAME=%s\n%s\n%s\n' \
+      "$(hostname)" "$(hostname)" \
+      '# Seconds asleep (screen dark, audio stopped) before the Pi halts. 0 = never halt.' \
+      '#BOOMBOX_SLEEP_POWEROFF_S=180' \
       | sudo tee /etc/boombox/boombox.env >/dev/null
     sudo chmod 644 /etc/boombox/boombox.env
 fi
@@ -272,6 +275,29 @@ fi
 # ---------------------------------------------------------------------------
 log "installing /etc/asound.conf"
 sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/asound.conf" /etc/asound.conf
+
+# Mopidy (system user) → PipeWire (boombox user) over loopback pulse TCP.
+log "installing pipewire-pulse loopback listener for Mopidy"
+sudo install -d -m 0755 /etc/pipewire/pipewire-pulse.conf.d
+sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/pipewire-pulse-boombox.conf" \
+  /etc/pipewire/pipewire-pulse.conf.d/10-boombox-mopidy-tcp.conf
+# Picked up at the next session start if there's no user session yet.
+systemctl --user restart pipewire-pulse 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 5.5. logind: ignore the PMIC power key
+# ---------------------------------------------------------------------------
+# The power button is also wired to the Pi 5 J2 header so it can wake a
+# halted unit; without this drop-in logind would poweroff on every press
+# while running. logind only reads its config at start, and restarting it
+# under a live graphical session is not worth the risk — the drop-in takes
+# effect at the next boot, which install.sh already asks for.
+log "installing logind power-key drop-in"
+sudo mkdir -p /etc/systemd/logind.conf.d
+if ! sudo cmp -s "$ACTIVE_SCRIPT_DIR/config/logind-boombox.conf" /etc/systemd/logind.conf.d/boombox.conf; then
+  sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/logind-boombox.conf" /etc/systemd/logind.conf.d/boombox.conf
+  warn "logind power-key drop-in installed; takes effect after reboot"
+fi
 
 # ---------------------------------------------------------------------------
 # 6. Music dir + Mopidy config
@@ -375,10 +401,11 @@ sudo BOOMBOX_VIDEO_DIR="$VIDEO_DIR" python3 \
 
 log "installing /etc/mopidy/mopidy.conf"
 sudo mkdir -p /etc/mopidy
-# Install with 0600 + boombox-user ownership so boombox-library can
-# rewrite the [subsonic] block at runtime when the user saves Settings.
-# Mopidy reads the file before dropping privileges so user ownership is fine.
-sudo install -m 0600 -o "$BOOMBOX_USER" -g "$BOOMBOX_USER" \
+# Boombox-user ownership so boombox-library can strip a stale [subsonic]
+# block on Settings saves. 0644, not 0600: Mopidy runs as the `mopidy`
+# user (User=mopidy in its unit) and must read this file — at 0600 it
+# silently ignored it and ran on package defaults. It holds no secrets.
+sudo install -m 0644 -o "$BOOMBOX_USER" -g "$BOOMBOX_USER" \
     "$ACTIVE_SCRIPT_DIR/config/mopidy.conf" /etc/mopidy/mopidy.conf
 sudo sed -i "s|__MUSIC_DIR__|$MUSIC_DIR|g" /etc/mopidy/mopidy.conf
 
@@ -527,8 +554,12 @@ if [[ ! -f "$SETUP_MARKER" ]] && [[ -f /etc/boombox/library.yml ]] \
   install -m 0644 /dev/null "$SETUP_MARKER" && echo 1 > "$SETUP_MARKER"
 fi
 
-# System-side template + udev rule for USB auto-mount.
-log "installing USB auto-mount (system unit + udev rule)"
+# System-side template + udev rule for USB auto-mount. The unit runs as root,
+# so it executes a root-owned copy of the script (same pattern as
+# boombox-setup-apply above) — the release tree is boombox-user-writable.
+log "installing USB auto-mount (root-owned script + system unit + udev rule)"
+sudo install -m 0755 -o root -g root "$ACTIVE_REPO/services/boombox-usb-mount.sh" \
+  /usr/local/sbin/boombox-usb-mount
 sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/systemd/system/boombox-usb-mount@.service" \
   /etc/systemd/system/boombox-usb-mount@.service
 sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/udev/99-boombox-usb.rules" \

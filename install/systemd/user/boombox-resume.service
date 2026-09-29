@@ -1,5 +1,11 @@
 [Unit]
 Description=Boombox auto-resume (Mopidy snapshot + restore)
+# Snapshots of streamed Home Library tracks hold boombox-library's local
+# proxy URLs (127.0.0.1:6687). Deliberately NOT After=boombox-library:
+# that unit is After=default.target while this one is pulled in (and so
+# ordered before) by default.target — the edge makes an ordering cycle
+# and systemd drops boombox-resume from the boot transaction. Instead
+# boombox-resume.py waits up to 60s for the proxy port itself.
 After=network-online.target
 Wants=network-online.target
 
