@@ -54,8 +54,16 @@ async def _summary(req: web.Request) -> web.Response:
                         _state("problem", "music server not reachable"))
     except Exception:
         out["music"] = _state("problem", "library service not answering")
-    out["video"] = await _video_state(ctx)
-    out["streaming"] = await _streaming_state(ctx)
+    try:
+        out["video"] = await _video_state(ctx)
+    except Exception:
+        log.exception("accounts summary: video status failed")
+        out["video"] = _state("problem", "video settings unreadable")
+    try:
+        out["streaming"] = await _streaming_state(ctx)
+    except Exception:
+        log.exception("accounts summary: streaming status failed")
+        out["streaming"] = _state("problem", "streaming status unavailable")
     out["web"] = _state("ok")
     return web.json_response(out)
 
@@ -69,9 +77,12 @@ async def _video_state(ctx: Any) -> dict[str, str]:
 
 async def _streaming_state(ctx: Any) -> dict[str, str]:
     r = await ctx.apply({"action": "streaming-status"})
-    if not r.get("ok"):
-        return _state("problem", r.get("error", "status unavailable"))
-    installed = [k for k in ("airplay", "spotify") if r.get(k, {}).get("installed")]
+    if not isinstance(r, dict) or not r.get("ok"):
+        err = r.get("error") if isinstance(r, dict) else None
+        return _state("problem", err if isinstance(err, str) and err else
+                      "status unavailable")
+    installed = [k for k in ("airplay", "spotify")
+                 if isinstance(r.get(k), dict) and r[k].get("installed")]
     return _state("ok" if installed else "absent", ", ".join(installed))
 
 

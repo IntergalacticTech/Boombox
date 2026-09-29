@@ -105,3 +105,38 @@ async def test_summary_shape(client):
     body = await r.json()
     assert set(body) == {"music", "video", "streaming", "web"}
     assert body["music"]["state"] == "ok"
+
+
+async def test_summary_streaming_apply_raises_degrades(client, ctx):
+    async def boom(payload):
+        raise RuntimeError("helper socket gone")
+    ctx.apply = boom
+    r = await client.get("/api/accounts/summary", headers=LAN)
+    assert r.status == 200
+    body = await r.json()
+    assert body["streaming"]["state"] == "problem"
+    assert "socket" not in body["streaming"]["detail"]
+    assert body["music"]["state"] == "ok"
+    assert body["video"]["state"] == "ok"
+    assert body["web"]["state"] == "ok"
+
+
+async def test_summary_video_env_raises_degrades(client, ctx):
+    def boom():
+        raise OSError("env unreadable")
+    ctx.jellyfin_env = boom
+    r = await client.get("/api/accounts/summary", headers=LAN)
+    assert r.status == 200
+    body = await r.json()
+    assert body["video"]["state"] == "problem"
+    assert body["music"]["state"] == "ok"
+    assert body["streaming"]["state"] in {"ok", "absent"}
+
+
+async def test_summary_streaming_non_dict_subresult(client, ctx):
+    ctx.apply_results["streaming-status"] = {
+        "ok": True, "airplay": None, "spotify": {"installed": True}}
+    r = await client.get("/api/accounts/summary", headers=LAN)
+    assert r.status == 200
+    body = await r.json()
+    assert body["streaming"] == {"state": "ok", "detail": "spotify"}
