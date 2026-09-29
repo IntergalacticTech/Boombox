@@ -23,7 +23,7 @@ from boombox_rfid.api import build_app
 from boombox_rfid.bindings import get_binding, record_tap
 from boombox_rfid.config import LIBRARY_DB_PATH, load_config
 from boombox_rfid.db import connect, migrate
-from boombox_rfid.mopidy_client import MopidyClient
+from boombox_rfid.mopidy_client import MopidyClient, PendingTail
 from boombox_rfid.playback import expand_to_track_ids, resolve_uris
 from boombox_rfid.reader import auto_detect_device, read_uids
 
@@ -47,6 +47,9 @@ class ServiceContext:
         self.last_unbound_ts: float = 0.0
         self._last_uid_seen: str = ""
         self._last_uid_at: float = 0.0
+        # Background append of a long list's tail (see mopidy_client). One
+        # at a time: a new tap cancels the previous card's tail.
+        self._tail_task: asyncio.Task | None = None
 
     def device_path(self) -> str:
         return self._device_path
@@ -120,13 +123,36 @@ class ServiceContext:
         if not uris:
             log.warning("no playable URIs for binding %s (offline?)", uid)
             return
+        # Whatever the previous card was still queueing no longer applies.
+        self._cancel_tail()
         try:
             async with MopidyClient(self.cfg.mopidy_rpc) as m:
-                await m.play_uris(uris)
-            log.info("playing %d tracks for %s (binding %s/%s)",
-                     len(uris), uid, binding.kind.value, binding.target_id)
+                tail = await m.play_uris(uris)
+            log.info("playing %d tracks for %s (binding %s/%s)%s",
+                     len(uris), uid, binding.kind.value, binding.target_id,
+                     f"; queueing {len(tail.uris)} more in background" if tail else "")
         except Exception as e:
             log.exception("playback failed for uid %s: %s", uid, e)
+            return
+        if tail:
+            self._tail_task = asyncio.create_task(self._append_tail(uid, tail))
+
+    def _cancel_tail(self) -> None:
+        if self._tail_task and not self._tail_task.done():
+            self._tail_task.cancel()
+        self._tail_task = None
+
+    async def _append_tail(self, uid: str, tail: PendingTail) -> None:
+        """Queue the rest of a long card without blocking the tap handler."""
+        try:
+            async with MopidyClient(self.cfg.mopidy_rpc) as m:
+                n = await m.append_tail(tail)
+            log.info("uid %s: queued %d/%d remaining tracks", uid, n, len(tail.uris))
+        except asyncio.CancelledError:
+            log.info("uid %s: background queueing superseded", uid)
+            raise
+        except Exception as e:
+            log.warning("uid %s: background queueing failed: %s", uid, e)
 
     async def expire_recent(self) -> None:
         """Drop last_unbound_uid once its TTL is up so the UI overlay
@@ -159,6 +185,7 @@ async def amain() -> None:
 
     reader_task.cancel()
     expire_task.cancel()
+    ctx._cancel_tail()
     await runner.cleanup()
 
 

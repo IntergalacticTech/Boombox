@@ -243,8 +243,35 @@ Every Jellyfin address in the boombox now resolves through
 `BOOMBOX_JELLYFIN_BASE` — the transport proxy, the **WATCH** button's kiosk
 navigation, and both library-refresh triggers (post-upload and USB-mount). Set
 the one env var and the whole device — touchscreen included — points at your
-server, local or remote. (Both `boombox-remote` and `boombox-buttons` load
-`/etc/boombox/jellyfin.env`, so the value reaches every consumer.)
+server, local or remote. (`boombox-remote`, `boombox-buttons` and
+`boombox-kiosk-guard` load `/etc/boombox/jellyfin.env`, and anything that
+doesn't falls back to reading the file, so the value reaches every consumer.)
+
+3. **Pin the kiosk's Jellyfin session** so the phone remote's video transport
+   (play/pause/seek/volume) controls *this* boombox and not another TV on the
+   same server. A remote server can't recognise the kiosk by a loopback
+   address, so without a pin the boombox refuses to control any session (and
+   logs a one-time hint). Add to `/etc/boombox/jellyfin.env`, then
+   `systemctl --user restart boombox-remote`:
+
+   ```ini
+   # Exact match, preferred. Find it in Jellyfin's Dashboard → Devices (open
+   # the "Chrome"/"Chromium" entry last used by the kiosk) or GET /Sessions.
+   BOOMBOX_JELLYFIN_DEVICE_ID=5d1c…
+   # Alternative/fallback: exact DeviceName (most recent wins if several).
+   BOOMBOX_JELLYFIN_DEVICE_NAME=Chromium
+   ```
+
+   An on-device or LAN server (loopback / private IP / `.local`) keeps the old
+   behaviour without a pin: the kiosk's loopback session, else the most
+   recently active one. The DeviceId lives in the kiosk browser's storage, so
+   re-pin if that profile is ever wiped.
+
+The kiosk guard (which keeps the touchscreen on the local UI) allows the
+Jellyfin base URL's exact hostname, so **WATCH** can open a remote server. If
+the server sits behind a login on another host (e.g. Cloudflare Access), list
+those exact hostnames, comma-separated, in `BOOMBOX_KIOSK_ALLOWED_HOSTS` via
+`systemctl --user edit boombox-kiosk-guard` (`Environment=BOOMBOX_KIOSK_ALLOWED_HOSTS=team.cloudflareaccess.com`).
 
 ### Getting video onto the system
 

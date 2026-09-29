@@ -231,10 +231,22 @@ ENCODER_DEBOUNCE_MS = 1
 TICK_INTERVAL_S = 0.05  # 20Hz; resolves long-press windows precisely enough
 
 
+GPIO_RETRY_S = 60.0  # slow re-probe after a failed GPIO acquisition
+
+
+class GpioUnavailable(RuntimeError):
+    """The GPIO chip/lines couldn't be (or stopped being) driven."""
+
+
 async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event,
-                    learn_state: dict | None = None) -> None:
+                    learn_state: dict | None = None,
+                    gpio_status: dict | None = None) -> None:
     """Single-pass GPIO loop. Re-call to rebuild after config hot-reload.
-    Returns when `stop` is set.
+    Returns when `stop` is set; raises when GPIO can't be driven (no gpiod,
+    no chip, line busy, reader thread died) — gpio_supervisor handles that.
+
+    `gpio_status` (optional, shared with the HTTP API) gets
+    ``available=True`` once the lines are actually requested.
 
     `learn_state` is a shared dict (mutated by the HTTP API's /learn handler):
     when in learn mode it holds {"action": "<name>", "until": <t_ms>,
@@ -243,17 +255,20 @@ async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event,
     """
     from datetime import timedelta
 
-    import gpiod
-    from gpiod.line import Bias, Direction, Edge
-
     if learn_state is None:
         learn_state = {"action": None, "until": 0, "result": None}
 
     pins = enabled_pins(cfg)
     if not pins:
+        # Nothing wired → don't even need gpiod (a box with no buttons).
         log.info("no GPIO pins configured; idling")
+        if gpio_status is not None:
+            gpio_status.update(available=None, error=None)
         await stop.wait()
         return
+
+    import gpiod
+    from gpiod.line import Bias, Direction, Edge
 
     long_ms = int(cfg.get("long_press_ms", 600))
     power_hold_ms = int(cfg.get("power_hold_ms", 2000))
@@ -292,6 +307,9 @@ async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event,
     with gpiod.request_lines(GPIO_CHIP, consumer="boombox-buttons", config=line_config) as req:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
+        reader_dead = asyncio.Event()
+        if gpio_status is not None:
+            gpio_status.update(available=True, error=None)
 
         def reader():
             try:
@@ -300,14 +318,16 @@ async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event,
                         for ev in req.read_edge_events():
                             loop.call_soon_threadsafe(queue.put_nowait, ev)
             except Exception:
-                # A dead reader is fatal — surface it loudly and tear down the loop so
-                # systemd restarts us rather than silently going dead.
-                log.exception("gpiod reader thread crashed; signalling stop")
-                loop.call_soon_threadsafe(stop.set)
+                if stop.is_set():
+                    return  # lines released under us during a rebuild; benign
+                # A dead reader ends this pass with GpioUnavailable so the
+                # supervisor re-acquires the lines (the HTTP API stays up).
+                log.exception("gpiod reader thread crashed")
+                loop.call_soon_threadsafe(reader_dead.set)
 
         # Fire-and-forget: the blocking gpiod reader runs in the default
-        # executor for the life of the service; on a crash it sets `stop` so
-        # systemd restarts us. We deliberately don't hold the future.
+        # executor; it exits within 0.5s of `stop`, or flags `reader_dead`.
+        # We deliberately don't hold the future.
         loop.run_in_executor(None, reader)
 
         async def tick():
@@ -322,6 +342,8 @@ async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event,
 
         try:
             while not stop.is_set():
+                if reader_dead.is_set():
+                    raise GpioUnavailable("gpiod reader thread crashed")
                 try:
                     ev = await asyncio.wait_for(queue.get(), timeout=0.5)
                 except asyncio.TimeoutError:
@@ -350,6 +372,46 @@ async def gpio_loop(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event,
                         await dispatcher.dispatch(action, evt[0])
         finally:
             ticker.cancel()
+
+
+async def gpio_supervisor(cfg: dict, dispatcher: Dispatcher, stop: asyncio.Event,
+                          learn_state: dict | None = None,
+                          gpio_status: dict | None = None,
+                          retry_s: float = GPIO_RETRY_S) -> None:
+    """Run gpio_loop until `stop`, surviving GPIO being absent or failing.
+
+    Buttons are optional hardware: a box with no gpiod, no /dev/gpiochip0, a
+    line held by another process, or no buttons soldered at all must still
+    serve the Settings/learn/sleep HTTP API. So a failure is logged at
+    WARNING once (repeats go to DEBUG until GPIO recovers), reported through
+    `gpio_status`, and retried every `retry_s` — never propagated.
+    """
+    status = gpio_status if gpio_status is not None else {}
+    warned = False
+    while not stop.is_set():
+        try:
+            await gpio_loop(cfg, dispatcher, stop, learn_state=learn_state,
+                            gpio_status=status)
+            if stop.is_set():
+                return
+            raise GpioUnavailable("gpio loop exited unexpectedly")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # ImportError, OSError, GpioUnavailable, ...
+            if status.get("available"):
+                warned = False  # it was working; a fresh failure deserves a WARNING
+            status.update(available=False, error=f"{type(e).__name__}: {e}")
+            if not warned:
+                log.warning("GPIO unavailable (%s: %s); buttons disabled, HTTP API "
+                            "stays up — retrying every %.0fs",
+                            type(e).__name__, e, retry_s)
+                warned = True
+            else:
+                log.debug("GPIO still unavailable: %s", e)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=retry_s)
+        except asyncio.TimeoutError:
+            pass
 
 
 # ---------- Main ----------------------------------------------------------
@@ -408,8 +470,11 @@ async def main() -> None:
 
         dispatcher_ref = [dispatcher]
         learn_state: dict = {"action": None, "until": 0, "result": None}
+        # available: None = not attempted / no pins wired, True = lines
+        # requested, False = GPIO absent or failing (see `error`).
+        gpio_status: dict = {"available": None, "error": None}
         api_runner = await _http_api(cfg_ref, dispatcher_ref, learn_state,
-                                      sleep_t)
+                                      sleep_t, gpio_status)
 
         # Wrap the loop so we can rebuild it on config change.
         from watchdog.events import FileSystemEventHandler
@@ -445,36 +510,50 @@ async def main() -> None:
 
         import signal
         loop = asyncio.get_running_loop()
+        # One shutdown event for the whole service. The per-pass `stop` below
+        # only tears down the current GPIO pass (config reload or shutdown),
+        # so a GPIO failure can never be mistaken for SIGTERM and exit(0) —
+        # which Restart=on-failure would never restart, taking the HTTP API
+        # down with it.
+        shutdown = asyncio.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, shutdown.set)
         try:
-            while True:
+            while not shutdown.is_set():
                 stop = asyncio.Event()
-                # Install signal handlers per loop iteration so SIGTERM still wins.
-                for sig in (signal.SIGTERM, signal.SIGINT):
-                    loop.add_signal_handler(sig, stop.set)
-                loop_task = asyncio.create_task(
-                    gpio_loop(cfg_ref[0], dispatcher, stop, learn_state=learn_state)
-                )
+                loop_task = asyncio.create_task(gpio_supervisor(
+                    cfg_ref[0], dispatcher, stop, learn_state=learn_state,
+                    gpio_status=gpio_status))
                 wait_reload = asyncio.create_task(reload_event.wait())
+                wait_shutdown = asyncio.create_task(shutdown.wait())
                 done, _ = await asyncio.wait(
-                    {loop_task, wait_reload}, return_when=asyncio.FIRST_COMPLETED
+                    {loop_task, wait_reload, wait_shutdown},
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
+                stop.set()
+                for t in (wait_reload, wait_shutdown):
+                    t.cancel()
+                try:
+                    await loop_task
+                except Exception:
+                    # gpio_supervisor swallows GPIO errors; anything else is a
+                    # bug — log it but keep the HTTP API alive.
+                    log.exception("gpio supervisor crashed; restarting it")
+                if shutdown.is_set():
+                    break
                 if wait_reload in done:
                     log.info("config changed; rebuilding gpio loop")
                     reload_event.clear()
-                    stop.set()
-                    await loop_task
                     cfg = load_config()
                     cfg_ref[0] = cfg
                     dispatcher.disabled = {a for a, e in cfg["pins"].items() if not e.get("enabled")}
                     continue
-                # Otherwise: the gpio_loop returned (probably SIGTERM-driven stop).
-                # Cancel the dangling reload waiter before exiting.
-                wait_reload.cancel()
+                # Supervisor ended on its own (only after a crash, logged
+                # above): back off, then run a fresh pass.
                 try:
-                    await wait_reload
-                except asyncio.CancelledError:
+                    await asyncio.wait_for(shutdown.wait(), timeout=GPIO_RETRY_S)
+                except asyncio.TimeoutError:
                     pass
-                break
         finally:
             observer.stop()
             observer.join()
@@ -493,21 +572,81 @@ from aiohttp import web
 BUTTONS_API_PORT = 6684
 
 
-async def _http_api(cfg_ref: list, dispatcher_ref: list, learn_state: dict,
-                    sleep_t: "SleepTimer") -> web.AppRunner:
+def write_config_atomic(path: Path, cfg: dict) -> None:
+    """Write buttons.json via tmp + fsync + os.replace.
+
+    A crash or power cut mid-write must never leave a truncated file (which
+    load_config would then silently replace with defaults). The rename also
+    surfaces to the watchdog observer as a MOVED-onto-config event, which
+    triggers the hot reload exactly once with the complete contents.
+    """
+    import tempfile
+    data = json.dumps(cfg, indent=2)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp",
+                               dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)  # mkstemp is 0600; the file is world-readable config
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        # Persist the rename itself (directory entry) across power loss.
+        dfd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
+def build_api_app(cfg_ref: list, dispatcher_ref: list, learn_state: dict,
+                  sleep_t: "SleepTimer",
+                  gpio_status: dict | None = None) -> web.Application:
     """cfg_ref and dispatcher_ref are single-element lists so the handlers
     can mutate them when the config hot-reloads.
 
     learn_state is a dict shared with the GPIO loop; when in learn mode it
     is {"action": "<name>", "until": <t_ms>, "result": None|<pin>}.
+
+    gpio_status is shared with gpio_supervisor ({"available", "error"}) and
+    served read-only at GET /status — kept out of /config so the Settings
+    panel's read-modify-write of /config never persists it.
     """
+    status_ref = gpio_status if gpio_status is not None else {"available": None, "error": None}
+
     async def get_config(_req):
         return web.json_response(cfg_ref[0])
 
     async def post_config(req):
-        body = await req.json()
-        CONFIG_PATH.write_text(json.dumps(body, indent=2))
+        try:
+            body = await req.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False, "error": "config root must be an object"},
+                                     status=400)
+        try:
+            write_config_atomic(CONFIG_PATH, body)
+        except OSError as e:
+            log.warning("could not write %s: %s", CONFIG_PATH, e)
+            return web.json_response({"ok": False, "error": "write failed"}, status=500)
         return web.json_response({"ok": True})
+
+    async def get_status(_req):
+        return web.json_response({
+            "gpio_available": status_ref.get("available"),
+            "gpio_error": status_ref.get("error"),
+            "pins": len(enabled_pins(cfg_ref[0])),
+        })
 
     async def post_learn(req):
         body = await req.json()
@@ -556,11 +695,19 @@ async def _http_api(cfg_ref: list, dispatcher_ref: list, learn_state: dict,
     app = web.Application()
     app.router.add_get("/config", get_config)
     app.router.add_post("/config", post_config)
+    app.router.add_get("/status", get_status)
     app.router.add_post("/learn", post_learn)
     app.router.add_post("/test", post_test)
     app.router.add_get("/sleep", get_sleep)
     app.router.add_post("/sleep/press", post_sleep_press)
     app.router.add_post("/sleep/cancel", post_sleep_cancel)
+    return app
+
+
+async def _http_api(cfg_ref: list, dispatcher_ref: list, learn_state: dict,
+                    sleep_t: "SleepTimer",
+                    gpio_status: dict | None = None) -> web.AppRunner:
+    app = build_api_app(cfg_ref, dispatcher_ref, learn_state, sleep_t, gpio_status)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", BUTTONS_API_PORT)
