@@ -85,8 +85,12 @@ class MopidyClient:
         self._id += 1
         body = {"jsonrpc": "2.0", "id": self._id, "method": method,
                 "params": params or {}}
-        kw = {"timeout": aiohttp.ClientTimeout(total=timeout)} if timeout else {}
-        async with self._session.post(self.url, json=body, **kw) as r:
+        # Omit `timeout` entirely (rather than pass None) so the session's
+        # default applies when no per-call override is given.
+        req = (self._session.post(self.url, json=body,
+                                  timeout=aiohttp.ClientTimeout(total=timeout))
+               if timeout else self._session.post(self.url, json=body))
+        async with req as r:
             data = await r.json()
         if "error" in data:
             raise RuntimeError(f"mopidy {method}: {data['error']}")
