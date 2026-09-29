@@ -20,7 +20,10 @@ else's TV. Selection (first hit wins, among sessions that are playing):
 
   1. BOOMBOX_JELLYFIN_DEVICE_ID   — exact DeviceId (precise; see HOME-SERVERS.md)
   2. BOOMBOX_JELLYFIN_DEVICE_NAME — exact DeviceName (most recent if several)
-  3. a loopback RemoteEndPoint    — the kiosk against an on-device server
+     If either is set and nothing matched, stop here: no session.
+  3. a loopback RemoteEndPoint    — ONLY when the server itself is on
+     loopback (the kiosk against an on-device server). A remote server
+     behind a same-host proxy/tunnel sees every client as 127.0.0.1.
   4. the most recently active session — ONLY when the server itself is on
      loopback/LAN and neither env var is set (the legacy single-device case).
 
@@ -61,6 +64,24 @@ def _is_loopback_endpoint(endpoint: object) -> bool:
     return ep.startswith("127.") or ep in ("::1", "localhost")
 
 
+def _base_host(base: str) -> str:
+    try:
+        return (urllib.parse.urlparse(base).hostname or "").rstrip(".")
+    except ValueError:
+        return ""
+
+
+def server_is_loopback(base: str) -> bool:
+    """True when the Jellyfin base URL points at this device itself."""
+    host = _base_host(base)
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def server_is_local(base: str) -> bool:
     """True when the Jellyfin base URL points at loopback or the home LAN.
 
@@ -68,20 +89,20 @@ def server_is_local(base: str) -> bool:
     the kiosk — on an internet-facing server it is just as likely to be a TV
     in another room (or another house).
     """
-    try:
-        host = (urllib.parse.urlparse(base).hostname or "").rstrip(".")
-    except ValueError:
-        return False
+    host = _base_host(base)
     if not host:
         return False
-    if host == "localhost" or host.endswith(_LAN_SUFFIXES) or "." not in host:
-        # Single-label names ("nas", "jellyfin") only resolve on the LAN.
-        return True
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        return False
-    return ip.is_loopback or ip.is_private or ip.is_link_local
+        pass
+    else:
+        # IP literals (v4 and v6) are decided by address class alone —
+        # a v6 literal never contains a '.', so it must not reach the
+        # single-label rule below.
+        return ip.is_loopback or ip.is_private or ip.is_link_local
+    # Single-label names ("nas", "jellyfin") only resolve on the LAN.
+    return host == "localhost" or host.endswith(_LAN_SUFFIXES) or "." not in host
 
 
 class JellyfinClient:
@@ -139,14 +160,18 @@ class JellyfinClient:
             hits = [s for s in playing if s.get("DeviceName") == device_name]
             if hits:
                 return newest(hits)
-        local = [s for s in playing if _is_loopback_endpoint(s.get("RemoteEndPoint"))]
-        if local:
-            return newest(local)
         if device_id or device_name:
             # Explicitly pinned but our device isn't playing — never fall
             # through to somebody else's session.
             return None
         base = jellyfin_base()
+        if server_is_loopback(base):
+            # Only an on-device server makes a loopback client "us"; a
+            # remote one behind a same-host proxy reports 127.0.0.1 for all.
+            local = [s for s in playing
+                     if _is_loopback_endpoint(s.get("RemoteEndPoint"))]
+            if local:
+                return newest(local)
         if server_is_local(base):
             return newest(playing)
         if not self._logged_unpinned:

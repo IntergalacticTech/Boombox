@@ -263,9 +263,12 @@ doesn't falls back to reading the file, so the value reaches every consumer.)
    ```
 
    An on-device or LAN server (loopback / private IP / `.local`) keeps the old
-   behaviour without a pin: the kiosk's loopback session, else the most
-   recently active one. The DeviceId lives in the kiosk browser's storage, so
-   re-pin if that profile is ever wiped.
+   behaviour without a pin: the kiosk's loopback session (only trusted when
+   the server itself is on-device — a remote server behind a same-host proxy
+   or tunnel reports `127.0.0.1` for every client), else the most recently
+   active one. A set pin that matches nothing controls nothing. The DeviceId
+   lives in the kiosk browser's storage, so re-pin if that profile is ever
+   wiped.
 
 The kiosk guard (which keeps the touchscreen on the local UI) allows the
 Jellyfin base URL's exact hostname, so **WATCH** can open a remote server. If

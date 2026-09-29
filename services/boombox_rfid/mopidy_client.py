@@ -35,6 +35,11 @@ TAIL_CHUNK = 10
 TAIL_CALL_TIMEOUT_S = 90.0
 # Breather between chunks so queued UI RPCs get a turn.
 TAIL_GAP_S = 0.25
+# Timeout for the head path (clear + head add) of a tap. Mopidy's core runs
+# one call at a time, and cancelling the previous card's tail only drops our
+# side of it: a chunk already sent keeps scanning, and this tap's clear
+# queues behind it. So wait out one worst-case chunk, not the 10 s default.
+HEAD_CALL_TIMEOUT_S = TAIL_CALL_TIMEOUT_S
 
 
 def needs_split(uris: list[str]) -> bool:
@@ -128,8 +133,8 @@ class MopidyClient:
             head, tail = uri_list[:HEAD_COUNT], uri_list[HEAD_COUNT:]
         else:
             head, tail = uri_list, []
-        await self._call("core.tracklist.clear")
-        added = await self._add(head)
+        await self._call("core.tracklist.clear", timeout=HEAD_CALL_TIMEOUT_S)
+        added = await self._add(head, timeout=HEAD_CALL_TIMEOUT_S)
         # Play the first track explicitly via tlid so Mopidy doesn't have to
         # guess what to resume — explicit selection also reliably moves us
         # out of 'stopped'/'paused' into 'playing'.

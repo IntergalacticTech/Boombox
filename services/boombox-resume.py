@@ -17,6 +17,10 @@ core.tracklist.add (~0.2-0.5 s each over the internet), so replaying a
 by a minute. Such a queue is restored current-track-first (position and
 paused state restored as before), then the rest is re-queued around it in
 small background chunks.
+
+The same goes for a long RFID card that boombox-rfid is still queueing:
+while its tail streams in, the snapshot records the card's full list
+(services/queue_intent.py) rather than the partial live tracklist.
 """
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import aiohttp
+from queue_intent import merge_intent, read_intent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("boombox-resume")
@@ -351,6 +356,7 @@ async def main() -> None:
                 try:
                     snap = await take_snapshot(sess)
                     if snap:
+                        snap = merge_intent(snap, read_intent())
                         write_snapshot(merge_in_flight(snap, restorer.in_flight()))
                 except Exception as e:
                     log.debug("snapshot cycle: %s", e)

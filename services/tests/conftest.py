@@ -26,6 +26,13 @@ def _remote_enabled_by_default(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("BOOMBOX_REMOTE_STATE", str(state))
 
 
+@pytest.fixture(autouse=True)
+def _queue_intent_in_tmp(tmp_path_factory, monkeypatch):
+    """Keep boombox-rfid/-resume's shared queue-intent file out of $HOME."""
+    path = tmp_path_factory.mktemp("queue-intent") / "queue-intent.json"
+    monkeypatch.setenv("BOOMBOX_QUEUE_INTENT_FILE", str(path))
+
+
 @pytest.fixture
 def navidrome_env():
     """Skip an integration test unless real Navidrome creds are in the env.

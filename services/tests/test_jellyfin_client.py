@@ -44,6 +44,10 @@ def _client() -> JellyfinClient:
     ("https://video.example.com", False),
     ("https://video.coblr.io", False),
     ("http://8.8.8.8:8096", False),
+    ("http://[2606:4700:4700::1111]:8096", False),
+    ("https://[2001:4860:4860::8888]:8096", False),
+    ("http://[fd00::10]:8096", True),
+    ("http://[fe80::1]:8096", True),
     ("", False),
 ])
 def test_server_is_local(base, expected):
@@ -90,10 +94,49 @@ def test_pinned_but_not_playing_never_falls_through(monkeypatch):
     assert _client()._select_session(sessions) is None
 
 
-def test_loopback_endpoint_preferred():
-    sessions = [_sess("tv", last="2026-09-28T12:00:00Z"),
+@pytest.mark.parametrize("base,loopback", [
+    ("http://127.0.0.1:8096", True),
+    ("http://localhost:8096", True),
+    ("http://[::1]:8096", True),
+    ("http://192.168.1.10:8096", False),
+    ("https://video.coblr.io", False),
+])
+def test_server_is_loopback(base, loopback):
+    assert jellyfin_client.server_is_loopback(base) is loopback
+
+
+def test_loopback_endpoint_preferred(monkeypatch):
+    monkeypatch.setenv("BOOMBOX_JELLYFIN_BASE", "http://127.0.0.1:8096")
+    sessions = [_sess("tv", ep="192.168.1.50", last="2026-09-28T12:00:00Z"),
                 _sess("kiosk", ep="127.0.0.1")]
     assert _client()._select_session(sessions)["Id"] == "kiosk"
+
+
+def test_remote_server_loopback_endpoints_unpinned_refuse():
+    # Remote server behind a same-host proxy/tunnel: every client is 127.0.0.1.
+    sessions = [_sess("tv", ep="127.0.0.1", last="2026-09-28T12:00:00Z"),
+                _sess("kiosk", ep="127.0.0.1")]
+    assert _client()._select_session(sessions) is None
+
+
+def test_remote_server_loopback_endpoints_pinned_no_match(monkeypatch):
+    monkeypatch.setenv("BOOMBOX_JELLYFIN_DEVICE_ID", "d-kiosk")
+    sessions = [_sess("tv", ep="127.0.0.1"), _sess("kiosk", ep="127.0.0.1", playing=False)]
+    assert _client()._select_session(sessions) is None
+
+
+def test_pin_beats_loopback_on_local_server(monkeypatch):
+    monkeypatch.setenv("BOOMBOX_JELLYFIN_BASE", "http://127.0.0.1:8096")
+    monkeypatch.setenv("BOOMBOX_JELLYFIN_DEVICE_ID", "d-kiosk")
+    sessions = [_sess("tv", ep="127.0.0.1", last="2026-09-28T12:00:00Z"),
+                _sess("kiosk", ep="127.0.0.1", playing=False)]
+    assert _client()._select_session(sessions) is None
+
+
+def test_ipv6_public_server_is_not_local_fallback(monkeypatch):
+    monkeypatch.setenv("BOOMBOX_JELLYFIN_BASE", "http://[2606:4700:4700::1111]:8096")
+    sessions = [_sess("tv", last="2026-09-28T12:00:00Z"), _sess("kiosk")]
+    assert _client()._select_session(sessions) is None
 
 
 def test_local_server_keeps_most_recent_fallback(monkeypatch):

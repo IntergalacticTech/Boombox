@@ -170,3 +170,66 @@ async def test_tap_returns_before_tail_and_new_tap_supersedes(mopidy, monkeypatc
     # Card B's queue is intact; none of A's tail leaked in afterwards.
     assert mopidy.uris() == uris_by_card["B"]
     assert ctx._tail_task is None
+
+
+async def test_head_path_waits_out_an_in_flight_tail_chunk(mopidy, monkeypatch):
+    # A superseded card's chunk may still be scanning in Mopidy's core; the
+    # new tap's clear + head add queue behind it, so they must not use the
+    # 10 s session default.
+    seen: list[tuple[str, float | None]] = []
+    orig = MopidyClient._call
+
+    async def spy(self, method, params=None, timeout=None):
+        seen.append((method, timeout))
+        return await orig(self, method, params, timeout=timeout)
+    monkeypatch.setattr(MopidyClient, "_call", spy)
+    async with MopidyClient(mopidy.url) as m:
+        await m.play_uris(_http(20))
+    by_method = dict(seen)
+    assert by_method["core.tracklist.clear"] >= mc.TAIL_CALL_TIMEOUT_S
+    assert by_method["core.tracklist.add"] >= mc.TAIL_CALL_TIMEOUT_S
+
+
+def _tap_ctx(svc, mopidy, monkeypatch, uris_by_card):
+    ctx = svc.ServiceContext.__new__(svc.ServiceContext)
+    ctx.cfg = SimpleNamespace(mopidy_rpc=mopidy.url)
+    ctx._tail_task = None
+    ctx.conn = None
+    monkeypatch.setattr(svc, "get_binding",
+                        lambda _c, uid: SimpleNamespace(
+                            kind=SimpleNamespace(value="artist"), target_id=uid))
+    monkeypatch.setattr(svc, "record_tap", lambda *_a: None)
+    monkeypatch.setattr(svc, "expand_to_track_ids", lambda _c, _k, tid: [tid])
+    monkeypatch.setattr(svc, "load_library_config",
+                        lambda: SimpleNamespace(source=SimpleNamespace(
+                            url="", username="", password="")))
+    monkeypatch.setattr(svc, "resolve_uris",
+                        lambda _c, ids, **_k: uris_by_card[ids[0]])
+    return ctx
+
+
+async def test_tap_records_queue_intent_until_tail_done(mopidy, monkeypatch):
+    import queue_intent
+    svc = _load_rfid_service()
+    uris = _http(30)
+    ctx = _tap_ctx(svc, mopidy, monkeypatch, {"A": uris})
+    monkeypatch.setattr(mc, "TAIL_GAP_S", 0.05)
+    await svc.ServiceContext._handle_tap(ctx, "A")
+    # Tail still streaming: resume would snapshot the whole card.
+    assert queue_intent.read_intent() == uris
+    await ctx._tail_task
+    assert mopidy.uris() == uris
+    assert queue_intent.read_intent() is None
+
+
+async def test_new_short_tap_drops_previous_queue_intent(mopidy, monkeypatch):
+    import queue_intent
+    svc = _load_rfid_service()
+    cards = {"A": _http(60), "B": [f"file:///b{i}.mp3" for i in range(3)]}
+    ctx = _tap_ctx(svc, mopidy, monkeypatch, cards)
+    monkeypatch.setattr(mc, "TAIL_GAP_S", 0.05)
+    await svc.ServiceContext._handle_tap(ctx, "A")
+    assert queue_intent.read_intent() == cards["A"]
+    await svc.ServiceContext._handle_tap(ctx, "B")
+    await asyncio.sleep(0.1)
+    assert queue_intent.read_intent() is None
