@@ -299,3 +299,34 @@ def test_real_repo_templates_pass_the_allowlist():
     snippet = (REPO_CONFIG / "nginx-boombox-common.conf").read_text()
     helper.check_nginx_template(site, site=True, port="8090")
     helper.check_nginx_template(snippet, site=False, port="8090")
+
+
+def test_oversized_template_is_refused_without_reading_it(box):
+    _set(box, site="a;" * (512 * 1024))                  # 1 MiB
+    r = helper.action_nginx_sync({})
+    assert r == {"ok": False, "error": "nginx.conf is too large to be a boombox template"}
+    _untouched(box)
+
+
+def test_real_templates_fit_well_under_the_size_cap():
+    for name in ("nginx.conf", "nginx-boombox-common.conf"):
+        assert (REPO_CONFIG / name).stat().st_size * 4 < helper.NGINX_TEMPLATE_MAX_BYTES
+
+
+@pytest.mark.parametrize("unit", ["a;", "}\n", "a b;\n"])
+def test_tokenizer_is_linear_time(unit):
+    import time
+    text = unit * (1024 * 1024 // len(unit))            # ~1 MiB, past the cap on purpose
+    t0 = time.monotonic()
+    helper._nginx_statements(text, "nginx.conf")
+    assert time.monotonic() - t0 < 2.0
+
+
+def test_errors_still_report_the_right_line():
+    text = "server {\n  listen 127.0.0.1:80;\n\n  access_log /x;\n}\n"
+    with pytest.raises(helper.TemplateRejected, match=r"\(nginx.conf line 4\)"):
+        helper.check_nginx_template(text, site=True, port="8090")
+    with pytest.raises(helper.TemplateRejected, match=r"\(nginx.conf line 3\)"):
+        helper.check_nginx_template("server {\n}\n}\n", site=True, port="8090")
+    with pytest.raises(helper.TemplateRejected, match=r"\(nginx.conf line 2\)"):
+        helper.check_nginx_template('server {\n  root "x', site=True, port="8090")
