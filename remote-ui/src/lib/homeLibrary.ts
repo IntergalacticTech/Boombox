@@ -61,7 +61,9 @@ export function playHome(api: RemoteApi, ids: string[], mode: "play" | "queue"):
 }
 
 /** Every track of an artist, album by album in the order the library lists
- *  them, capped at MAX_EXPANDED_TRACKS. */
+ *  them. Stops fetching albums once MAX_EXPANDED_TRACKS is reached but
+ *  returns the whole last album, so a caller can tell the list was cut
+ *  (the play helper caps to MAX_EXPANDED_TRACKS and says so). */
 export async function artistTrackIds(api: RemoteApi, artistId: string): Promise<string[]> {
   const a = await homeDetail<HomeArtistDetail>(api, "artist", artistId);
   const ids: string[] = [];
@@ -70,7 +72,7 @@ export async function artistTrackIds(api: RemoteApi, artistId: string): Promise<
     const d = await homeDetail<HomeAlbumDetail>(api, "album", al.id);
     ids.push(...d.tracks.map((t) => t.id));
   }
-  return ids.slice(0, MAX_EXPANDED_TRACKS);
+  return ids;
 }
 
 export function artPath(artId: string | null | undefined, size = 320): string | null {

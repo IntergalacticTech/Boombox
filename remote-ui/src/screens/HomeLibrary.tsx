@@ -6,7 +6,7 @@ import { SectionMessage } from "../components/SectionMessage";
 import { SkeletonRows } from "../components/Skeleton";
 import { TILE_GRID } from "../components/grid";
 import {
-  artPath, artistTrackIds, browseHome, homeDetail, playHome, searchHome,
+  MAX_EXPANDED_TRACKS, artPath, artistTrackIds, browseHome, homeDetail, playHome, searchHome,
   type HomeAlbumDetail, type HomeArtistDetail, type HomeItem, type HomeKind,
   type HomeList, type HomePlaylistDetail, type HomeSearchResult, type HomeTrack,
 } from "../lib/homeLibrary";
@@ -27,12 +27,18 @@ function usePlay(): { toast: string | null; play: PlayFn } {
   const play = useCallback<PlayFn>(async (ids, mode, label) => {
     setToast(mode === "play" ? `Starting ${label}…` : `Queueing ${label}…`);
     try {
-      const list = typeof ids === "function" ? await ids() : ids;
-      if (list.length === 0) { setToast(`${label}: nothing to play.`); return; }
+      const all = typeof ids === "function" ? await ids() : ids;
+      if (all.length === 0) { setToast(`${label}: nothing to play.`); return; }
+      // The play route takes at most 1000 ids; cap every play/queue (album,
+      // playlist, play-from, artist) at the kiosk's 500 and say so.
+      const capped = all.length > MAX_EXPANDED_TRACKS;
+      const list = capped ? all.slice(0, MAX_EXPANDED_TRACKS) : all;
       const r = await playHome(api, list, mode);
       const n = `${r.count} track${r.count === 1 ? "" : "s"}`;
       const skipped = r.skipped ? ` (${r.skipped} not available offline)` : "";
-      setToast(`${mode === "play" ? "Playing" : "Queued"} ${label} — ${n}${skipped}.`);
+      const verb = mode === "play" ? "Playing" : "Queued";
+      const what = capped ? `the first ${MAX_EXPANDED_TRACKS} tracks of ${label}` : label;
+      setToast(`${verb} ${what} — ${n}${skipped}.`);
     } catch (e) {
       setToast(apiErrorMessage(e, "Couldn't play that"));
     }

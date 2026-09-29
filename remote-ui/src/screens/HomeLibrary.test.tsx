@@ -126,6 +126,68 @@ describe("HomeLibrary", () => {
   });
 });
 
+describe("HomeLibrary play cap", () => {
+  const BIG = { playlist: { id: "pl1", name: "Everything" },
+    tracks: Array.from({ length: 1200 }, (_, i) => ({ id: `t${i}`, title: `Song ${i}` })) };
+
+  it("caps Play all and Play from at 500 tracks and says so", async () => {
+    const get = vi.fn().mockImplementation(async (p: string) => {
+      if (p === "api/remote/home/playlist/pl1") return BIG;
+      throw new Error(`unmocked ${p}`);
+    });
+    const post = vi.fn().mockResolvedValue({ ok: true, count: 500, skipped: 0 });
+    wrap(mockApi({ get, post }), ["playlist", "pl1"]);
+    fireEvent.click(await screen.findByRole("button", { name: "Play all" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    const body = post.mock.calls[0][1] as { ids: string[]; mode: string };
+    expect(body.mode).toBe("play");
+    expect(body.ids).toHaveLength(500);
+    expect(body.ids[0]).toBe("t0");
+    expect(body.ids[499]).toBe("t499");
+    expect(await screen.findByText(/first 500 tracks/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Play from Song 900" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    const from = post.mock.calls[1][1] as { ids: string[] };
+    expect(from.ids).toHaveLength(300);
+    expect(from.ids[0]).toBe("t900");
+
+    fireEvent.click(screen.getByRole("button", { name: "Play from Song 100" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
+    const from2 = post.mock.calls[2][1] as { ids: string[] };
+    expect(from2.ids).toHaveLength(500);
+    expect(from2.ids[0]).toBe("t100");
+    expect(from2.ids[499]).toBe("t599");
+
+    fireEvent.click(screen.getByRole("button", { name: "Queue all" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(4));
+    expect((post.mock.calls[3][1] as { ids: string[] }).ids).toHaveLength(500);
+  });
+
+  it("caps an artist's Play all at 500 and says so", async () => {
+    const album = (n: string) => ({ album: { id: n, name: n },
+      tracks: Array.from({ length: 300 }, (_, i) => ({ id: `${n}-${i}`, title: `${n} ${i}` })) });
+    const get = vi.fn().mockImplementation(async (p: string) => {
+      if (p === "api/remote/home/artist/big") {
+        return { artist: { id: "big", name: "Prolific" },
+                 albums: [{ id: "x", name: "x" }, { id: "y", name: "y" }, { id: "z", name: "z" }] };
+      }
+      const m = p.match(/^api\/remote\/home\/album\/(\w)$/);
+      if (m) return album(m[1]);
+      throw new Error(`unmocked ${p}`);
+    });
+    const post = vi.fn().mockResolvedValue({ ok: true, count: 500, skipped: 0 });
+    wrap(mockApi({ get, post }), ["artist", "big"]);
+    fireEvent.click(await screen.findByRole("button", { name: "Play all" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    const ids = (post.mock.calls[0][1] as { ids: string[] }).ids;
+    expect(ids).toHaveLength(500);
+    expect(ids[499]).toBe("y-199");
+    expect(get).not.toHaveBeenCalledWith("api/remote/home/album/z");
+    expect(await screen.findByText(/first 500 tracks of Prolific/)).toBeTruthy();
+  });
+});
+
 describe("Music", () => {
   it("switches between the Home Library and this boombox's library", async () => {
     const navigate = vi.fn();
