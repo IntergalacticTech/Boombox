@@ -669,6 +669,10 @@ async def main() -> None:
         # Home Library (boombox-library) browse/art pass-through + play.
         import remote_home
         remote_home.add_routes(app, session, remote_home.HomePlayer())
+        # Jellyfin browse + posters for the LAN app's Video section.
+        import remote_video
+        video_browser = remote_video.JellyfinBrowser(session)
+        remote_video.add_routes(app, video_browser)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", PORT)
