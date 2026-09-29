@@ -1,11 +1,12 @@
 """Tests for boombox_library.api — HTTP routes."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from boombox_library.api import build_app
+from boombox_library.api import _same_origin, build_app
 from boombox_library.config import (
     DEFAULT_CONFIG,
     LibraryConfig,
@@ -35,6 +36,8 @@ class FakeContext:
         # Phase 3: album-art proxy + browse snapshots
         self.art_cache_dir = art_cache_dir or Path("/tmp/boombox-art-test")
         self.snapshot_dir = snapshot_dir or Path("/tmp/boombox-snap-test")
+        self.tested: list[tuple[str, str, str]] = []
+        self.saved: list = []
 
     async def is_online(self) -> bool:
         return self._ping_ok
@@ -46,9 +49,11 @@ class FakeContext:
         return self.cache_state
 
     def save_config(self, cfg):
+        self.saved.append(cfg)
         self.cfg = cfg
 
     async def test_source(self, url, username, password) -> tuple[bool, str]:
+        self.tested.append((url, username, password))
         return (self._ping_ok, "" if self._ping_ok else "auth failed")
 
     # Phase 2 hooks consumed by api.py routes
@@ -611,3 +616,65 @@ async def test_health_reports_prune_deferred(client):
     body = await (await c.get("/api/library/health")).json()
     assert body["prune_deferred"]["albums"] == 200
     assert body["prune_deferred"]["rounds"] == 1
+
+
+# ----- blank password = keep stored (Accounts page never receives it) -----
+
+@pytest.mark.asyncio
+async def test_source_put_blank_password_keeps_current(client):
+    c, ctx, _ = client
+    ctx.cfg = replace(ctx.cfg, source=replace(
+        ctx.cfg.source, url="https://m.example", password="s3cret"))
+    r = await c.put("/api/library/source",
+                    json={"url": "https://m.example", "username": "bb", "password": ""})
+    assert r.status == 200
+    assert ctx.tested[-1][2] == "s3cret"          # tested with the stored password
+    assert ctx.saved[-1].source.password == "s3cret"
+
+
+@pytest.mark.asyncio
+async def test_source_test_blank_password_uses_current(client):
+    c, ctx, _ = client
+    ctx.cfg = replace(ctx.cfg, source=replace(
+        ctx.cfg.source, url="https://m.example", password="s3cret"))
+    await c.post("/api/library/source/test",
+                 json={"url": "https://m.example", "username": "bb"})
+    assert ctx.tested[-1][2] == "s3cret"
+
+
+@pytest.mark.parametrize(("a", "b", "same"), [
+    ("https://m.example/rest", "https://m.example", True),     # path differs
+    ("https://M.Example", "https://m.example/", True),         # case-insensitive
+    ("https://other.example", "https://m.example", False),     # different host
+    ("http://m.example", "https://m.example", False),          # scheme differs
+    ("https://m.example:443", "https://m.example", True),      # default port
+    ("http://m.example:80/x", "http://m.example", True),
+    ("https://m.example:8443", "https://m.example", False),
+    ("https://m.example", "", False),                          # nothing stored
+    ("", "", False),
+    ("m.example", "m.example", False),                         # no scheme/host
+    ("https://m.example:notaport", "https://m.example", False),
+])
+def test_same_origin(a, b, same):
+    assert _same_origin(a, b) is same
+
+
+@pytest.mark.asyncio
+async def test_source_put_blank_password_other_host_not_sent_stored(client):
+    c, ctx, _ = client
+    ctx.cfg = replace(ctx.cfg, source=replace(
+        ctx.cfg.source, url="https://m.example", password="s3cret"))
+    await c.put("/api/library/source",
+                json={"url": "https://evil.example", "username": "bb", "password": ""})
+    assert ctx.tested[-1] == ("https://evil.example", "bb", "")
+    assert "s3cret" not in {s.source.password for s in ctx.saved}
+
+
+@pytest.mark.asyncio
+async def test_source_test_blank_password_other_origin_not_sent_stored(client):
+    c, ctx, _ = client
+    ctx.cfg = replace(ctx.cfg, source=replace(
+        ctx.cfg.source, url="https://m.example", password="s3cret"))
+    for url in ("https://evil.example", "http://m.example"):
+        await c.post("/api/library/source/test", json={"url": url, "username": "bb"})
+        assert ctx.tested[-1] == (url, "bb", "")

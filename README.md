@@ -57,6 +57,9 @@ visualizer, and keeps the kiosk pinned to its UI.
    ```
 3. After reboot, Chromium launches in kiosk mode and shows the boombox UI.
    Audio is routed through the HiFiBerry DAC.
+4. Later account changes (music/video servers, kiosk Jellyfin sign-in,
+   AirPlay/Spotify names, the web password) live on the LAN Accounts page:
+   [`http://<boombox>:8090/accounts/`](docs/SERVICES.md#boombox-setup--first-run-wizard--lan-accounts-api).
 
 The installer is idempotent: re-running it picks up changes to configs,
 systemd units, and the UI build.

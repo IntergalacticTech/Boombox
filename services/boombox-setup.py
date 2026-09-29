@@ -123,6 +123,12 @@ class ServiceContext:
             "has_key": bool(env.get("JELLYFIN_API_KEY")),
         }
 
+    def jellyfin_env(self) -> dict[str, str]:
+        return _read_env_file(JELLYFIN_ENV)
+
+    async def http(self) -> aiohttp.ClientSession:
+        return await self._http()
+
     def lan_host(self) -> str:
         """Best LAN address for the QR URL: the primary global IPv4, else
         the mDNS hostname."""
@@ -237,6 +243,14 @@ class ServiceContext:
             "configured": bool(src.get("url")),
             "reachable": reachable,
         }
+
+    async def library_health(self) -> dict:
+        try:
+            s = await self._http()
+            async with s.get(f"{LIBRARY_BASE}/api/library/health") as r:
+                return await self._json_or_none(r) or {}
+        except Exception:
+            return {}
 
     async def music_test(self, url, username, password) -> tuple[bool, str]:
         s = await self._http()

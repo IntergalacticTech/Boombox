@@ -249,6 +249,10 @@ things:
 
 To use an **off-device** Jellyfin:
 
+The LAN **Accounts** page (`http://<boombox>:8090/accounts/` → **Video
+server**) does all three steps below from a browser; the manual steps are
+here for reference and recovery.
+
 1. Point the base URL at your server. Set `BOOMBOX_JELLYFIN_BASE` for the
    `boombox-remote` service — add it to `/etc/boombox/jellyfin.env` (already
    loaded by the unit) as:
@@ -274,8 +278,20 @@ doesn't falls back to reading the file, so the value reaches every consumer.)
    (play/pause/seek/volume) controls *this* boombox and not another TV on the
    same server. A remote server can't recognise the kiosk by a loopback
    address, so without a pin the boombox refuses to control any session (and
-   logs a one-time hint). Add to `/etc/boombox/jellyfin.env`, then
-   `systemctl --user restart boombox-remote`:
+   logs a one-time hint).
+
+   The easy way: from a phone or computer on the LAN, open
+   `http://<boombox>:8090/accounts/` (the boombox web login) → **Video
+   server** → **Kiosk sign-in** → **Sign kiosk in as …** (pick a Jellyfin
+   user).
+   The boombox signs the touchscreen in via server-side Quick Connect with the
+   fixed DeviceId `<BOOMBOX_ID>-kiosk` (e.g. `boombox-markii-kiosk`), writes
+   `BOOMBOX_JELLYFIN_DEVICE_ID` for you and restarts `boombox-remote`.
+   **Sign out** there revokes that device on the server. (The same card also
+   sets steps 1–2 — server URL and API key, with a **Test** button.)
+
+   Manual fallback (e.g. no LAN browser handy): add to
+   `/etc/boombox/jellyfin.env`, then `systemctl --user restart boombox-remote`:
 
    ```ini
    # Exact match, preferred. Find it in Jellyfin's Dashboard → Devices (open
@@ -289,8 +305,9 @@ doesn't falls back to reading the file, so the value reaches every consumer.)
    behaviour without a pin: the kiosk's loopback session (only trusted when
    the server itself is on-device — a remote server behind a same-host proxy
    or tunnel reports `127.0.0.1` for every client), else the most recently
-   active one. A set pin that matches nothing controls nothing. The DeviceId
-   lives in the kiosk browser's storage, so re-pin if that profile is ever
+   active one. A set pin that matches nothing controls nothing. A manually
+   pinned DeviceId lives in the kiosk browser's storage, so re-pin (or just
+   sign the kiosk in again from the Accounts page) if that profile is ever
    wiped.
 
 The kiosk guard (which keeps the touchscreen on the local UI) allows the

@@ -700,6 +700,19 @@ export function SettingsDrawer({ onClose, onHome }: Props) {
             }
           />
 
+          {/* Accounts — LAN-only page (music/video servers, kiosk sign-in,
+            * streaming receivers, web login). Info only, no button: the page
+            * refuses requests from the kiosk itself (loopback client IP). Host
+            * reuses the hostname /api/info reports (the mDNS name the setup
+            * service also advertises), falling back to the page's own host. */}
+          <SettingRow
+            title="Accounts"
+            subtitle={`Manage music, video and streaming accounts from a phone or computer at http://${
+              info?.hostname ? `${info.hostname}.local` : window.location.hostname
+            }:8090/accounts/`}
+            mono
+          />
+
           {/* System */}
           <SettingRow
             title="System"

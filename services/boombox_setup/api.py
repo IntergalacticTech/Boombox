@@ -32,7 +32,7 @@ from typing import Protocol
 
 from aiohttp import web
 
-from . import __version__
+from . import __version__, accounts
 from .session import REOPEN_TTL_S, TOKEN_TTL_S, SetupSession
 
 log = logging.getLogger("boombox-setup.api")
@@ -90,6 +90,9 @@ _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 @web.middleware
 async def _auth_mw(req: web.Request, handler):
+    if req.path.startswith(accounts.PREFIX):
+        deny = accounts.check_auth(req)
+        return deny if deny is not None else await handler(req)
     if req.method in _MUTATING and req.content_type != "application/json":
         return web.json_response(
             {"error": "Content-Type must be application/json"}, status=415)
@@ -151,6 +154,7 @@ def build_app(ctx: Context) -> web.Application:
     r.add_post("/api/setup/remote/pair", _remote_pair)
     r.add_put("/api/setup/video", _video_put)
     r.add_post("/api/setup/complete", _complete)
+    accounts.add_routes(app)
     return app
 
 

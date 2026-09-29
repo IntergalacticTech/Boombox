@@ -18,7 +18,14 @@
 #   identity   {name, rename_host}    → boombox.env + optional hostname + unify
 #   wifi-scan  {}                     → list nearby SSIDs (brings wlan0 up)
 #   wifi-join  {ssid, psk}            → join a network on wlan0 (leaves eth0)
-#   jellyfin   {mode, base?, api_key?}→ point video at built-in or your server
+#   jellyfin   {mode, base?, api_key?, device_id?}
+#                                     → point video at built-in or your server
+#   streaming-status {}                 → AirPlay/Spotify installed/active/name
+#   streaming  {airplay_name?, airplay_password?, airplay_password_clear?,
+#               spotify_name?}          → rename receivers / set AirPlay password
+#   web-password {current_password, new_password}
+#                                     → rotate web login + Samba (rolls back on
+#                                       failure) + built-in Jellyfin admin
 #
 # Result is always JSON: {"ok": bool, ...} on stdout, exit 0. Hard errors
 # (bad JSON, unknown action) exit non-zero with {"ok": false, "error": ...}.
@@ -35,7 +42,13 @@ import tempfile
 BOOMBOX_ENV = "/etc/boombox/boombox.env"
 JELLYFIN_ENV = "/etc/boombox/jellyfin.env"
 JELLYFIN_KEY_FILE = "/etc/boombox/jellyfin-api-key"
-SHAIRPORT_CONF = "/etc/shairport-sync.conf"
+# Debian packages read /etc; DietPi's source build reads /usr/local/etc
+# (sysconfdir), which the old single path silently missed.
+SHAIRPORT_CONF_CANDIDATES = ["/etc/shairport-sync.conf",
+                             "/usr/local/etc/shairport-sync.conf"]
+RASPOTIFY_CONF = "/etc/raspotify/conf"
+WEB_AUTH_ENV = "/etc/boombox/web-auth.env"
+HTPASSWD = "/etc/nginx/boombox.htpasswd"
 HOSTS_FILE = "/etc/hosts"
 WLAN_IF = "wlan0"
 
@@ -261,27 +274,19 @@ def _set_hostname(slug: str) -> None:
 
 
 def _set_shairport_name(name: str) -> bool:
-    """Set the AirPlay advertised name in shairport-sync.conf's general block."""
-    if not os.path.exists(SHAIRPORT_CONF):
+    """Set the AirPlay advertised name (general block)."""
+    sp = shairport_conf_path()
+    if sp is None:
         return False
     try:
-        with open(SHAIRPORT_CONF) as f:
+        with open(sp) as f:
             conf = f.read()
-        # Quote-escape for the conf's C-string syntax.
-        safe = name.replace("\\", "\\\\").replace('"', '\\"')
-        if re.search(r'(?m)^\s*name\s*=', conf):
-            new = re.sub(r'(?m)^(\s*)name\s*=\s*"[^"]*"\s*;',
-                         rf'\1name = "{safe}";', conf)
-        elif re.search(r"(?m)^\s*general\s*=\s*\{", conf):
-            new = re.sub(r"(?m)^(\s*general\s*=\s*\{)",
-                         rf'\1\n\tname = "{safe}";', conf, count=1)
-        else:
-            return False
+        new = shairport_set(conf, "name", name)
         if new != conf:
-            _atomic_write(SHAIRPORT_CONF, new, 0o644)
+            _atomic_write(sp, new, 0o644)
             _restart_system_units(["shairport-sync"])
         return True
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 
@@ -307,6 +312,151 @@ def _restart_system_units(units: list[str]) -> None:
                 _run(["systemctl", "restart", u], timeout=20)
         except Exception:
             pass
+
+
+# Receiver names: same shape as device names (no quotes/backslash/$/control).
+def validate_receiver_name(raw: object) -> str:
+    # fullmatch: re.match's `$` would let a trailing newline through.
+    if not isinstance(raw, str) or not _NAME_RE.fullmatch(raw):
+        raise ValueError("name must be 1-32 letters, digits, spaces or . ' _ -")
+    return raw
+
+
+def validate_receiver_password(raw: object) -> str:
+    if (not isinstance(raw, str) or not 8 <= len(raw) <= 64
+            or any(ord(c) < 32 or ord(c) == 127 for c in raw)):
+        raise ValueError("AirPlay password must be 8-64 printable characters")
+    return raw
+
+
+def shairport_conf_path() -> str | None:
+    for p in SHAIRPORT_CONF_CANDIDATES:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _c_escape(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _c_unescape(s: str) -> str:
+    return re.sub(r'\\(.)', r'\1', s)
+
+
+_ACTIVE_KEY = r'(?m)^(\s*){key}\s*=\s*"((?:[^"\\]|\\.)*)"\s*;[^\n]*$'
+_COMMENTED_KEY = r'(?m)^\s*//\s*{key}\s*=[^\n]*$'
+
+
+def shairport_get(conf: str, key: str) -> str | None:
+    m = re.search(_ACTIVE_KEY.format(key=re.escape(key)), conf)
+    return _c_unescape(m.group(2)) if m else None
+
+
+def shairport_set(conf: str, key: str, value: str | None) -> str:
+    """Set (value) or remove (None) `key = "value";` in the general block."""
+    active = re.compile(_ACTIVE_KEY.format(key=re.escape(key)))
+    if value is None:
+        return active.sub("", conf)
+    line = f'\t{key} = "{_c_escape(value)}";'
+    if active.search(conf):
+        return active.sub(lambda _m: line, conf, count=1)
+    commented = re.compile(_COMMENTED_KEY.format(key=re.escape(key)))
+    if commented.search(conf):
+        return commented.sub(lambda _m: line, conf, count=1)
+    m = re.search(r"(?m)^\s*general\s*=\s*\{", conf)
+    if not m:
+        raise ValueError("shairport-sync.conf has no general block")
+    return conf[:m.end()] + "\n" + line + conf[m.end():]
+
+
+def raspotify_get_name(conf: str) -> str | None:
+    m = re.search(r'(?m)^\s*LIBRESPOT_NAME\s*=\s*"?([^"\n]*)"?\s*$', conf)
+    return m.group(1) if m else None
+
+
+def raspotify_set_name(conf: str, name: str) -> str:
+    line = f'LIBRESPOT_NAME="{name}"'
+    pat = re.compile(r'(?m)^\s*#?\s*LIBRESPOT_NAME\s*=.*$')
+    if pat.search(conf):
+        return pat.sub(lambda _m: line, conf, count=1)
+    return conf.rstrip("\n") + "\n" + line + "\n"
+
+
+def _unit_active(unit: str) -> bool:
+    try:
+        return _run(["systemctl", "is-active", unit], timeout=8).stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def action_streaming_status(_body: dict) -> dict:
+    sp = shairport_conf_path()
+    airplay = {"installed": sp is not None, "active": False, "name": "",
+               "password_set": False}
+    if sp:
+        with open(sp) as f:
+            conf = f.read()
+        airplay.update(active=_unit_active("shairport-sync"),
+                       name=shairport_get(conf, "name") or "",
+                       password_set=shairport_get(conf, "password") is not None)
+    spotify = {"installed": os.path.exists(RASPOTIFY_CONF), "active": False, "name": ""}
+    if spotify["installed"]:
+        with open(RASPOTIFY_CONF) as f:
+            spotify.update(active=_unit_active("raspotify"),
+                           name=raspotify_get_name(f.read()) or "")
+    return {"ok": True, "airplay": airplay, "spotify": spotify}
+
+
+def action_streaming(body: dict) -> dict:
+    wants_airplay = any(k in body for k in
+                        ("airplay_name", "airplay_password", "airplay_password_clear"))
+    wants_spotify = "spotify_name" in body
+
+    # Pre-flight: every installed-check and every validation happens before
+    # the first write, so a rejected field never leaves a half-applied change.
+    sp = shairport_conf_path() if wants_airplay else None
+    if wants_airplay and sp is None:
+        return {"ok": False, "error": "AirPlay (shairport-sync) is not installed"}
+    if wants_spotify and not os.path.exists(RASPOTIFY_CONF):
+        return {"ok": False, "error": "Spotify Connect is not installed"}
+    airplay_name = (validate_receiver_name(body["airplay_name"])
+                    if "airplay_name" in body else None)
+    # Only a literal JSON true clears; "false", 1, [0] etc. must not.
+    clear_pw = body.get("airplay_password_clear") is True
+    airplay_pw = (validate_receiver_password(body["airplay_password"])
+                  if "airplay_password" in body and not clear_pw else None)
+    spotify_name = (validate_receiver_name(body["spotify_name"])
+                    if wants_spotify else None)
+
+    sp_old = sp_new = rs_old = rs_new = ""
+    if sp is not None:
+        with open(sp) as f:
+            sp_old = f.read()
+        sp_new = sp_old
+        if airplay_name is not None:
+            sp_new = shairport_set(sp_new, "name", airplay_name)
+        if clear_pw:
+            sp_new = shairport_set(sp_new, "password", None)
+        elif airplay_pw is not None:
+            sp_new = shairport_set(sp_new, "password", airplay_pw)
+    if spotify_name is not None:
+        with open(RASPOTIFY_CONF) as f:
+            rs_old = f.read()
+        rs_new = raspotify_set_name(rs_old, spotify_name)
+
+    changed: list[str] = []
+    if sp is not None:
+        if sp_new != sp_old:
+            _atomic_write(sp, sp_new, 0o644)
+            _restart_system_units(["shairport-sync"])
+        changed.append("airplay")
+    if spotify_name is not None:
+        if rs_new != rs_old:
+            _atomic_write(RASPOTIFY_CONF, rs_new, 0o644)
+            _restart_system_units(["raspotify"])
+        changed.append("spotify")
+    return {"ok": True, "changed": changed}
 
 
 DIETPI_WIFIDB = "/boot/dietpi/func/dietpi-wifidb"
@@ -581,9 +731,20 @@ def action_jellyfin(body: dict) -> dict:
             if not isinstance(api_key, str) or not re.match(r"^[A-Za-z0-9]+$", api_key):
                 return {"ok": False, "error": "api_key must be alphanumeric"}
             env["JELLYFIN_API_KEY"] = api_key
-            _atomic_write(JELLYFIN_KEY_FILE, api_key + "\n", 0o640)
-            _chown_boombox_group(JELLYFIN_KEY_FILE)
 
+    if "device_id" in body:
+        dev = body.get("device_id")
+        if dev == "":
+            env.pop("BOOMBOX_JELLYFIN_DEVICE_ID", None)
+        elif isinstance(dev, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", dev):
+            env["BOOMBOX_JELLYFIN_DEVICE_ID"] = dev
+        else:
+            return {"ok": False, "error": "device_id must be 1-64 of A-Z a-z 0-9 . _ -"}
+
+    # All fields validated — only now touch disk (no half-applied change).
+    if mode == "remote" and body.get("api_key"):
+        _atomic_write(JELLYFIN_KEY_FILE, env["JELLYFIN_API_KEY"] + "\n", 0o640)
+        _chown_boombox_group(JELLYFIN_KEY_FILE)
     _write_env_file(JELLYFIN_ENV, env, mode=0o640)
     _chown_boombox_group(JELLYFIN_ENV)
     return {"ok": True, "mode": mode}
@@ -608,11 +769,123 @@ def _chown_boombox_group(path: str) -> None:
         pass
 
 
+def validate_web_password(raw: object) -> str:
+    # No leading/trailing whitespace: env values are .strip()ped on read, so
+    # such a password would never verify against web-auth.env again.
+    if (not isinstance(raw, str) or not 10 <= len(raw) <= 128
+            or any(ord(c) < 32 or ord(c) == 127 for c in raw)
+            or raw != raw.strip()):
+        raise ValueError("password must be 10-128 printable characters, "
+                         "without leading or trailing spaces")
+    return raw
+
+
+def _chown(path: str, user: str, group: str) -> None:
+    import grp
+    import pwd
+    try:
+        os.chown(path, pwd.getpwnam(user).pw_uid, grp.getgrnam(group).gr_gid)
+    except (KeyError, OSError):
+        pass
+
+
+def _smb_set(user: str, password: str) -> bool:
+    r = _run(["smbpasswd", "-s", user], inp=f"{password}\n{password}\n")
+    return r.returncode == 0
+
+
+def action_web_password(body: dict) -> dict:
+    env = _read_env_file(WEB_AUTH_ENV)
+    current = env.get("BOOMBOX_WEB_PASSWORD", "")
+    supplied = body.get("current_password")
+    import hmac
+    # Compare bytes: compare_digest(str, str) raises TypeError on non-ASCII.
+    if not isinstance(supplied, str) or not hmac.compare_digest(
+            supplied.encode("utf-8"), current.encode("utf-8")):
+        return {"ok": False, "error": "current password is incorrect"}
+    new = validate_web_password(body.get("new_password"))
+    web_user = env.get("BOOMBOX_WEB_USER", "boombox")
+    smb_user = env.get("BOOMBOX_SMB_USER") or os.environ.get("SUDO_USER") or "dietpi"
+
+    with open(HTPASSWD) as f:
+        old_htpasswd = f.read()
+    with open(WEB_AUTH_ENV) as f:
+        old_env_text = f.read()
+    updated: list[str] = []
+    env_written = False
+
+    def rollback(step: str) -> dict:
+        # Each step best-effort so one failure can't skip the others.
+        try:
+            _atomic_write(HTPASSWD, old_htpasswd, 0o640)
+            _chown(HTPASSWD, "root", "www-data")
+        except Exception:
+            pass
+        if env_written:
+            try:
+                _atomic_write(WEB_AUTH_ENV, old_env_text, 0o640)
+                _chown_boombox_group(WEB_AUTH_ENV)
+            except Exception:
+                pass
+        if "samba" in updated:
+            try:
+                _smb_set(smb_user, current)
+            except Exception:
+                pass
+        return {"ok": False, "error": f"could not update {step}; nothing was changed"}
+
+    step = "web login"
+    try:
+        r = _run(["htpasswd", "-iB", HTPASSWD, web_user], inp=new + "\n")
+        if r.returncode != 0:
+            return rollback(step)
+        _chown(HTPASSWD, "root", "www-data")
+        updated.append("web")
+        if shutil.which("smbpasswd"):  # Samba is optional on some installs
+            step = "samba"
+            if not _smb_set(smb_user, new):
+                return rollback(step)
+            updated.append("samba")
+        step = "web settings"
+        env["BOOMBOX_WEB_PASSWORD"] = new
+        _write_env_file(WEB_AUTH_ENV, env, mode=0o640)
+        env_written = True
+        _chown_boombox_group(WEB_AUTH_ENV)
+    except Exception:
+        return rollback(step)
+    if _builtin_jellyfin_password(current, new):
+        updated.append("jellyfin")
+    return {"ok": True, "updated": updated}
+
+
+def _builtin_jellyfin_password(old: str, new: str) -> bool:
+    """Best-effort: the built-in Jellyfin's bootstrapped admin shares the web
+    password. Skipped for a remote server (BOOMBOX_JELLYFIN_BASE set)."""
+    jenv = _read_env_file(JELLYFIN_ENV)
+    uid, key = jenv.get("JELLYFIN_USER_ID"), jenv.get("JELLYFIN_API_KEY")
+    if jenv.get("BOOMBOX_JELLYFIN_BASE") or not uid or not key:
+        return False
+    import urllib.request
+    req = urllib.request.Request(
+        f"http://127.0.0.1:8096/Users/{uid}/Password",
+        data=json.dumps({"CurrentPw": old, "NewPw": new}).encode(),
+        headers={"Content-Type": "application/json", "X-Emby-Token": key},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return 200 <= resp.status < 300
+    except Exception:
+        return False
+
+
 ACTIONS = {
     "identity": action_identity,
     "wifi-scan": action_wifi_scan,
     "wifi-join": action_wifi_join,
     "jellyfin": action_jellyfin,
+    "streaming-status": action_streaming_status,
+    "streaming": action_streaming,
+    "web-password": action_web_password,
 }
 
 

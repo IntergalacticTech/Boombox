@@ -412,6 +412,46 @@ reference — see [ACCESS.md](./ACCESS.md).
   `BOOMBOX_REMOTE_PAIR_TTL_S` (default `120`),
   `BOOMBOX_REMOTE_BLE` (default `1`; set `0` to disable the BLE peripheral).
 
+### `boombox-setup` — first-run wizard + LAN Accounts API
+
+**Listens on `127.0.0.1:6689`, proxied by nginx as `/api/setup/`
+(`auth_basic off`; the wizard's own token/code gate) and `/api/accounts/`
+(keeps the LAN Basic auth). Boot-enabled.**
+
+Backend for the first-run setup wizard (`/setup/`) and the LAN **Accounts**
+page (`http://<boombox>:8090/accounts/`, served from the `setup-ui` build).
+Privileged writes go through the `boombox-setup-apply` helper via `sudo -n`.
+
+Accounts routes (`services/boombox_setup/accounts.py`):
+
+| Method + path | What it does |
+|---|---|
+| `GET /api/accounts/summary` | Per-card state (`ok` / `unset` / `problem`) for the page header |
+| `GET` / `PUT /api/accounts/music` | Navidrome URL / user / password (blank password keeps the stored one only for the same server) + sync status |
+| `POST /api/accounts/music/test` | Try the credentials without saving |
+| `GET` / `PUT /api/accounts/video` | Built-in or remote Jellyfin base URL + API key; a remote save is tested first and refused on failure unless `force: true` ("Save anyway"); restarts the video consumers |
+| `POST /api/accounts/video/test` | Try the URL + key without saving |
+| `GET /api/accounts/video/users` | Jellyfin users to sign the kiosk in as |
+| `POST /api/accounts/video/kiosk-signin` | Server-side Quick Connect for the chosen user, inject the session into the kiosk (CDP), pin `BOOMBOX_JELLYFIN_DEVICE_ID=<BOOMBOX_ID>-kiosk`; revokes the device if injection fails |
+| `POST /api/accounts/video/kiosk-signout` | Revoke the kiosk device and clear its browser session |
+| `GET` / `PUT /api/accounts/streaming` | AirPlay name/password, Spotify Connect name (`Not installed` when raspotify is absent) |
+| `PUT /api/accounts/web-login` | Change the 8090 / Samba password (10–128 printable chars); rolls back htpasswd + `web-auth.env` if any step fails |
+
+Auth rules:
+
+- nginx forwards `X-Boombox-User: $remote_user`, `X-Real-IP: $remote_addr`
+  and `X-Boombox-Host: $http_host`, and strips `Authorization`.
+- A request is accepted only if `X-Boombox-User` is non-empty **and**
+  `X-Real-IP` is not loopback (`127.0.0.1`, `::1`, `localhost`; missing
+  counts as loopback). The loopback check is what refuses the kiosk — a page
+  open in the kiosk can send its own Basic credentials, so the user header
+  alone is not a gate.
+- Mutations (POST/PUT/PATCH/DELETE) need `Content-Type: application/json`
+  and, when `Origin` is present, its host:port must equal `X-Boombox-Host`.
+- Secrets are write-only: no response carries a password, API key or token,
+  and none are logged. Upstream failures come back as an error message
+  (400/502) or a card status, never a 500.
+
 ### `boombox-library` — Navidrome catalog sync + USB offline cache
 
 **Listens on `127.0.0.1:6687`, proxied as `/api/library/` by nginx.**
