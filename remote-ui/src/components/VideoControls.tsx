@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useApi, apiErrorMessage } from "../lib/api";
 import { useRemote } from "../state/store";
 import { clock, type VideoState } from "../lib/video";
@@ -24,14 +24,47 @@ export function VideoControls({ pollMs = 2000 }: { pollMs?: number }) {
   const [scrub, setScrub] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const s = await api.get<VideoState>("api/remote/video/state");
-      setSt(s);
-      setPos(s.position_s ?? 0);
-    } catch {
-      /* keep the last state; the next poll retries */
+  // /video/state can take up to 15 s, so refreshes are single-flight: while
+  // one is in flight, further requests (poll or post-command) just mark it
+  // dirty and exactly one follow-up runs after it settles. `gen` is bumped
+  // by every command; an answer to a request started under an older gen is
+  // stale (e.g. from before a seek) and is dropped instead of snapping the
+  // clock/scrubber back.
+  const inflight = useRef<Promise<void> | null>(null);
+  const dirty = useRef(false);
+  const gen = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  const refresh = useCallback((): Promise<void> => {
+    if (inflight.current) {
+      dirty.current = true;
+      return inflight.current;
     }
+    const run = async () => {
+      try {
+        do {
+          dirty.current = false;
+          const started = gen.current;
+          try {
+            const s = await api.get<VideoState>("api/remote/video/state");
+            if (started === gen.current && mounted.current) {
+              setSt(s);
+              setPos(s.position_s ?? 0);
+            }
+          } catch {
+            /* keep the last state; the next poll retries */
+          }
+        } while (dirty.current && mounted.current);
+      } finally {
+        inflight.current = null;
+      }
+    };
+    inflight.current = run();
+    return inflight.current;
   }, [api]);
 
   useEffect(() => {
@@ -57,12 +90,14 @@ export function VideoControls({ pollMs = 2000 }: { pollMs?: number }) {
 
   const send = async (action: string, value?: number) => {
     setError(null);
+    gen.current += 1;  // state requested before this command is now stale
     try {
       await api.post("api/remote/video/command",
         value === undefined ? { action } : { action, value });
     } catch (e) {
       setError(apiErrorMessage(e, "The boombox didn't take that"));
     }
+    gen.current += 1;  // …and so is anything requested while it was being applied
     void refresh();
   };
   const dur = st.duration_s ?? 0;

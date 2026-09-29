@@ -129,4 +129,55 @@ describe("VideoControls", () => {
     await new Promise((r) => setTimeout(r, 60));
     expect(get.mock.calls.length).toBe(calls);     // stopped after unmount
   });
+
+  /** get #1 resolves `first`; every later call hangs until released (in order). */
+  function gated(first: VideoState, pollMs: number) {
+    const pending: Array<(v: VideoState) => void> = [];
+    const get = vi.fn().mockImplementation(() => get.mock.calls.length === 1
+      ? Promise.resolve(first)
+      : new Promise<VideoState>((r) => { pending.push(r); }));
+    const post = vi.fn().mockResolvedValue({ ok: true });
+    const api: RemoteApi = { base: "http://pi/", get, post, uploadFiles: vi.fn() };
+    render(
+      <ApiProvider api={api}>
+        <RemoteContextHarness state={REMOTE} command={vi.fn()}>
+          <VideoControls pollMs={pollMs} />
+        </RemoteContextHarness>
+      </ApiProvider>,
+    );
+    return { get, post, pending };
+  }
+
+  it("post-command refreshes are single-flight: one request, then exactly one follow-up", async () => {
+    const { get, post, pending } = gated(ACTIVE, 60_000);
+    const fwd = await screen.findByRole("button", { name: "Forward 30 seconds" });
+    fireEvent.click(fwd);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));   // refresh after seek, hangs
+    fireEvent.click(fwd);
+    fireEvent.click(fwd);
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(get).toHaveBeenCalledTimes(2);                          // no stacking while in flight
+    pending[0]({ ...ACTIVE, position_s: 102 });
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(3));   // exactly one follow-up
+    pending[1]({ ...ACTIVE, position_s: 102 });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(get).toHaveBeenCalledTimes(3);
+  });
+
+  it("a state response started before a seek never snaps the position back", async () => {
+    const { get, post, pending } = gated(ACTIVE, 10);
+    await screen.findByText("0:12 / 14:48");
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));   // poll in flight (stale)
+    fireEvent.click(screen.getByRole("button", { name: "Forward 30 seconds" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(
+      "api/remote/video/command", { action: "seek", value: 42 }));
+    expect(screen.getByText("0:42 / 14:48")).toBeTruthy();
+    pending[0]({ ...ACTIVE, position_s: 12 });                     // old answer arrives late
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(3));   // fresh follow-up
+    expect(screen.getByText("0:42 / 14:48")).toBeTruthy();
+    expect((screen.getByLabelText("Position") as HTMLInputElement).value).toBe("42");
+    pending[1]({ ...ACTIVE, position_s: 43 });
+    expect(await screen.findByText("0:43 / 14:48")).toBeTruthy();
+  });
 });
