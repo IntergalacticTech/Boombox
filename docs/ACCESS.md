@@ -12,11 +12,29 @@ The physical touchscreen is the trusted local device. Chromium loads
 `http://localhost/` through nginx on loopback port 80 and does **not** need a
 password.
 
-Anything from the LAN uses nginx's authenticated web port, default `8090`:
+Anything from the LAN uses nginx's web port, default `8090`
+(`BOOMBOX_WEB_PORT` in `/etc/boombox/web-auth.env`):
 
 ```text
 http://<pi-ip>:8090/
 ```
+
+nginx runs two server blocks. The loopback `:80` server is the kiosk's
+(`/` = the touchscreen UI). The LAN `:8090` server serves the **LAN app**
+at `/` (phone + desktop) with `auth_basic off`, because the app carries its
+own two tiers of auth:
+
+- **Household** — pair once with the 6-digit PIN shown on the touchscreen;
+  the browser keeps a bearer token for `/api/remote/*` (see below).
+- **Admin** — Admin → Accounts asks for the boombox web password (below)
+  and gets an admin session (`POST /api/accounts/session`): 12 h idle
+  expiry, 5 wrong passwords in 5 minutes lock logins for 5 minutes, and it
+  is refused from the kiosk (loopback) even with the right password.
+
+Old addresses redirect: `/remote/*` → `/?from=remote` (the app shows a
+one-time "moved" hint, and an installed old PWA's service worker is
+replaced by one that unregisters itself) and `/accounts/*` → `/#/accounts`.
+Everything else on `:8090` (e.g. `/mopidy/`, `/local/`) keeps Basic auth.
 
 The installer generates one static remote credential and stores it in:
 
@@ -25,25 +43,27 @@ sudo cat /etc/boombox/web-auth.env
 ```
 
 The touchscreen Settings drawer shows this web login. The same password is
-used for the SMB share. One exception: the `/api/remote/` path has
-`auth_basic off` in the nginx config — the remote API carries its own bearer
-tokens, so phones go straight to the token handshake instead of hitting the
-Basic-auth modal first.
+used for the SMB share and unlocks Admin in the LAN app. The app, its
+bundles, the redirects, `/api/remote/` and `/api/accounts/` have
+`auth_basic off` in the nginx config — those APIs carry their own bearer
+tokens, so phones and desktops go straight to pairing / the Admin lock
+instead of hitting the Basic-auth modal first.
 
 ## Remote access — the `boombox-remote` API
 
 `boombox-remote` is the single phone-facing backend. It's a boot-enabled
 user service on `127.0.0.1:6685`, proxied as `/api/remote/` by nginx. It
-serves the CYD hardware remote (over BLE and HTTP), the phone web app at
-`/remote/`, and any other HTTP client on the LAN.
+serves the CYD hardware remote (over BLE and HTTP), the LAN app at `/`,
+and any other HTTP client on the LAN.
 
 > **What's real today.** Phase 1 delivered the consolidated *API*, the
 > enable toggle, and PIN pairing. Phase 2A added the installable phone
 > web app: an offline-capable PWA served by nginx at
-> `http://<pi-ip>:8090/remote/` — the same URL the touchscreen's web-QR
-> overlay encodes. Open it on a phone, redeem the PIN displayed on the
-> touchscreen, and you get a Now Playing screen with transport controls
-> (play/pause/next/previous/stop, shuffle, mute, volume) themed to match
+> `http://<pi-ip>:8090/` (the touchscreen's web-QR overlay still encodes the
+> old `/remote/` address, which redirects there). Open it on a phone,
+> redeem the PIN displayed on the touchscreen, and you get a Now Playing
+> screen with transport controls (play/pause/next/previous/stop, shuffle,
+> mute, volume) themed to match
 > the active skin. Use the browser's **Add to Home Screen** to install it
 > as a standalone app. The next phase adds the remaining screens
 > (sources, video, playlists, file browser, extras) and a Web Bluetooth

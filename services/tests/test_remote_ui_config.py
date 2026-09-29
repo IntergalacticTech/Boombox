@@ -37,3 +37,12 @@ def test_service_worker_never_hijacks_other_paths():
     for path in ("/", "/index.html", "/settings", "/apis", "/audiobooks", "/localhost",
                  "/remotes", "/mopidyx", "/setups"):
         assert not deny.match(path), path
+
+
+def test_legacy_remote_sw_unregisters_itself():
+    sw = (ROOT / "remote-ui" / "public" / "legacy-remote-sw.js").read_text()
+    assert "self.skipWaiting()" in sw
+    assert "self.registration.unregister()" in sw
+    assert 'client.navigate("/?from=remote")' in sw
+    # Only the old app's caches go; the new root-scoped app's precache stays.
+    assert 'key.includes("/remote/")' in sw

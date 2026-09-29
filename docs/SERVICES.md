@@ -298,8 +298,8 @@ on boombox-state, which signals wvkbd.
 (`auth_basic off`). Boot-enabled.**
 
 The single phone-facing backend: the HTTP/WS API for the CYD hardware
-remote, the phone web app at `/remote/`, and any other HTTP client on the
-LAN. It exposes consolidated state, a command endpoint, a push-on-change
+remote, the LAN app at `/` on the LAN port (phone + desktop), and any
+other HTTP client on the LAN. It exposes consolidated state, a command endpoint, a push-on-change
 WebSocket, resized album art, a file surface (browse / download / upload /
 delete), a library/playlist/queue surface over Mopidy, and a Jellyfin
 video-transport proxy. Commands flow through the shared `actions.fire()`
@@ -307,10 +307,12 @@ dispatcher, so GPIO buttons and remotes share one code path. A BLE
 peripheral runs alongside the HTTP server as the primary transport for the
 CYD hardware remote.
 
-The PWA itself is a separate static bundle, not part of this service: nginx
-serves it from `current/remote-ui/dist/` at the `/remote/` location, built
-in place by `install.sh` / `apply-release.sh` (same pattern as the kiosk
-SPA). The bundle talks to `/api/remote/` here, optionally over a BLE
+The PWA itself is a separate static bundle, not part of this service:
+nginx's LAN server block serves it from `current/remote-ui/dist/` at `/`
+(bundles under `/app-assets/`; `/remote/*` redirects to `/?from=remote`,
+`/accounts/*` to `/#/accounts`); the kiosk's loopback server keeps the
+kiosk UI at `/`. It is built in place by `install.sh` /
+`apply-release.sh` (same pattern as the kiosk SPA). The bundle talks to `/api/remote/` here, optionally over a BLE
 GATT transport for off-network Android phones.
 
 | Endpoint | Used by |
@@ -332,7 +334,14 @@ GATT transport for off-network Android phones.
 | `GET  /api/remote/playlists`, `POST /api/remote/playlists` | Bearer: list / create M3U playlists |
 | `GET  /api/remote/playlists/{uri}/items` | Bearer: track URIs in a playlist |
 | `POST /api/remote/queue` | Bearer: replace the tracklist and (optionally) play |
-| `GET  /api/remote/video/state`, `POST /api/remote/video/command` | Bearer: Jellyfin video-transport proxy |
+| `GET  /api/remote/video/state`, `POST /api/remote/video/command` | Bearer: Jellyfin transport — state has audio/subtitle streams + indexes; commands `play_pause`, `stop`, `seek`, `volume`, `mute`, `set_audio`, `set_subtitle` (-1 = off) |
+| `GET  /api/remote/home/browse?type=artists\|albums\|playlists` | Bearer: Home Library lists (boombox-library pass-through, ETag kept) |
+| `GET  /api/remote/home/search?q=`, `GET /api/remote/home/{artist\|album\|playlist}/{id}` | Bearer: Home Library search / drill-down |
+| `GET  /api/remote/home/art/{art_id}?size=` | Bearer: cover art via the library art proxy |
+| `POST /api/remote/home/play` | Bearer: `{ids, mode: play\|queue}` → resolve, drop offline misses, first track now + rest in background chunks |
+| `GET  /api/remote/video/views`, `/resume`, `/items?parent_id=&type=&search=&start=&limit=` | Bearer: Jellyfin browse as the kiosk's signed-in user (API key server-side only) |
+| `GET  /api/remote/video/image/{id}?max_width=` | Bearer: poster, cached on disk |
+| `POST /api/remote/video/play` | Bearer: `{item_id, start_ticks?}` → WATCH the kiosk if needed, wait ≤ 20 s for its session, PlayNow |
 
 **The `remote_enabled` flag.** The phone-facing surface is gated by a
 single on/off flag, **default off**, persisted in
@@ -416,16 +425,32 @@ reference — see [ACCESS.md](./ACCESS.md).
 
 **Listens on `127.0.0.1:6689`, proxied by nginx as `/api/setup/`
 (`auth_basic off`; the wizard's own token/code gate) and `/api/accounts/`
-(keeps the LAN Basic auth). Boot-enabled.**
+(`auth_basic off`; admin-session gated). Boot-enabled.**
 
-Backend for the first-run setup wizard (`/setup/`) and the LAN **Accounts**
-page (`http://<boombox>:8090/accounts/`, served from the `setup-ui` build).
+Backend for the first-run setup wizard (`/setup/`) and **Admin → Accounts**
+in the LAN app (`http://<boombox>:8090/#/accounts`).
 Privileged writes go through the `boombox-setup-apply` helper via `sudo -n`.
+
+The same root helper also owns the nginx config: its `nginx-sync` action
+(called by `apply-release.sh` on every swap / revert) renders the active
+release's site file with the port from the root-owned
+`/etc/boombox/web-auth.env`, installs it **together with** the shared
+snippet, runs `nginx -t` and restores both previous files on failure. It
+only installs allow-listed directives from regular files. The helper is
+root-owned and refreshed only by `install.sh`, so **a device must reinstall
+`/usr/local/sbin/boombox-setup-apply` before its first OTA to this
+release** (`sudo install -m 0755 -o root -g root
+/opt/boombox/current/install/bin/boombox-setup-apply /usr/local/sbin/`,
+or re-run `install.sh`). With an old helper the sync is skipped, the
+release's LAN-app check fails and the updater rolls back — the kiosk keeps
+working either way.
 
 Accounts routes (`services/boombox_setup/accounts.py`):
 
 | Method + path | What it does |
 |---|---|
+| `POST /api/accounts/session` | `{password}` → `{token, expires_at}`; the web password from `web-auth.env`; 5 failures in 5 min lock logins for 5 min; refused from loopback |
+| `DELETE /api/accounts/session` | Log out (forget the token) |
 | `GET /api/accounts/summary` | Per-card state (`ok` / `unset` / `problem`) for the page header |
 | `GET` / `PUT /api/accounts/music` | Navidrome URL / user / password (blank password keeps the stored one only for the same server) + sync status |
 | `POST /api/accounts/music/test` | Try the credentials without saving |
@@ -439,18 +464,19 @@ Accounts routes (`services/boombox_setup/accounts.py`):
 
 Auth rules:
 
-- nginx forwards `X-Boombox-User: $remote_user`, `X-Real-IP: $remote_addr`
-  and `X-Boombox-Host: $http_host`, and strips `Authorization`.
-- A request is accepted only if `X-Boombox-User` is non-empty **and**
-  `X-Real-IP` is not loopback (`127.0.0.1`, `::1`, `localhost`; missing
-  counts as loopback). The loopback check is what refuses the kiosk — a page
-  open in the kiosk can send its own Basic credentials, so the user header
-  alone is not a gate.
+- nginx forwards `X-Real-IP: $remote_addr` and `X-Boombox-Host: $http_host`
+  and passes `Authorization` through (it carries the admin token).
+- Every request must come from a non-loopback `X-Real-IP` (`127.0.0.1`,
+  `::1`, `localhost`; missing counts as loopback) — the kiosk can never log
+  in or use a token. All routes but `/session` also need
+  `Authorization: Bearer <admin token>`: 32 random bytes, in memory only
+  (a service restart logs everyone out), 12 h idle expiry refreshed on use.
 - Mutations (POST/PUT/PATCH/DELETE) need `Content-Type: application/json`
   and, when `Origin` is present, its host:port must equal `X-Boombox-Host`.
-- Secrets are write-only: no response carries a password, API key or token,
-  and none are logged. Upstream failures come back as an error message
-  (400/502) or a card status, never a 500.
+- Every login attempt is logged with the client IP and outcome, never the
+  password. Secrets are write-only: no response carries a password, API key
+  or token (other than a fresh admin token), and none are logged. Upstream
+  failures come back as an error message (400/502) or a card status, never a 500.
 
 ### `boombox-library` — Navidrome catalog sync + USB offline cache
 

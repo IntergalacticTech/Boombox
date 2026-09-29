@@ -27,7 +27,7 @@ visualizer, and keeps the kiosk pinned to its UI.
                                                           ├─ /api/update/*    → 6686
                                                           ├─ /api/library/*   → 6687
                                                           ├─ /api/rfid/*      → 6688
-                                                          ├─ /remote/   (PWA — no auth)
+                                                          ├─ / on :8090 (LAN app — pairing)
                                                           └─ LAN :8090 requires auth
 ```
 
@@ -58,8 +58,9 @@ visualizer, and keeps the kiosk pinned to its UI.
 3. After reboot, Chromium launches in kiosk mode and shows the boombox UI.
    Audio is routed through the HiFiBerry DAC.
 4. Later account changes (music/video servers, kiosk Jellyfin sign-in,
-   AirPlay/Spotify names, the web password) live on the LAN Accounts page:
-   [`http://<boombox>:8090/accounts/`](docs/SERVICES.md#boombox-setup--first-run-wizard--lan-accounts-api).
+   AirPlay/Spotify names, the web password) live in the LAN app under Admin → Accounts:
+   [`http://<boombox>:8090/#/accounts`](docs/SERVICES.md#boombox-setup--first-run-wizard--lan-accounts-api)
+   (unlock with the boombox web password).
 
 The installer is idempotent: re-running it picks up changes to configs,
 systemd units, and the UI build.

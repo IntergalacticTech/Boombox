@@ -8,6 +8,7 @@ import { Pairing as PairingScreen } from "./screens/Pairing";
 import { AppShell } from "./components/AppShell";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { InstallBanner } from "./components/InstallBanner";
+import { MovedHint } from "./components/MovedHint";
 
 /** Where the API lives. Served by a boombox, the app always talks to its own
  *  origin (same-origin: no CORS, and an IP-vs-.local choice made at pairing
@@ -86,7 +87,7 @@ function Remote({ base, onUnpair }: { base: string; onUnpair: () => void }) {
   );
 }
 
-export default function App() {
+function Main() {
   const [pairing, setPairing] = useState<Pairing | null>(() => loadPairing());
   // Any API call answering 401 = this device was unpaired on the boombox.
   const [revoked, setRevoked] = useState(false);
@@ -133,3 +134,12 @@ const linkBtn: React.CSSProperties = {
   border: "1px solid var(--rule)", background: "var(--panel)",
   color: "var(--ink)", fontSize: 15, cursor: "pointer",
 };
+
+export default function App() {
+  return (
+    <>
+      <MovedHint />
+      <Main />
+    </>
+  );
+}
