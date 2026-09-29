@@ -20,13 +20,16 @@ from pathlib import Path
 from aiohttp import web
 from boombox_library import __version__
 from boombox_library.api import build_app
+from boombox_library.art import close_shared_session
 from boombox_library.cache_drive import (
     DEFAULT_SYMLINK,
     CacheDriveState,
     adopt_drive,
     detect_cache_drive,
     list_candidate_drives,
+    mark_rows_missing,
     remove_symlink,
+    restore_missing_rows,
     update_symlink,
 )
 from boombox_library.catalog import sync_full
@@ -60,7 +63,21 @@ ART_CACHE_DIR = Path("/opt/boombox/state/art-cache")
 SNAPSHOT_DIR = Path("/opt/boombox/state/snapshots")
 MOPIDY_CONF = Path("/etc/mopidy/mopidy.conf")
 CACHE_POLL_SECONDS = 5
+# After a failed ping/sync, retry after 60 s, 120 s, 240 s, … capped at the
+# configured sync interval; the first success resets to the normal cadence.
+# A remote homelab behind Cloudflare blips far more often than a LAN NAS,
+# and waiting a full hour to notice it's back leaves the kiosk "offline".
+SYNC_RETRY_BASE_SECONDS = 60
 PORT = 6687
+
+
+def retry_delay(failures: int, interval: float,
+                base: float = SYNC_RETRY_BASE_SECONDS) -> float:
+    """Seconds until the next sync attempt after `failures` consecutive
+    failures (0 = last attempt succeeded → the regular interval)."""
+    if failures <= 0:
+        return interval
+    return min(base * 2 ** min(failures - 1, 16), interval)
 
 
 class ServiceContext:
@@ -80,6 +97,8 @@ class ServiceContext:
         # Phase 2: surfaced through /api/library/health for the UI's SyncIndicator
         self.last_sync_ts: float = 0.0
         self.syncing: bool = False
+        # cache_poll's one-time startup check of cache_state vs. the drive
+        self._cache_rows_checked = False
         self._load_sidecar_if_present()
 
     # ----- helpers exposed to api.py -----
@@ -172,10 +191,17 @@ class ServiceContext:
         )
 
     # ----- background loops -----
-    async def _sync_once(self) -> None:
+    async def _sync_once(self) -> bool:
+        """One ping + full sync. Returns True on success (or nothing to do).
+
+        Never raises (other than cancellation): it runs as a bare task, so an
+        escaping exception would vanish as "Task exception was never
+        retrieved" — and, worse, leave _online stuck at its previous value.
+        Any ping failure, of any type, reports the source offline.
+        """
         if not self.cfg.source.url:
             log.info("no source configured; skipping sync")
-            return
+            return True
         self.syncing = True
         try:
             async with SubsonicClient(self.cfg.source.url,
@@ -183,11 +209,11 @@ class ServiceContext:
                                       self.cfg.source.password) as client:
                 try:
                     await client.ping()
-                    self._online = True
-                except (SubsonicAuthError, SubsonicUnreachable) as e:
-                    log.warning("ping failed: %s", e)
+                except Exception as e:
+                    log.warning("ping failed: %s: %s", type(e).__name__, e)
                     self._online = False
-                    return
+                    return False
+                self._online = True
                 try:
                     t0 = time.monotonic()
                     counts = await sync_full(client, self.conn)
@@ -206,27 +232,49 @@ class ServiceContext:
                         log.exception("snapshot write failed; "
                                       "browse will fall back to SQLite")
                     self.last_sync_ts = time.time()
+                    return True
+                except SubsonicUnreachable as e:
+                    # The link dropped mid-sync (timeout, Cloudflare page).
+                    log.warning("sync aborted, source unreachable: %s", e)
+                    self._online = False
+                    return False
                 except Exception as e:
                     log.exception("sync failed: %s", e)
+                    return False
+        except Exception:
+            # Client setup/teardown itself failed — treat as unreachable.
+            log.exception("sync client failed")
+            self._online = False
+            return False
         finally:
             self.syncing = False
 
+    async def _sync_cycle(self) -> bool:
+        """Start a sync (or join the one already running) and wait for it."""
+        await self.trigger_sync()
+        task = self._sync_task
+        if task is None:
+            return True
+        return await task
+
     async def sync_timer(self) -> None:
-        # First-boot immediate sync
-        try:
-            await self.trigger_sync()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("initial sync trigger failed")
+        """First-boot immediate sync, then every interval_seconds — or
+        sooner, with exponential backoff, while the source is failing."""
+        failures = 0
         while True:
-            await asyncio.sleep(self.cfg.sync.interval_seconds)
+            ok = False
             try:
-                await self.trigger_sync()
+                ok = await self._sync_cycle()
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("periodic sync trigger failed; will retry")
+                log.exception("sync cycle failed; will retry")
+            failures = 0 if ok else failures + 1
+            delay = retry_delay(failures, self.cfg.sync.interval_seconds)
+            if failures:
+                log.info("sync failed %d time(s) in a row; retrying in %ds",
+                         failures, delay)
+            await asyncio.sleep(delay)
 
     async def cache_poll(self) -> None:
         while True:
@@ -240,12 +288,24 @@ class ServiceContext:
                     if new_state.present and new_state.mount_path:
                         log.info("cache drive present at %s", new_state.mount_path)
                         update_symlink(DEFAULT_SYMLINK, new_state.mount_path)
+                        self._reconcile_cache_rows(new_state.mount_path)
                         self._init_download_queue(new_state.mount_path)
                         self._load_sidecar_if_present()
                     else:
+                        lost = self.cache_state.mount_path
                         log.warning("cache drive lost")
                         remove_symlink(DEFAULT_SYMLINK)
                         self._download_queue = None
+                        if lost is not None:
+                            n = mark_rows_missing(self.conn, lost)
+                            if n:
+                                log.info("marked %d cached tracks missing "
+                                         "(drive gone; kept for re-adopt)", n)
+                elif not new_state.present and not self._cache_rows_checked:
+                    # Started without a drive: rows from the last run may
+                    # still say 'present' with paths on the absent drive.
+                    self._reconcile_cache_rows(None)
+                self._cache_rows_checked = True
                 self.cache_state = new_state
             except asyncio.CancelledError:
                 raise  # Always re-raise CancelledError so shutdown works
@@ -254,6 +314,16 @@ class ServiceContext:
             await asyncio.sleep(CACHE_POLL_SECONDS)
 
     # ----- internals -----
+    def _reconcile_cache_rows(self, mount: Path | None) -> None:
+        """Bring cache_state in line with the drive actually mounted (see
+        cache_drive's module docstring): 'present' rows whose file is gone
+        become 'missing'; with a drive, 'missing' rows found on it return."""
+        gone = mark_rows_missing(self.conn, None)
+        back = restore_missing_rows(self.conn, mount) if mount else 0
+        if gone or back:
+            log.info("cache_state reconciled: %d missing, %d restored",
+                     gone, back)
+
     def _init_download_queue(self, mount: Path) -> None:
         if not self.cfg.source.url:
             return
@@ -320,6 +390,7 @@ async def amain() -> None:
     sync_task.cancel()
     cache_task.cancel()
     await runner.cleanup()
+    await close_shared_session()
 
 
 if __name__ == "__main__":

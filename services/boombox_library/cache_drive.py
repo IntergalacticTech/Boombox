@@ -6,8 +6,18 @@ the configured search paths (default /media) and adopts the first
 matching mount, creating the required subdirs and updating a stable
 symlink so Mopidy-Local can always read from /opt/boombox/cache-mount/audio.
 
-This module is filesystem-side only — async behavior (poll loop) lives
+This module is filesystem-side (plus the cache_state bookkeeping that
+follows the drive coming and going) — async behavior (poll loop) lives
 in the service entry point.
+
+Drive loss: cache_state rows are NOT deleted when the drive vanishes —
+the files are usually fine, just unplugged. Instead every 'present' row
+on the lost drive is flipped to status 'missing' (local_path kept), so
+the resolver, which only plays status='present', never hands Mopidy a
+file:// path on a drive that isn't there, and pinned tracks are
+re-downloaded if a different drive is adopted. When a drive is adopted
+again, 'missing' rows whose file exists (same path, or the same
+audio/<file> on a drive remounted at a new path) go back to 'present'.
 """
 from __future__ import annotations
 
@@ -15,12 +25,17 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from sqlite3 import Connection
 from typing import Iterable, Optional
 
 log = logging.getLogger("boombox-library.cache_drive")
 
 DEFAULT_SYMLINK = Path("/opt/boombox/cache-mount")
 _REQUIRED_SUBDIRS = ("audio", "meta", "tmp")
+
+# cache_state.status for a row whose file lives on a cache drive that is
+# not currently mounted. Never played; restored by restore_missing_rows().
+STATUS_MISSING = "missing"
 
 
 @dataclass(frozen=True)
@@ -145,3 +160,70 @@ def list_candidate_drives(
                 "total_bytes": total,
             })
     return out
+
+
+def _is_under(path: str, root: Path) -> bool:
+    prefix = str(root).rstrip("/") + "/"
+    return path.startswith(prefix)
+
+
+def mark_rows_missing(conn: Connection, lost_mount: Optional[Path]) -> int:
+    """Flip 'present' cache_state rows whose file is gone to 'missing'.
+
+    With `lost_mount` (the drive just vanished) every present row under
+    that mount is flipped without touching the filesystem — a yanked USB
+    mountpoint can stall or error on stat. Without it (startup with no
+    drive attached) each present row is checked for its file instead.
+    Returns the number of rows flipped.
+    """
+    rows = list(conn.execute(
+        "SELECT track_id, local_path FROM cache_state WHERE status='present'"
+    ))
+    gone: list[str] = []
+    for r in rows:
+        path = r["local_path"]
+        if lost_mount is not None:
+            if path and _is_under(path, lost_mount):
+                gone.append(r["track_id"])
+        elif not path or not os.path.exists(path):
+            gone.append(r["track_id"])
+    if gone:
+        conn.executemany(
+            "UPDATE cache_state SET status=? WHERE track_id=? AND status='present'",
+            ((STATUS_MISSING, tid) for tid in gone),
+        )
+    return len(gone)
+
+
+def restore_missing_rows(conn: Connection, mount: Path) -> int:
+    """Re-adopt 'missing' rows whose file is present on `mount`.
+
+    Tries the recorded path first (same drive, same mountpoint), then
+    `mount/audio/<basename>` (same drive, remounted elsewhere). Rows whose
+    file isn't found stay 'missing'. Returns the number restored.
+    """
+    rows = list(conn.execute(
+        "SELECT track_id, local_path FROM cache_state WHERE status=?",
+        (STATUS_MISSING,),
+    ))
+    restored = 0
+    for r in rows:
+        path = r["local_path"]
+        if not path:
+            continue
+        candidates = [Path(path), mount / "audio" / Path(path).name]
+        for c in candidates:
+            if not _is_under(str(c), mount):
+                continue
+            try:
+                size = c.stat().st_size
+            except OSError:
+                continue
+            conn.execute(
+                "UPDATE cache_state SET status='present', local_path=?, "
+                "size_bytes=? WHERE track_id=? AND status=?",
+                (str(c), size, r["track_id"], STATUS_MISSING),
+            )
+            restored += 1
+            break
+    return restored

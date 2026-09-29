@@ -290,3 +290,128 @@ async def test_sync_full_yields_to_the_loop_during_album_pages(tmp_path: Path):
     t.cancel()
     # Artists (300) + albums (500) = at least 8 chunk boundaries of 100.
     assert ticks - before >= 8
+
+
+# ---- prune guard ----
+
+def _many_albums(n: int) -> tuple[list[dict], dict]:
+    albums = [{"id": f"al{i}", "name": f"A{i}", "artistId": "ar1",
+               "songCount": 1, "duration": 30} for i in range(n)]
+    tracks = {f"al{i}": [{"id": f"t{i}", "title": f"T{i}", "duration": 30,
+                          "suffix": "mp3", "size": 1,
+                          "contentType": "audio/mpeg"}]
+              for i in range(n)}
+    return albums, tracks
+
+
+@pytest.mark.asyncio
+async def test_sync_full_refuses_mass_prune(tmp_path: Path, caplog):
+    """A truncated listing (flaky remote, server rescan) that would reap
+    >10% AND >50 albums is skipped with a WARNING — nothing is deleted."""
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    albums, tracks = _many_albums(200)
+    client = FakeSubsonic(
+        artists=[{"id": "ar1", "name": "X", "albumCount": 200}],
+        albums=albums, tracks_per_album=tracks,
+    )
+    await sync_full(client, db)
+    assert db.execute("SELECT COUNT(*) FROM albums").fetchone()[0] == 200
+
+    client._albums = albums[:100]  # half the catalog vanishes
+    with caplog.at_level("WARNING", logger="boombox-library.catalog"):
+        await sync_full(client, db)
+    assert db.execute("SELECT COUNT(*) FROM albums").fetchone()[0] == 200
+    assert db.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 200
+    assert any("refusing to prune" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_sync_full_prunes_large_fraction_when_under_absolute_floor(tmp_path: Path):
+    """A big fraction of a small library (<= 50 albums) still prunes."""
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    albums, tracks = _many_albums(60)
+    client = FakeSubsonic(
+        artists=[{"id": "ar1", "name": "X", "albumCount": 60}],
+        albums=albums, tracks_per_album=tracks,
+    )
+    await sync_full(client, db)
+    client._albums = albums[:20]  # 40 removed: 66% but only 40 albums
+    await sync_full(client, db)
+    assert db.execute("SELECT COUNT(*) FROM albums").fetchone()[0] == 20
+
+
+@pytest.mark.asyncio
+async def test_sync_full_prunes_many_albums_under_fraction(tmp_path: Path):
+    """>50 removed but <=10% of the library is a real delete — prune."""
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    albums, tracks = _many_albums(1000)
+    client = FakeSubsonic(
+        artists=[{"id": "ar1", "name": "X", "albumCount": 1000}],
+        albums=albums, tracks_per_album=tracks,
+    )
+    await sync_full(client, db)
+    client._albums = albums[:920]  # 80 removed = 8%
+    await sync_full(client, db)
+    assert db.execute("SELECT COUNT(*) FROM albums").fetchone()[0] == 920
+
+
+# ---- starred refresh ----
+
+@pytest.mark.asyncio
+async def test_sync_full_picks_up_star_and_unstar_on_unchanged_albums(tmp_path: Path):
+    """Albums whose track count didn't change skip the upsert path; the
+    starred flags must still follow getStarred2 every sync."""
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    albums, tracks = _many_albums(3)
+    client = FakeSubsonic(
+        artists=[{"id": "ar1", "name": "X", "albumCount": 3}],
+        albums=albums, tracks_per_album=tracks,
+        starred={"album": [{"id": "al0"}], "song": [{"id": "t0"}], "artist": []},
+    )
+    await sync_full(client, db)
+
+    def starred(table):
+        return {r[0] for r in db.execute(
+            f"SELECT id FROM {table} WHERE navidrome_starred=1")}
+
+    assert starred("albums") == {"al0"}
+    assert starred("tracks") == {"t0"}
+
+    # Star al1/t2, unstar al0/t0 upstream — no track-count change anywhere.
+    client._starred = {"album": [{"id": "al1"}], "song": [{"id": "t2"}],
+                       "artist": []}
+    await sync_full(client, db)
+    assert starred("albums") == {"al1"}
+    assert starred("tracks") == {"t2"}
+
+    # Everything unstarred.
+    client._starred = {"album": [], "song": [], "artist": []}
+    await sync_full(client, db)
+    assert starred("albums") == set()
+    assert starred("tracks") == set()
+
+
+@pytest.mark.asyncio
+async def test_starred_refresh_feeds_reconcile_starred(tmp_path: Path):
+    """End to end: unstar upstream → starred-source pin is removed."""
+    from boombox_library.pins import reconcile_starred
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    albums, tracks = _many_albums(2)
+    client = FakeSubsonic(
+        artists=[{"id": "ar1", "name": "X", "albumCount": 2}],
+        albums=albums, tracks_per_album=tracks,
+        starred={"album": [{"id": "al1"}], "song": [], "artist": []},
+    )
+    await sync_full(client, db)
+    reconcile_starred(db)
+    assert db.execute("SELECT COUNT(*) FROM pins WHERE source='starred'").fetchone()[0] == 1
+
+    client._starred = {"album": [], "song": [], "artist": []}
+    await sync_full(client, db)
+    reconcile_starred(db)
+    assert db.execute("SELECT COUNT(*) FROM pins WHERE source='starred'").fetchone()[0] == 0

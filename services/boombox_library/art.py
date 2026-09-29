@@ -17,6 +17,7 @@ layer and never invalidate the disk cache.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -27,6 +28,36 @@ import aiohttp
 log = logging.getLogger("boombox-library.art")
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_.\-]")
+
+# One pooled session for every upstream art fetch. A browse screen mounts
+# hundreds of rows at once; a session per request meant a fresh TCP+TLS
+# handshake to the remote (Cloudflare-fronted) server for each. Created
+# lazily on first use inside the running loop; the service closes it on
+# shutdown via close_shared_session().
+_shared_session: aiohttp.ClientSession | None = None
+
+
+def shared_session() -> aiohttp.ClientSession:
+    """Return the process-wide art session, (re)creating it if needed."""
+    global _shared_session
+    s = _shared_session
+    if s is None or s.closed or _session_loop(s) is not asyncio.get_running_loop():
+        s = aiohttp.ClientSession()
+        _shared_session = s
+    return s
+
+
+def _session_loop(s: aiohttp.ClientSession) -> asyncio.AbstractEventLoop | None:
+    # A session is bound to the loop it was created on; tests spin up a new
+    # loop per test, so a session from a finished loop must not be reused.
+    return getattr(s, "_loop", None)
+
+
+async def close_shared_session() -> None:
+    global _shared_session
+    s, _shared_session = _shared_session, None
+    if s is not None and not s.closed:
+        await s.close()
 
 
 def _safe_filename(art_id: str, size: Optional[int]) -> str:
@@ -77,22 +108,26 @@ async def fetch_art(
     url = f"{base_url.rstrip('/')}/rest/getCoverArt.view"
     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
 
-    own_session = session is None
     if session is None:
-        session = aiohttp.ClientSession(timeout=timeout)
+        session = shared_session()
     try:
         async with session.get(url, params=params, timeout=timeout) as r:
             if r.status != 200:
                 log.info("navidrome art %s -> http %d", art_id, r.status)
                 return None
+            ctype = r.headers.get("Content-Type", "")
+            if not ctype.lower().startswith("image/"):
+                # An edge proxy's HTML challenge/error page on a 200, or a
+                # JSON error envelope — never cache (or serve) it as art.
+                log.info("navidrome art %s -> non-image %r", art_id, ctype)
+                return None
             data = await r.read()
-            ctype = r.headers.get("Content-Type", "image/jpeg")
-    except aiohttp.ClientError as e:
-        log.info("navidrome art %s fetch failed: %s", art_id, e)
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+        # Timeouts arrive as a bare asyncio.TimeoutError, not a ClientError;
+        # either way the caller gets a clean miss (404), never a 500.
+        log.info("navidrome art %s fetch failed: %s", art_id,
+                 type(e).__name__ if isinstance(e, asyncio.TimeoutError) else e)
         return None
-    finally:
-        if own_session:
-            await session.close()
 
     if not data:
         return None

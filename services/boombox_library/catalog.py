@@ -19,6 +19,14 @@ log = logging.getLogger("boombox-library.catalog")
 
 _ALBUM_PAGE_SIZE = 500
 
+# Prune guard. A sync that would reap more than this fraction of the local
+# albums AND more than this many albums is treated as suspect (a truncated
+# album listing from a flaky remote, a Navidrome rescan in progress, a
+# library folder temporarily unmounted on the server) and skipped for the
+# round — the next healthy sync prunes normally. Small deltas always prune.
+PRUNE_MAX_FRACTION = 0.10
+PRUNE_MIN_ALBUMS = 50
+
 
 class SubsonicProto(Protocol):
     async def get_artists(self) -> list[dict]: ...
@@ -114,6 +122,45 @@ def _upsert_track(conn: Connection, tr: dict, album_id: str, now: float,
          1 if tr["id"] in starred_ids else 0, now),
     )
     _reindex(conn, "track", tr["id"], tr.get("title", ""), tr.get("title", ""))
+
+
+def refresh_starred(conn: Connection, album_ids: set[str],
+                    song_ids: set[str]) -> None:
+    """Rewrite navidrome_starred on every album + track from getStarred2.
+
+    The album/track upserts only run for albums whose track count changed,
+    so without this a star/unstar in Navidrome would never reach the local
+    flags (and starred_auto_pin would act on stale data). Only rows whose
+    flag actually differs are touched, so a steady-state sync writes
+    nothing. One short transaction; no awaits inside.
+    """
+    conn.execute("BEGIN")
+    try:
+        for table, ids in (("albums", album_ids), ("tracks", song_ids)):
+            tmp = f"_starred_{table}"
+            conn.execute(f"CREATE TEMP TABLE IF NOT EXISTS {tmp} "
+                         "(id TEXT PRIMARY KEY)")
+            conn.execute(f"DELETE FROM {tmp}")
+            conn.executemany(f"INSERT OR IGNORE INTO {tmp}(id) VALUES (?)",
+                             ((i,) for i in ids))
+            conn.execute(
+                f"UPDATE {table} SET navidrome_starred=1 "
+                f"WHERE navidrome_starred=0 AND id IN (SELECT id FROM {tmp})")
+            conn.execute(
+                f"UPDATE {table} SET navidrome_starred=0 "
+                f"WHERE navidrome_starred=1 AND id NOT IN (SELECT id FROM {tmp})")
+        conn.execute("COMMIT")
+    except Exception:
+        try: conn.execute("ROLLBACK")
+        except Exception: pass
+        raise
+
+
+def _prune_is_safe(existing: int, removing: int) -> bool:
+    """False when a prune looks like a truncated listing, not real deletes."""
+    if removing <= PRUNE_MIN_ALBUMS:
+        return True
+    return removing <= existing * PRUNE_MAX_FRACTION
 
 
 def _upsert_playlist(conn: Connection, pl: dict, now: float) -> None:
@@ -233,6 +280,10 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
             except Exception: pass
             raise
 
+    # Starred flags: the per-album upserts above skip unchanged albums, so
+    # re-derive every flag from the getStarred2 result fetched up front.
+    refresh_starred(conn, starred_album_ids, starred_song_ids)
+
     # Playlists: HTTP then short txn.
     playlists = await client.get_playlists()
     conn.execute("BEGIN")
@@ -269,7 +320,8 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
     # Tracks cascade via the FK. Only run after we've walked the full
     # source-of-truth list — if the walk above raised, the whole
     # sync_full caller catches it and we never reach here, so a partial
-    # walk can never drive a destructive delete.
+    # walk can never drive a destructive delete. A listing that completed
+    # but came back suspiciously short is caught by _prune_is_safe.
     seen_album_ids = {aid for aid, _ in all_albums_seen}
     if seen_album_ids:
         conn.execute("BEGIN")
@@ -279,10 +331,23 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
             conn.execute("DELETE FROM _seen_albums")
             conn.executemany("INSERT INTO _seen_albums(id) VALUES (?)",
                              ((aid,) for aid in seen_album_ids))
-            cursor = conn.execute(
-                "DELETE FROM albums WHERE id NOT IN (SELECT id FROM _seen_albums)"
-            )
-            removed = cursor.rowcount or 0
+            existing = conn.execute("SELECT COUNT(*) FROM albums").fetchone()[0]
+            removing = conn.execute(
+                "SELECT COUNT(*) FROM albums "
+                "WHERE id NOT IN (SELECT id FROM _seen_albums)"
+            ).fetchone()[0]
+            removed = 0
+            if removing and not _prune_is_safe(existing, removing):
+                log.warning(
+                    "sync_full: refusing to prune %d of %d albums (> %d%% and "
+                    "> %d) — listing looks truncated; skipping prune this round",
+                    removing, existing, int(PRUNE_MAX_FRACTION * 100),
+                    PRUNE_MIN_ALBUMS)
+            elif removing:
+                cursor = conn.execute(
+                    "DELETE FROM albums WHERE id NOT IN (SELECT id FROM _seen_albums)"
+                )
+                removed = cursor.rowcount or 0
             conn.execute("COMMIT")
             if removed:
                 log.info("sync_full reaped %d removed albums", removed)

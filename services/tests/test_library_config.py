@@ -101,3 +101,65 @@ def test_save_config_fsyncs_before_rename(tmp_path: Path, monkeypatch):
     save_config(DEFAULT_CONFIG, path=tmp_path / "library.yml")
     assert len(fsync_calls) >= 1, "save_config must call os.fsync on the tmp file"
 
+def _mode(p: Path) -> int:
+    return os.stat(p).st_mode & 0o777
+
+
+def test_save_config_creates_file_0600(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("boombox_library.config._machine_id",
+                        lambda: "deadbeef" * 4)
+    old_umask = os.umask(0o022)  # a permissive umask must not widen the mode
+    try:
+        path = tmp_path / "library.yml"
+        save_config(DEFAULT_CONFIG, path=path)
+    finally:
+        os.umask(old_umask)
+    assert _mode(path) == 0o600
+    assert not (tmp_path / "library.yml.tmp").exists()
+
+
+def test_save_config_restores_0600_on_every_save(tmp_path: Path, monkeypatch):
+    """A file loosened out-of-band (or a stale world-readable .tmp) is put
+    back to 0600 by the next save."""
+    monkeypatch.setattr("boombox_library.config._machine_id",
+                        lambda: "deadbeef" * 4)
+    path = tmp_path / "library.yml"
+    save_config(DEFAULT_CONFIG, path=path)
+    os.chmod(path, 0o644)
+    stale = tmp_path / "library.yml.tmp"
+    stale.write_text("junk")
+    os.chmod(stale, 0o666)
+    save_config(DEFAULT_CONFIG, path=path)
+    assert _mode(path) == 0o600
+    assert not stale.exists()
+    assert load_config(path=path).sync.interval_seconds == 3600
+
+
+def test_max_bitrate_defaults_to_zero_and_round_trips(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("boombox_library.config._machine_id",
+                        lambda: "deadbeef" * 4)
+    assert DEFAULT_CONFIG.source.max_bitrate_kbps == 0
+    path = tmp_path / "library.yml"
+    cfg = LibraryConfig(
+        source=SourceConfig(url="https://music.example", username="u",
+                            password="p", max_bitrate_kbps=192),
+        sync=DEFAULT_CONFIG.sync,
+        cache=DEFAULT_CONFIG.cache,
+    )
+    save_config(cfg, path=path)
+    assert "max_bitrate_kbps: 192" in path.read_text()
+    loaded = load_config(path=path)
+    assert loaded.source.max_bitrate_kbps == 192
+    assert loaded.source.password == "p"
+
+
+def test_max_bitrate_missing_or_junk_parses_as_zero(tmp_path: Path):
+    path = tmp_path / "library.yml"
+    path.write_text("source:\n  url: https://music.example\n")
+    assert load_config(path=path).source.max_bitrate_kbps == 0
+    path.write_text("source:\n  max_bitrate_kbps: lots\n")
+    assert load_config(path=path).source.max_bitrate_kbps == 0
+    path.write_text("source:\n  max_bitrate_kbps: -5\n")
+    assert load_config(path=path).source.max_bitrate_kbps == 0
+    path.write_text("source:\n  max_bitrate_kbps: '320'\n")
+    assert load_config(path=path).source.max_bitrate_kbps == 320

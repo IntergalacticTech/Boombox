@@ -40,7 +40,7 @@ jobs:
             "aiohttp>=3.9" "websockets>=12.0" "numpy>=1.26" "packaging>=24.0" \
             "PyYAML>=6.0" "cryptography>=42" "zeroconf>=0.130" "Pillow>=10.0" \
             "pytest>=8.0" "pytest-asyncio>=0.23" "pytest-aiohttp>=1.0" \
-            "watchdog>=4.0" ruff mypy
+            "watchdog>=4.0" ruff mypy types-PyYAML
       - name: Ruff (lint)
         run: ruff check .
       - name: Mypy (types)
