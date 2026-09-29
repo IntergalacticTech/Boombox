@@ -409,35 +409,51 @@ def action_streaming_status(_body: dict) -> dict:
 
 
 def action_streaming(body: dict) -> dict:
-    changed: list[str] = []
     wants_airplay = any(k in body for k in
                         ("airplay_name", "airplay_password", "airplay_password_clear"))
-    if wants_airplay:
-        sp = shairport_conf_path()
-        if sp is None:
-            return {"ok": False, "error": "AirPlay (shairport-sync) is not installed"}
+    wants_spotify = "spotify_name" in body
+
+    # Pre-flight: every installed-check and every validation happens before
+    # the first write, so a rejected field never leaves a half-applied change.
+    sp = shairport_conf_path() if wants_airplay else None
+    if wants_airplay and sp is None:
+        return {"ok": False, "error": "AirPlay (shairport-sync) is not installed"}
+    if wants_spotify and not os.path.exists(RASPOTIFY_CONF):
+        return {"ok": False, "error": "Spotify Connect is not installed"}
+    airplay_name = (validate_receiver_name(body["airplay_name"])
+                    if "airplay_name" in body else None)
+    clear_pw = bool(body.get("airplay_password_clear"))
+    airplay_pw = (validate_receiver_password(body["airplay_password"])
+                  if "airplay_password" in body and not clear_pw else None)
+    spotify_name = (validate_receiver_name(body["spotify_name"])
+                    if wants_spotify else None)
+
+    sp_old = sp_new = rs_old = rs_new = ""
+    if sp is not None:
         with open(sp) as f:
-            conf = f.read()
-        new = conf
-        if "airplay_name" in body:
-            new = shairport_set(new, "name", validate_receiver_name(body["airplay_name"]))
-        if body.get("airplay_password_clear"):
-            new = shairport_set(new, "password", None)
-        elif "airplay_password" in body:
-            new = shairport_set(new, "password",
-                                validate_receiver_password(body["airplay_password"]))
-        if new != conf:
-            _atomic_write(sp, new, 0o644)
+            sp_old = f.read()
+        sp_new = sp_old
+        if airplay_name is not None:
+            sp_new = shairport_set(sp_new, "name", airplay_name)
+        if clear_pw:
+            sp_new = shairport_set(sp_new, "password", None)
+        elif airplay_pw is not None:
+            sp_new = shairport_set(sp_new, "password", airplay_pw)
+    if spotify_name is not None:
+        with open(RASPOTIFY_CONF) as f:
+            rs_old = f.read()
+        rs_new = raspotify_set_name(rs_old, spotify_name)
+
+    changed: list[str] = []
+    if sp is not None:
+        if sp_new != sp_old:
+            _atomic_write(sp, sp_new, 0o644)
             _restart_system_units(["shairport-sync"])
         changed.append("airplay")
-    if "spotify_name" in body:
-        if not os.path.exists(RASPOTIFY_CONF):
-            return {"ok": False, "error": "Spotify Connect is not installed"}
-        name = validate_receiver_name(body["spotify_name"])
-        with open(RASPOTIFY_CONF) as f:
-            conf = f.read()
-        _atomic_write(RASPOTIFY_CONF, raspotify_set_name(conf, name), 0o644)
-        _restart_system_units(["raspotify"])
+    if spotify_name is not None:
+        if rs_new != rs_old:
+            _atomic_write(RASPOTIFY_CONF, rs_new, 0o644)
+            _restart_system_units(["raspotify"])
         changed.append("spotify")
     return {"ok": True, "changed": changed}
 
@@ -714,8 +730,6 @@ def action_jellyfin(body: dict) -> dict:
             if not isinstance(api_key, str) or not re.match(r"^[A-Za-z0-9]+$", api_key):
                 return {"ok": False, "error": "api_key must be alphanumeric"}
             env["JELLYFIN_API_KEY"] = api_key
-            _atomic_write(JELLYFIN_KEY_FILE, api_key + "\n", 0o640)
-            _chown_boombox_group(JELLYFIN_KEY_FILE)
 
     if "device_id" in body:
         dev = body.get("device_id")
@@ -726,6 +740,10 @@ def action_jellyfin(body: dict) -> dict:
         else:
             return {"ok": False, "error": "device_id must be 1-64 of A-Z a-z 0-9 . _ -"}
 
+    # All fields validated — only now touch disk (no half-applied change).
+    if mode == "remote" and body.get("api_key"):
+        _atomic_write(JELLYFIN_KEY_FILE, env["JELLYFIN_API_KEY"] + "\n", 0o640)
+        _chown_boombox_group(JELLYFIN_KEY_FILE)
     _write_env_file(JELLYFIN_ENV, env, mode=0o640)
     _chown_boombox_group(JELLYFIN_ENV)
     return {"ok": True, "mode": mode}
@@ -751,9 +769,13 @@ def _chown_boombox_group(path: str) -> None:
 
 
 def validate_web_password(raw: object) -> str:
+    # No leading/trailing whitespace: env values are .strip()ped on read, so
+    # such a password would never verify against web-auth.env again.
     if (not isinstance(raw, str) or not 10 <= len(raw) <= 128
-            or any(ord(c) < 32 or ord(c) == 127 for c in raw)):
-        raise ValueError("password must be 10-128 printable characters")
+            or any(ord(c) < 32 or ord(c) == 127 for c in raw)
+            or raw != raw.strip()):
+        raise ValueError("password must be 10-128 printable characters, "
+                         "without leading or trailing spaces")
     return raw
 
 
@@ -776,7 +798,9 @@ def action_web_password(body: dict) -> dict:
     current = env.get("BOOMBOX_WEB_PASSWORD", "")
     supplied = body.get("current_password")
     import hmac
-    if not isinstance(supplied, str) or not hmac.compare_digest(supplied, current):
+    # Compare bytes: compare_digest(str, str) raises TypeError on non-ASCII.
+    if not isinstance(supplied, str) or not hmac.compare_digest(
+            supplied.encode("utf-8"), current.encode("utf-8")):
         return {"ok": False, "error": "current password is incorrect"}
     new = validate_web_password(body.get("new_password"))
     web_user = env.get("BOOMBOX_WEB_USER", "boombox")
@@ -787,27 +811,47 @@ def action_web_password(body: dict) -> dict:
     with open(WEB_AUTH_ENV) as f:
         old_env_text = f.read()
     updated: list[str] = []
+    env_written = False
 
     def rollback(step: str) -> dict:
-        _atomic_write(HTPASSWD, old_htpasswd, 0o640)
-        _chown(HTPASSWD, "root", "www-data")
-        _atomic_write(WEB_AUTH_ENV, old_env_text, 0o640)
+        # Each step best-effort so one failure can't skip the others.
+        try:
+            _atomic_write(HTPASSWD, old_htpasswd, 0o640)
+            _chown(HTPASSWD, "root", "www-data")
+        except Exception:
+            pass
+        if env_written:
+            try:
+                _atomic_write(WEB_AUTH_ENV, old_env_text, 0o640)
+                _chown_boombox_group(WEB_AUTH_ENV)
+            except Exception:
+                pass
         if "samba" in updated:
-            _smb_set(smb_user, current)
+            try:
+                _smb_set(smb_user, current)
+            except Exception:
+                pass
         return {"ok": False, "error": f"could not update {step}; nothing was changed"}
 
-    r = _run(["htpasswd", "-iB", HTPASSWD, web_user], inp=new + "\n")
-    if r.returncode != 0:
-        return rollback("web login")
-    _chown(HTPASSWD, "root", "www-data")
-    updated.append("web")
-    if shutil.which("smbpasswd"):  # Samba is optional on some installs
-        if not _smb_set(smb_user, new):
-            return rollback("samba")
-        updated.append("samba")
-    env["BOOMBOX_WEB_PASSWORD"] = new
-    _write_env_file(WEB_AUTH_ENV, env, mode=0o640)
-    _chown_boombox_group(WEB_AUTH_ENV)
+    step = "web login"
+    try:
+        r = _run(["htpasswd", "-iB", HTPASSWD, web_user], inp=new + "\n")
+        if r.returncode != 0:
+            return rollback(step)
+        _chown(HTPASSWD, "root", "www-data")
+        updated.append("web")
+        if shutil.which("smbpasswd"):  # Samba is optional on some installs
+            step = "samba"
+            if not _smb_set(smb_user, new):
+                return rollback(step)
+            updated.append("samba")
+        step = "web settings"
+        env["BOOMBOX_WEB_PASSWORD"] = new
+        _write_env_file(WEB_AUTH_ENV, env, mode=0o640)
+        env_written = True
+        _chown_boombox_group(WEB_AUTH_ENV)
+    except Exception:
+        return rollback(step)
     if _builtin_jellyfin_password(current, new):
         updated.append("jellyfin")
     return {"ok": True, "updated": updated}

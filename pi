@@ -218,7 +218,14 @@ REMOTE
       echo
       echo "=== remote access ==="
       if [ -r /etc/boombox/web-auth.env ]; then
-        . /etc/boombox/web-auth.env
+        # Parse (never source) — the password value may contain spaces or $(...).
+        while IFS="=" read -r k v; do
+          case "$k" in
+            BOOMBOX_WEB_PORT) BOOMBOX_WEB_PORT="$v" ;;
+            BOOMBOX_WEB_USER) BOOMBOX_WEB_USER="$v" ;;
+            BOOMBOX_SMB_USER) BOOMBOX_SMB_USER="$v" ;;
+          esac
+        done < /etc/boombox/web-auth.env
         ip="$(hostname -I | awk "{print \$1}")"
         port="${BOOMBOX_WEB_PORT:-8090}"
         echo "web: http://$ip:$port/  user=${BOOMBOX_WEB_USER:-boombox}"

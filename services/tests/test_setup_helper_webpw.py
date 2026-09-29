@@ -22,7 +22,8 @@ def _load():
 helper = _load()
 
 
-@pytest.mark.parametrize("bad", ["short", "x" * 129, "has\nnewline", "tab\there", None])
+@pytest.mark.parametrize("bad", ["short", "x" * 129, "has\nnewline", "tab\there", None,
+                                 " leading-space-pw", "trailing-space-pw "])
 def test_validate_web_password_rejects(bad):
     with pytest.raises(ValueError):
         helper.validate_web_password(bad)
@@ -54,10 +55,13 @@ def env(tmp_path, monkeypatch):
             Path(cmd[-2]).write_text(f"{cmd[-1]}:$2y$new\n")
         return R(0)
 
+    chowns: list[tuple] = []
     monkeypatch.setattr(helper, "_run", fake_run)
-    monkeypatch.setattr(helper, "_chown", lambda *a, **k: None)
+    monkeypatch.setattr(helper, "_chown", lambda *a, **k: chowns.append(("chown",) + a))
+    monkeypatch.setattr(helper, "_chown_boombox_group",
+                        lambda p: chowns.append(("group", p)))
     monkeypatch.setattr(helper.shutil, "which", lambda n: "/usr/bin/" + n)
-    return {"webenv": webenv, "htp": htp, "calls": calls, "R": R}
+    return {"webenv": webenv, "htp": htp, "calls": calls, "R": R, "chowns": chowns}
 
 
 def test_web_password_requires_current(env):
@@ -73,6 +77,96 @@ def test_web_password_updates_web_and_samba(env):
     assert r["ok"] and r["updated"] == ["web", "samba"]
     assert "BOOMBOX_WEB_PASSWORD=correct horse battery" in env["webenv"].read_text()
     assert [c[0] for c in env["calls"]] == ["htpasswd", "smbpasswd"]
+    # web-auth.env keeps root:<boombox group> so the EnvironmentFile stays readable
+    assert ("group", str(env["webenv"])) in env["chowns"]
+
+
+def test_web_password_non_ascii(env):
+    env["webenv"].write_text("BOOMBOX_WEB_USER=boombox\n"
+                             "BOOMBOX_WEB_PASSWORD=Pässwort-lang\n")
+    r = helper.action_web_password({"current_password": "Pässwort-lang",
+                                    "new_password": "Neues-Kennwört-ü"})
+    assert r["ok"], r
+    assert "BOOMBOX_WEB_PASSWORD=Neues-Kennwört-ü" in env["webenv"].read_text()
+    bad = helper.action_web_password({"current_password": "Pässwort-lang",
+                                      "new_password": "irrelevant-pw"})
+    assert bad == {"ok": False, "error": "current password is incorrect"}
+
+
+def test_web_password_htpasswd_failure(env, monkeypatch):
+    R = env["R"]
+    old_htp, old_env = env["htp"].read_text(), env["webenv"].read_text()
+
+    def run(cmd, timeout=25, check=False, inp=None):
+        env["calls"].append(cmd)
+        return R(1) if cmd[0] == "htpasswd" else R(0)
+
+    monkeypatch.setattr(helper, "_run", run)
+    r = helper.action_web_password({"current_password": "123456",
+                                    "new_password": "correct horse battery"})
+    assert r["ok"] is False and "web login" in r["error"]
+    assert [c[0] for c in env["calls"]] == ["htpasswd"]
+    assert env["htp"].read_text() == old_htp
+    assert env["webenv"].read_text() == old_env
+
+
+def test_web_password_without_samba(env, monkeypatch):
+    monkeypatch.setattr(helper.shutil, "which", lambda n: None)
+    r = helper.action_web_password({"current_password": "123456",
+                                    "new_password": "correct horse battery"})
+    assert r == {"ok": True, "updated": ["web"]}
+    assert [c[0] for c in env["calls"]] == ["htpasswd"]
+    assert "BOOMBOX_WEB_PASSWORD=correct horse battery" in env["webenv"].read_text()
+
+
+def test_web_password_exception_after_samba_resets_samba(env, monkeypatch):
+    old_htp, old_env = env["htp"].read_text(), env["webenv"].read_text()
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    R = env["R"]
+    smb_inputs: list[str] = []
+
+    def run(cmd, timeout=25, check=False, inp=None):
+        env["calls"].append(cmd)
+        if cmd[0] == "htpasswd":
+            Path(cmd[-2]).write_text(f"{cmd[-1]}:$2y$new\n")
+        if cmd[0] == "smbpasswd":
+            smb_inputs.append(inp)
+        return R(0)
+
+    monkeypatch.setattr(helper, "_run", run)
+    monkeypatch.setattr(helper, "_write_env_file", boom)
+    r = helper.action_web_password({"current_password": "123456",
+                                    "new_password": "correct horse battery"})
+    assert r["ok"] is False
+    assert [c[0] for c in env["calls"]] == ["htpasswd", "smbpasswd", "smbpasswd"]
+    # Samba set to the new password, then reset to the old one
+    assert smb_inputs == ["correct horse battery\ncorrect horse battery\n",
+                          "123456\n123456\n"]
+    assert env["htp"].read_text() == old_htp
+    assert env["webenv"].read_text() == old_env
+
+
+def test_web_password_exception_after_env_write_restores_env(env, monkeypatch):
+    old_htp, old_env = env["htp"].read_text(), env["webenv"].read_text()
+    groups: list[str] = []
+
+    def group(p):
+        groups.append(p)
+        if len(groups) == 1:
+            raise OSError("chown failed")
+
+    monkeypatch.setattr(helper, "_chown_boombox_group", group)
+    r = helper.action_web_password({"current_password": "123456",
+                                    "new_password": "correct horse battery"})
+    assert r["ok"] is False
+    assert env["webenv"].read_text() == old_env
+    assert env["htp"].read_text() == old_htp
+    # restored env re-gets its group ownership
+    assert groups == [str(env["webenv"]), str(env["webenv"])]
+    assert [c[0] for c in env["calls"]] == ["htpasswd", "smbpasswd", "smbpasswd"]
 
 
 def test_web_password_rolls_back_on_smb_failure(env, monkeypatch):
@@ -94,6 +188,10 @@ def test_web_password_rolls_back_on_smb_failure(env, monkeypatch):
     assert r["ok"] is False and "samba" in r["error"]
     assert env["htp"].read_text() == old_htp
     assert "BOOMBOX_WEB_PASSWORD=123456" in env["webenv"].read_text()
+    # htpasswd changed, smbpasswd failed -> no Samba reset needed (it never changed)
+    assert [c[0] for c in env["calls"]] == ["htpasswd", "smbpasswd"]
+    # restored htpasswd gets its root:www-data ownership back
+    assert env["chowns"][-1] == ("chown", str(env["htp"]), "root", "www-data")
 
 
 def test_jellyfin_device_id_written_and_removed(tmp_path, monkeypatch):
@@ -118,3 +216,30 @@ def test_jellyfin_device_id_rejected(tmp_path, monkeypatch, bad):
     r = helper.action_jellyfin({"mode": "remote", "base": "https://v.example",
                                 "device_id": bad})
     assert r["ok"] is False
+
+
+def test_jellyfin_bad_device_id_writes_nothing(tmp_path, monkeypatch):
+    jenv = tmp_path / "jellyfin.env"
+    jenv.write_text("BOOMBOX_JELLYFIN_BASE=https://video.example\nJELLYFIN_API_KEY=abc\n")
+    key = tmp_path / "jellyfin-api-key"
+    key.write_text("abc\n")
+    monkeypatch.setattr(helper, "JELLYFIN_ENV", str(jenv))
+    monkeypatch.setattr(helper, "JELLYFIN_KEY_FILE", str(key))
+    monkeypatch.setattr(helper, "_chown_boombox_group", lambda p: None)
+    r = helper.action_jellyfin({"mode": "remote", "base": "https://video.example",
+                                "api_key": "newkey123", "device_id": "bad id"})
+    assert r["ok"] is False
+    assert key.read_text() == "abc\n"
+    assert "JELLYFIN_API_KEY=abc\n" in jenv.read_text()
+
+
+def test_jellyfin_new_api_key_written(tmp_path, monkeypatch):
+    jenv, key = tmp_path / "jellyfin.env", tmp_path / "jellyfin-api-key"
+    monkeypatch.setattr(helper, "JELLYFIN_ENV", str(jenv))
+    monkeypatch.setattr(helper, "JELLYFIN_KEY_FILE", str(key))
+    monkeypatch.setattr(helper, "_chown_boombox_group", lambda p: None)
+    r = helper.action_jellyfin({"mode": "remote", "base": "https://video.example",
+                                "api_key": "newkey123", "device_id": "boombox-x-kiosk"})
+    assert r["ok"]
+    assert key.read_text() == "newkey123\n"
+    assert "JELLYFIN_API_KEY=newkey123" in jenv.read_text()

@@ -115,3 +115,30 @@ def test_streaming_status_reports_absent(tmp_path, monkeypatch):
     r = helper.action_streaming_status({})
     assert r["airplay"]["installed"] is False
     assert r["spotify"]["installed"] is False
+
+
+def test_streaming_preflight_spotify_missing_leaves_airplay_untouched(tmp_path, monkeypatch):
+    conf = tmp_path / "shairport-sync.conf"
+    conf.write_text(DIETPI_CONF)
+    monkeypatch.setattr(helper, "SHAIRPORT_CONF_CANDIDATES", [str(conf)])
+    monkeypatch.setattr(helper, "RASPOTIFY_CONF", str(tmp_path / "missing"))
+    restarted = []
+    monkeypatch.setattr(helper, "_restart_system_units", restarted.extend)
+    r = helper.action_streaming({"airplay_name": "Den", "spotify_name": "Den"})
+    assert r == {"ok": False, "error": "Spotify Connect is not installed"}
+    assert conf.read_text() == DIETPI_CONF
+    assert restarted == []
+
+
+def test_streaming_preflight_bad_spotify_name_leaves_airplay_untouched(tmp_path, monkeypatch):
+    conf = tmp_path / "shairport-sync.conf"
+    conf.write_text(DIETPI_CONF)
+    rasp = tmp_path / "raspotify.conf"
+    rasp.write_text('LIBRESPOT_NAME="Old"\n')
+    monkeypatch.setattr(helper, "SHAIRPORT_CONF_CANDIDATES", [str(conf)])
+    monkeypatch.setattr(helper, "RASPOTIFY_CONF", str(rasp))
+    monkeypatch.setattr(helper, "_restart_system_units", lambda u: None)
+    with pytest.raises(ValueError):
+        helper.action_streaming({"airplay_name": "Den", "spotify_name": 'bad"name'})
+    assert conf.read_text() == DIETPI_CONF
+    assert rasp.read_text() == 'LIBRESPOT_NAME="Old"\n'
