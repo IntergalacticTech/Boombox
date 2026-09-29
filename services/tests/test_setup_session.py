@@ -91,3 +91,13 @@ def test_burned_code_forces_fresh_mint():
     t2, code2, _ = s.mint(now=0.0)
     assert t2 != t1 and code2 != code
     assert s.redeem_code(code2, now=0.0) == t2
+
+
+def test_active_tracks_mint_expiry_and_clear():
+    s = SetupSession()
+    assert not s.active(now=0.0)
+    s.mint(now=0.0)
+    assert s.active(now=1.0)
+    assert not s.active(now=TOKEN_TTL_S + 1)
+    s.clear()
+    assert not s.active(now=1.0)

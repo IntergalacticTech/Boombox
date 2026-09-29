@@ -338,13 +338,63 @@ def action_wifi_scan(_body: dict) -> dict:
         return {"ok": False, "error": f"scan failed: {e}"}
 
 
+# C0/C1 controls (incl. CR/LF/NUL), DEL, and the double quote that delimits
+# wpa_supplicant string values.
+_UNSAFE_WIFI_RE = re.compile(r'[\x00-\x1f\x7f-\x9f"]')
+
+
+def validate_wifi_credentials(ssid: object, psk: object) -> tuple[str, str]:
+    """Validate a Wi-Fi SSID/passphrase before it goes anywhere near a config
+    file written as root.
+
+    Both values end up inside double-quoted strings in wpa_supplicant.conf
+    (directly, or via dietpi-wifidb), so a newline or a '"' would let the
+    caller inject arbitrary supplicant directives. Reject control characters
+    and double quotes outright; single quotes, '$', backslashes etc. are
+    legitimate passphrase characters and are handled by the writers' quoting.
+    Returns (ssid, psk) or raises ValueError.
+
+    * SSID: 1–32 BYTES of UTF-8 (the 802.11 limit is in octets).
+    * PSK: empty (open network) or an 8–63 char WPA passphrase of printable
+      ASCII (IEEE 802.11i restricts passphrases to 0x20–0x7e).
+    """
+    if not isinstance(ssid, str) or not (1 <= len(ssid.encode("utf-8")) <= 32):
+        raise ValueError("ssid must be 1–32 bytes")
+    if _UNSAFE_WIFI_RE.search(ssid):
+        raise ValueError('ssid contains an unsupported character '
+                         '(control characters and " are not allowed)')
+    if not isinstance(psk, str):
+        raise ValueError("passphrase must be a string")
+    if psk:
+        if not (8 <= len(psk) <= 63):
+            raise ValueError("passphrase must be 8–63 chars")
+        if '"' in psk or not all(0x20 <= ord(ch) <= 0x7e for ch in psk):
+            raise ValueError('passphrase must be printable ASCII without "')
+    return ssid, psk
+
+
+def wpa_network_block(ssid: str, psk: str) -> str:
+    """Render a wpa_supplicant `network={}` block with no caller-controlled
+    quoting: the SSID is written in wpa_supplicant's unquoted hex form and the
+    passphrase is pre-hashed to the 64-hex-digit PSK exactly as
+    `wpa_passphrase` does (PBKDF2-HMAC-SHA1, SSID as salt, 4096 rounds).
+    Callers validate first anyway — this is defence in depth, and it also
+    keeps the plaintext passphrase out of the file."""
+    import hashlib
+    ssid_hex = ssid.encode("utf-8").hex()
+    if psk:
+        key = hashlib.pbkdf2_hmac("sha1", psk.encode("ascii"),
+                                  ssid.encode("utf-8"), 4096, 32).hex()
+        return f"network={{\n\tssid={ssid_hex}\n\tpsk={key}\n}}\n"
+    return f"network={{\n\tssid={ssid_hex}\n\tkey_mgmt=NONE\n}}\n"
+
+
 def action_wifi_join(body: dict) -> dict:
-    ssid = body.get("ssid")
-    psk = body.get("psk", "")
-    if not isinstance(ssid, str) or not (1 <= len(ssid) <= 32):
-        return {"ok": False, "error": "ssid must be 1–32 chars"}
-    if not isinstance(psk, str) or (psk and not (8 <= len(psk) <= 63)):
-        return {"ok": False, "error": "passphrase must be 8–63 chars"}
+    try:
+        ssid, psk = validate_wifi_credentials(body.get("ssid"),
+                                              body.get("psk", ""))
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     if not _wlan_present():
         return {"ok": False, "error": "no wlan0 interface present"}
     _run(["ip", "link", "set", WLAN_IF, "up"], check=False)
@@ -428,8 +478,7 @@ def _ifupdown_join(ssid: str, psk: str) -> tuple[bool, str]:
                     if psk else (r.stderr or r.stdout).strip()
                 return False, f"dietpi-wifidb failed: {err[:200]}"
         else:
-            net = (f'network={{\n\tssid="{ssid}"\n\tpsk="{psk}"\n}}\n' if psk
-                   else f'network={{\n\tssid="{ssid}"\n\tkey_mgmt=NONE\n}}\n')
+            net = wpa_network_block(ssid, psk)
             _atomic_write(WPA_CONF,
                           "ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev\n"
                           "update_config=1\n" + net, 0o600)
@@ -502,6 +551,12 @@ def _wlan_ip() -> str:
         return ""
 
 
+# http(s)://host[:port][/path] — host is a DNS name, IPv4, or [IPv6].
+_BASE_URL_RE = re.compile(
+    r"https?://(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?"
+    r"(?:/[A-Za-z0-9._~%/+-]*)?")
+
+
 def action_jellyfin(body: dict) -> dict:
     mode = body.get("mode")
     if mode not in ("builtin", "remote"):
@@ -514,7 +569,11 @@ def action_jellyfin(body: dict) -> dict:
         env.pop("BOOMBOX_JELLYFIN_BASE", None)
     else:
         base = body.get("base", "")
-        if not isinstance(base, str) or not re.match(r"^https?://[^\s]+$", base):
+        # jellyfin.env is written unquoted and is also sourced by root shell
+        # code (boombox-usb-mount), so allow only plain URL characters — no
+        # '$', backticks, quotes, ';', '&', '|', whitespace or a trailing
+        # newline (re.match's '$' would let one through; fullmatch doesn't).
+        if not isinstance(base, str) or not _BASE_URL_RE.fullmatch(base):
             return {"ok": False, "error": "base must be http(s)://host"}
         env["BOOMBOX_JELLYFIN_BASE"] = base.rstrip("/")
         api_key = body.get("api_key", "")

@@ -11,7 +11,9 @@
 #
 # Runs as root (block-device access). Filesystem ownership maps to the
 # boombox user via the mount's uid/gid options where the FS supports it
-# (vfat/exfat/ntfs).
+# (vfat/exfat/ntfs). Because it runs as root, install.sh copies it root-owned
+# to /usr/local/sbin/boombox-usb-mount and the unit executes THAT copy — never
+# this file in the (boombox-user-writable) release tree.
 #
 # id is derived from the partition LABEL when present, otherwise the UUID.
 
@@ -78,13 +80,18 @@ trigger_scan() {
   local key_file=/etc/boombox/jellyfin-api-key
   # Point at the configured Jellyfin (local by default, or a home-server / VPS).
   # This unit is udev-triggered as root and inherits no user env, so read the
-  # base from /etc/boombox/jellyfin.env if present.
+  # base from /etc/boombox/jellyfin.env if present. Parse the one key rather
+  # than sourcing the file: it's written from wizard input, and sourcing it
+  # here would execute that input as root.
   local jellyfin_base="http://127.0.0.1:8096"
   if [[ -r /etc/boombox/jellyfin.env ]]; then
-    # shellcheck disable=SC1091
     local env_base
-    env_base=$(. /etc/boombox/jellyfin.env 2>/dev/null; printf '%s' "${BOOMBOX_JELLYFIN_BASE:-}")
-    [[ -n "$env_base" ]] && jellyfin_base="${env_base%/}"
+    env_base=$(sed -n 's/^[[:space:]]*BOOMBOX_JELLYFIN_BASE=//p' /etc/boombox/jellyfin.env | tail -n1)
+    env_base="${env_base%\"}"; env_base="${env_base#\"}"
+    local url_re='^https?://[]A-Za-z0-9.:/_~%+[-]+$'
+    if [[ "$env_base" =~ $url_re ]]; then
+      jellyfin_base="${env_base%/}"
+    fi
   fi
   if [[ -r "$key_file" ]]; then
     local key

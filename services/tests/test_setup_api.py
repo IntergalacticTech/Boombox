@@ -100,10 +100,10 @@ async def test_status_is_open(client):
 async def test_session_mint_is_localhost_only(client):
     c, _ = client
     # From the LAN: refused.
-    r = await c.post("/api/setup/session", headers=LAN)
+    r = await c.post("/api/setup/session", json={}, headers=LAN)
     assert r.status == 403
     # From the kiosk: minted, and the QR url embeds the token.
-    r = await c.post("/api/setup/session", headers=LOCAL)
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
     assert r.status == 200
     body = await r.json()
     assert body["token"]
@@ -122,7 +122,7 @@ async def test_mutations_require_token_from_lan(client):
 async def test_lan_client_with_valid_token_can_mutate(client):
     c, ctx = client
     # Kiosk mints a token…
-    r = await c.post("/api/setup/session", headers=LOCAL)
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
     token = (await r.json())["token"]
     # …the phone presents it and is allowed through.
     r = await c.put("/api/setup/identity", json={"name": "Kitchen", "rename_host": True},
@@ -175,16 +175,16 @@ async def test_video_remote_forwards_base_and_key(client):
 @pytest.mark.asyncio
 async def test_remote_enable_and_pair(client):
     c, ctx = client
-    r = await c.post("/api/setup/remote/enable", headers=LOCAL)
+    r = await c.post("/api/setup/remote/enable", json={}, headers=LOCAL)
     assert r.status == 200 and (await r.json())["enabled"] is True
-    r = await c.post("/api/setup/remote/pair", headers=LOCAL)
+    r = await c.post("/api/setup/remote/pair", json={}, headers=LOCAL)
     assert (await r.json())["pin"] == "123456"
 
 
 @pytest.mark.asyncio
 async def test_complete_marks_and_persists(client):
     c, ctx = client
-    r = await c.post("/api/setup/complete", headers=LOCAL)
+    r = await c.post("/api/setup/complete", json={}, headers=LOCAL)
     assert r.status == 200
     assert ctx.complete is True
 
@@ -192,7 +192,7 @@ async def test_complete_marks_and_persists(client):
 @pytest.mark.asyncio
 async def test_session_includes_code_and_base_url(client):
     c, _ = client
-    r = await c.post("/api/setup/session", headers=LOCAL)
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
     body = await r.json()
     assert len(body["code"]) == 6 and body["code"].isdigit()
     assert body["base_url"] == "http://192.168.1.81:8090/setup/"
@@ -202,7 +202,7 @@ async def test_session_includes_code_and_base_url(client):
 @pytest.mark.asyncio
 async def test_code_redeem_from_lan_grants_token(client):
     c, ctx = client
-    r = await c.post("/api/setup/session", headers=LOCAL)
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
     minted = await r.json()
     # Wrong code → 403, and it's an open route (no token needed to try).
     r = await c.post("/api/setup/session/redeem", json={"code": "999999" if minted["code"] != "999999" else "111111"}, headers=LAN)
@@ -229,14 +229,120 @@ async def test_skin_put_and_status_roundtrip(client):
 @pytest.mark.asyncio
 async def test_complete_retires_the_session_token(client):
     c, _ = client
-    r = await c.post("/api/setup/session", headers=LOCAL)
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
     token = (await r.json())["token"]
     hdrs = {**LAN, "Authorization": f"Bearer {token}"}
     # Token works before completion…
     r = await c.put("/api/setup/skin", json={"id": "simple"}, headers=hdrs)
     assert r.status == 200
     # …and is dead after it.
-    r = await c.post("/api/setup/complete", headers=hdrs)
+    r = await c.post("/api/setup/complete", json={}, headers=hdrs)
     assert r.status == 200
     r = await c.put("/api/setup/skin", json={"id": "meter"}, headers=hdrs)
     assert r.status == 401
+
+
+# ---- hardening: content type, header-only token, post-completion lock --------
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ctype", [
+    "application/x-www-form-urlencoded", "text/plain", "multipart/form-data; boundary=x",
+])
+async def test_mutations_require_json_content_type(client, ctype):
+    # A simple (preflight-free) cross-site form post from a page the kiosk
+    # browser opens would otherwise ride the kiosk's localhost trust.
+    c, ctx = client
+    r = await c.put("/api/setup/identity", data='{"name": "Pwned"}',
+                    headers={**LOCAL, "Content-Type": ctype})
+    assert r.status == 415
+    assert not ctx.applied
+
+
+@pytest.mark.asyncio
+async def test_bodyless_post_without_content_type_rejected(client):
+    # A no-cors fetch() with no body sends no Content-Type at all.
+    c, ctx = client
+    r = await c.post("/api/setup/complete", headers=LOCAL)
+    assert r.status == 415
+    assert ctx.complete is False
+
+
+@pytest.mark.asyncio
+async def test_token_in_query_param_no_longer_accepted(client):
+    c, _ = client
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
+    token = (await r.json())["token"]
+    r = await c.put(f"/api/setup/skin?t={token}", json={"id": "meter"}, headers=LAN)
+    assert r.status == 401
+
+
+@pytest.mark.asyncio
+async def test_after_completion_mutations_refused_until_reopened(client):
+    c, ctx = client
+    ctx.complete = True
+    # Even the (trusted) kiosk can't mutate a completed setup…
+    r = await c.put("/api/setup/identity", json={"name": "Den"}, headers=LOCAL)
+    assert r.status == 409
+    r = await c.get("/api/setup/wifi/scan", headers=LOCAL)
+    assert r.status == 409
+    assert not ctx.applied
+    # …until the kiosk re-opens it (Settings → Setup wizard → Welcome mints).
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
+    assert r.status == 200
+    token = (await r.json())["token"]
+    r = await c.put("/api/setup/identity", json={"name": "Den"}, headers=LOCAL)
+    assert r.status == 200
+    r = await c.put("/api/setup/skin", json={"id": "meter"},
+                    headers={**LAN, "Authorization": f"Bearer {token}"})
+    assert r.status == 200
+    # Finishing closes it again.
+    r = await c.post("/api/setup/complete", json={}, headers=LOCAL)
+    assert r.status == 200
+    r = await c.put("/api/setup/identity", json={"name": "Attic"}, headers=LOCAL)
+    assert r.status == 409
+
+
+@pytest.mark.asyncio
+async def test_status_redacted_for_unauthenticated_once_complete(client):
+    c, ctx = client
+    ctx.complete = True
+    ctx.music = {"url": "https://music.example", "username": "jwc",
+                 "configured": True, "reachable": True}
+    ctx.remote = {"enabled": True, "peers": [{"label": "Kitchen CYD", "paired_at": "x"}]}
+    r = await c.get("/api/setup/status", headers=LAN)
+    body = await r.json()
+    assert body["complete"] is True                  # what ui setupGate.ts reads
+    assert body["identity"]["name"] == "boombox2"
+    for leaked in ("wifi", "music", "video", "remote"):
+        assert leaked not in body
+    # The kiosk (localhost) still sees everything…
+    body = await (await c.get("/api/setup/status", headers=LOCAL)).json()
+    assert body["music"]["username"] == "jwc"
+    # …as does a phone holding a live token.
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
+    token = (await r.json())["token"]
+    body = await (await c.get("/api/setup/status",
+                              headers={**LAN, "Authorization": f"Bearer {token}"})).json()
+    assert body["remote"]["peers"][0]["label"] == "Kitchen CYD"
+
+
+@pytest.mark.asyncio
+async def test_status_rejects_stale_token(client):
+    # The wizard relies on this 401 to drop a stored token and fall back to
+    # code entry rather than rendering from a redacted status.
+    c, ctx = client
+    ctx.complete = True
+    r = await c.get("/api/setup/status",
+                    headers={**LAN, "Authorization": "Bearer stale"})
+    assert r.status == 401
+    # The kiosk is trusted whatever it sends.
+    r = await c.get("/api/setup/status",
+                    headers={**LOCAL, "Authorization": "Bearer stale"})
+    assert r.status == 200
+
+
+@pytest.mark.asyncio
+async def test_status_full_before_completion(client):
+    # A fresh (unconfigured) device has nothing to hide; unchanged behaviour.
+    c, _ = client
+    body = await (await c.get("/api/setup/status", headers=LAN)).json()
+    assert "wifi" in body and "music" in body

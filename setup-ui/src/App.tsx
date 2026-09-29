@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { makeApi, ApiProvider, useApi, type SetupApi } from "./lib/api";
+import { makeApi, ApiError, ApiProvider, useApi, type SetupApi } from "./lib/api";
 import type { RedeemResult, Status } from "./lib/types";
 import {
   PrimaryButton, ErrorText, Shell, StepBody, Stepper, inputStyle,
@@ -157,13 +157,23 @@ export default function App() {
     return () => { api.onAuthFail = null; };
   }, [api]);
 
+  // Re-fetched whenever auth changes: once setup is complete the server only
+  // returns a redacted status (no Wi-Fi / music / video / remote) to callers
+  // without a token, so a phone that just redeemed the code needs the full
+  // one before the wizard renders from it.
   useEffect(() => {
     let alive = true;
+    setStatus(null);
     api.get<Status>("status")
       .then((s) => { if (alive) setStatus(s); })
-      .catch(() => { if (alive) setError("Couldn't reach the Boombox setup service."); });
+      .catch((e) => {
+        // A stale stored token 401s: the client already dropped it and
+        // onAuthFail flipped `authed`, which re-runs this effect without it.
+        if (e instanceof ApiError && e.status === 401) return;
+        if (alive) setError("Couldn't reach the Boombox setup service.");
+      });
     return () => { alive = false; };
-  }, [api]);
+  }, [api, authed]);
 
   if (error) {
     return (

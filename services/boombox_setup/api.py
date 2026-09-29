@@ -3,8 +3,21 @@
 
 Auth model: mutating routes require the caller to be **localhost** (the kiosk,
 identified by nginx's X-Real-IP) OR to carry a valid **setup token** (minted on
-the kiosk, scanned via QR onto a phone). `status` is open (booleans + the name
-already broadcast over mDNS); `session` minting is localhost-only.
+the kiosk, scanned via QR onto a phone) in an `Authorization: Bearer` header —
+never a URL query param, which would land in logs/history. `session` minting
+is localhost-only.
+
+Once setup is **complete**, everything but `status`/`session` is refused
+until setup is re-opened, i.e. until the kiosk mints a fresh session (Settings
+→ Setup wizard opens the wizard's Welcome step, which does exactly that);
+POST /complete closes it again. `status` is open, but once complete an
+unauthenticated caller only gets `complete`/`identity`/`skin` — no Wi-Fi/IP,
+music username, video base or remote peer names.
+
+Every POST/PUT/DELETE must be `Content-Type: application/json`. A cross-site
+page can only send that after a CORS preflight (which this app never grants),
+so a plain form post or no-cors fetch from a page the kiosk browser opens can't
+ride the kiosk's localhost trust.
 
 The route handlers are thin — all side effects live behind the Context
 protocol so the entry point owns runtime wiring (sudo helper, HTTP proxying to
@@ -62,13 +75,26 @@ def _token_from(req: web.Request) -> str:
     auth = req.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         return auth[7:].strip()
-    return req.query.get("t", "").strip()
+    return ""
+
+
+def _authenticated(req: web.Request) -> bool:
+    sess: SetupSession = req.app["session"]
+    return _client_is_localhost(req) or sess.verify(_token_from(req))
+
+
+_MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 @web.middleware
 async def _auth_mw(req: web.Request, handler):
-    # Open routes: status (read-only), code→token redemption (gated by the
-    # on-screen code itself, not the middleware), and the OPTIONS preflight.
+    if req.method in _MUTATING and req.content_type != "application/json":
+        return web.json_response(
+            {"error": "Content-Type must be application/json"}, status=415)
+
+    # Open routes: status (read-only; redacts itself when unauthenticated),
+    # code→token redemption (gated by the on-screen code itself — and it can
+    # only succeed while a session is live), and the OPTIONS preflight.
     open_paths = {"/api/setup/status", "/api/setup/session/redeem"}
     if req.method == "OPTIONS" or req.path in open_paths:
         return await handler(req)
@@ -76,15 +102,23 @@ async def _auth_mw(req: web.Request, handler):
     sess: SetupSession = req.app["session"]
     is_local = _client_is_localhost(req)
 
-    # Minting a token requires physical access to the kiosk itself.
+    # Minting a token requires physical access to the kiosk itself. After
+    # completion this is also how setup is re-opened.
     if req.path == "/api/setup/session":
         if not is_local:
             return web.json_response({"error": "localhost only"}, status=403)
         return await handler(req)
 
-    if is_local or sess.verify(_token_from(req)):
-        return await handler(req)
-    return web.json_response({"error": "setup token required"}, status=401)
+    if not (is_local or sess.verify(_token_from(req))):
+        return web.json_response({"error": "setup token required"}, status=401)
+
+    ctx: Context = req.app["ctx"]
+    if ctx.is_complete() and not sess.active():
+        return web.json_response(
+            {"ok": False, "error": "setup is already complete — open "
+             "Settings → Setup wizard on the boombox to change it"},
+            status=409)
+    return await handler(req)
 
 
 def build_app(ctx: Context) -> web.Application:
@@ -113,6 +147,25 @@ def build_app(ctx: Context) -> web.Application:
 async def _status(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
     ident = ctx.read_identity()
+    complete = ctx.is_complete()
+    # A token that no longer verifies (setup finished, service restarted)
+    # gets a 401 rather than a silently-redacted body, so the wizard drops
+    # the stale token and returns to code entry instead of rendering from
+    # a status that's missing fields. The kiosk is trusted regardless.
+    sess: SetupSession = req.app["session"]
+    token = _token_from(req)
+    if token and not _client_is_localhost(req) and not sess.verify(token):
+        return web.json_response({"error": "setup token rejected"}, status=401)
+    if complete and not _authenticated(req):
+        # Enough for the kiosk gate (ui setupGate.ts: `complete`) and the
+        # wizard's pre-auth screens; the name/hostname are already broadcast
+        # over mDNS. Everything else waits for a token.
+        return web.json_response({
+            "service_version": __version__,
+            "complete": True,
+            "identity": ident,
+            "skin": ctx.get_skin(),
+        })
     try:
         music = await ctx.music_get()
     except Exception:
@@ -123,7 +176,7 @@ async def _status(req: web.Request) -> web.Response:
         remote = {"enabled": False, "peers": []}
     return web.json_response({
         "service_version": __version__,
-        "complete": ctx.is_complete(),
+        "complete": complete,
         "identity": ident,
         "wifi": ctx.wifi_status(),
         "music": music,

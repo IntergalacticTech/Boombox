@@ -1,8 +1,8 @@
 name: CI
 
 # Gate every push and PR on the checks that already pass locally: Python
-# lint (ruff) + types (mypy) + the 300+ test suite, and both React apps'
-# typecheck + tests + production build. The Pi pulls releases via the
+# lint (ruff) + types (mypy) + the 300+ test suite, and all three React apps'
+# (kiosk ui, remote-ui, setup-ui) typecheck + tests + production build. The Pi pulls releases via the
 # on-device updater, so this is the only pre-merge gate in front of a device.
 
 on:
@@ -62,9 +62,22 @@ jobs:
         # and isn't yet clean. Surface issues without blocking the merge; drop
         # continue-on-error once the scripts are lint-clean.
         continue-on-error: true
+        #
+        # Covers *.sh plus extensionless scripts picked up by their shebang
+        # (bin/boombox-update, install/bin/* — the latter includes root-run
+        # helpers), so a script can't dodge the lint by dropping its suffix.
+        # Python helpers in install/bin (e.g. boombox-setup-apply) don't match.
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
-          find install bin -name '*.sh' -not -path '*/legacy/*' -print0 \
+          {
+            find install bin services -name '*.sh' -not -path '*/legacy/*' \
+              -not -path '*/node_modules/*'
+            find install bin -type f ! -name '*.*' -not -path '*/legacy/*' \
+              -exec sh -c 'head -n1 "$1" | grep -qE "^#!.*[/ ](ba|da)?sh([[:space:]]|$)"' _ {} \; \
+              -print
+          } | sort -u > "$RUNNER_TEMP/shell-files"
+          echo "shellchecking:"; cat "$RUNNER_TEMP/shell-files"
+          tr '\n' '\0' < "$RUNNER_TEMP/shell-files" \
             | xargs -0 shellcheck --severity=warning
 
   ui:
@@ -107,6 +120,27 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: remote-ui/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc -b
+      - name: Test
+        run: npx vitest run
+      - name: Build
+        run: npx vite build
+
+  setup-ui:
+    name: Setup UI (tsc · vitest · build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: setup-ui
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: setup-ui/package-lock.json
       - run: npm ci
       - name: Typecheck
         run: npx tsc -b

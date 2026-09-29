@@ -77,6 +77,14 @@ class SetupSession:
             return False
         return hmac.compare_digest(_hash(token), self._token_hash)
 
+    def active(self, now: float | None = None) -> bool:
+        """Is a session live? Once setup is complete this doubles as the
+        "setup re-opened" flag: only the kiosk (physical presence) can mint
+        one — Settings → Setup wizard lands on Welcome, which mints — and
+        POST /complete clears it again."""
+        now = time.time() if now is None else now
+        return self._token_hash is not None and now < self._expires_at
+
     def redeem_code(self, code: str, now: float | None = None) -> str | None:
         """Exchange the on-screen code for the setup token. Constant-time
         compare; burns the code after CODE_MAX_ATTEMPTS bad tries so it can't

@@ -147,14 +147,37 @@ docker compose -f docker-compose.yml -f docker-compose.cloudflared.yml up -d
 
 5. Set `JELLYFIN_PUBLISHED_URL=https://video.example.com` in `.env` and
    `docker compose up -d` again so Jellyfin emits correct links.
-6. **Strongly recommended:** add a **Cloudflare Access** policy in front of each
-   hostname (email OTP, or your identity provider). This puts a second auth gate
-   in front of the servers' own logins. Note: native Jellyfin *apps* don't carry
-   Access cookies, so if you gate `video.example.com` with Access you'll use
-   service tokens or a bypass for the app path — keep the boombox's server URL on
-   an Access policy that permits its credential. For most people, gating the
-   music hostname with Access and relying on Jellyfin's own strong login for
-   video is the pragmatic split.
+6. **Cloudflare Access — only in front of the browser UIs, never the APIs the
+   boombox calls.** Access puts an SSO/email-OTP gate ahead of an app, but it
+   only lets through requests carrying an Access cookie or an Access service
+   token. **The boombox sends neither** — its Subsonic client and its Jellyfin
+   client make plain API calls, and it has no setting for
+   `CF-Access-Client-Id` / `CF-Access-Client-Secret` service-token headers yet.
+   Put Access over a whole hostname the boombox uses and **library sync,
+   streaming and video all break** (Access answers with a login redirect, not
+   your server). So:
+
+   - **Music (`music.example.com`):** Access is worthwhile for Navidrome's web
+     UI, but add a **Bypass** policy for the Subsonic API path **`/rest/*`**
+     (in Zero Trust: a second self-hosted application for
+     `music.example.com/rest` with a *Bypass → Everyone* policy). The boombox
+     syncs and streams entirely through `/rest/…`; the web UI stays gated.
+     `/rest/*` is then protected only by Navidrome's own login — which is why
+     the next point matters.
+   - **Video (`video.example.com`):** Jellyfin's API is spread across the whole
+     hostname (and native Jellyfin apps don't carry Access cookies either), so
+     there's no clean path to bypass. Leave Access off this hostname and rely
+     on Jellyfin's own strong login + Cloudflare's edge rate-limiting.
+   - A **service token** (Access → Service Auth) is the "right" long-term
+     answer for both, but it needs boombox support that doesn't exist yet —
+     don't configure one expecting the device to use it.
+
+   **Give the boombox its own non-admin Navidrome user.** Create a dedicated
+   user (e.g. `boombox`, *not* an admin, access to just the libraries it should
+   play) with a long random password, and enter *that* in the boombox — never
+   your admin login. The device stores the password (encrypted, but recoverable
+   by anyone who has the device), and `/rest/*` is reachable from the internet
+   with it, so keep its blast radius to "can play music".
 
 ### Option B — Router port-forward + reverse proxy + TLS
 
