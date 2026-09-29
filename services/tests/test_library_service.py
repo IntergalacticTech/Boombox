@@ -13,7 +13,11 @@ from pathlib import Path
 
 import pytest
 from boombox_library.config import DEFAULT_CONFIG, LibraryConfig, SourceConfig
-from boombox_library.subsonic import SubsonicError, SubsonicUnreachable
+from boombox_library.subsonic import (
+    SubsonicAuthError,
+    SubsonicError,
+    SubsonicUnreachable,
+)
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "boombox-library.py"
 
@@ -127,21 +131,33 @@ async def test_triggered_sync_task_never_raises(ctx):
     assert ctx._sync_task.exception() is None
 
 
-@pytest.mark.asyncio
-async def test_sync_timer_retries_with_backoff_and_resets(ctx, monkeypatch):
-    outcomes = iter([False, False, True, False, True])
+def _script_attempts(ctx, monkeypatch, outcomes):
+    """Replace the ping+sync body with a scripted sequence of failures
+    (None = success) so _sync_once's bookkeeping runs for real."""
+    it = iter(outcomes)
+
+    async def scripted():
+        return next(it)
+    monkeypatch.setattr(ctx, "_sync_attempt", scripted)
+
+
+def _record_waits(ctx, monkeypatch, stop_after):
     delays: list[float] = []
 
-    async def scripted_cycle():
-        return next(outcomes)
-
-    async def fake_sleep(seconds):
-        delays.append(seconds)
-        if len(delays) == 5:
+    async def fake_wait(delay):
+        delays.append(delay)
+        if len(delays) == stop_after:
             raise asyncio.CancelledError
+        return False  # the full delay elapsed
+    monkeypatch.setattr(ctx, "_wait_or_woken", fake_wait)
+    return delays
 
-    monkeypatch.setattr(ctx, "_sync_cycle", scripted_cycle)
-    monkeypatch.setattr(svc.asyncio, "sleep", fake_sleep)
+
+@pytest.mark.asyncio
+async def test_sync_timer_retries_with_backoff_and_resets(ctx, monkeypatch):
+    down = SubsonicUnreachable("timeout")
+    _script_attempts(ctx, monkeypatch, [down, down, None, down, None])
+    delays = _record_waits(ctx, monkeypatch, 5)
     with pytest.raises(asyncio.CancelledError):
         await ctx.sync_timer()
     interval = ctx.cfg.sync.interval_seconds
@@ -149,25 +165,104 @@ async def test_sync_timer_retries_with_backoff_and_resets(ctx, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("exc", [
+    SubsonicAuthError("40: wrong username or password"),
+    SubsonicError("70: not found"),
+    RuntimeError("bug on one album"),
+])
+async def test_sync_timer_waits_full_interval_on_permanent_failure(ctx, monkeypatch, exc):
+    """Bad credentials / local errors won't fix themselves in 60 s —
+    no burst of full syncs and failed auths through the edge."""
+    _script_attempts(ctx, monkeypatch, [exc, exc, exc])
+    delays = _record_waits(ctx, monkeypatch, 3)
+    with pytest.raises(asyncio.CancelledError):
+        await ctx.sync_timer()
+    interval = ctx.cfg.sync.interval_seconds
+    assert delays == [interval, interval, interval]
+
+
+def test_is_transient_classification():
+    import aiohttp
+    assert svc.is_transient(SubsonicUnreachable("x"))
+    assert svc.is_transient(asyncio.TimeoutError())
+    assert svc.is_transient(aiohttp.ClientConnectionError())
+    assert not svc.is_transient(SubsonicAuthError("40"))
+    assert not svc.is_transient(SubsonicError("http 404"))
+    assert not svc.is_transient(RuntimeError("x"))
+
+
+@pytest.mark.asyncio
 async def test_sync_timer_survives_cycle_exception(ctx, monkeypatch):
     calls = {"n": 0}
-    delays: list[float] = []
 
     async def exploding_cycle():
         calls["n"] += 1
         raise RuntimeError("unexpected")
 
-    async def fake_sleep(seconds):
-        delays.append(seconds)
-        if len(delays) == 2:
-            raise asyncio.CancelledError
-
     monkeypatch.setattr(ctx, "_sync_cycle", exploding_cycle)
-    monkeypatch.setattr(svc.asyncio, "sleep", fake_sleep)
+    delays = _record_waits(ctx, monkeypatch, 2)
     with pytest.raises(asyncio.CancelledError):
         await ctx.sync_timer()
     assert calls["n"] == 2
     assert delays == [60, 120]
+
+
+@pytest.mark.asyncio
+async def test_external_sync_failure_wakes_timer_into_backoff(ctx, monkeypatch):
+    """First boot: no source → the timer sleeps a full interval. The wizard
+    then saves a source and its trigger_sync fails transiently — the timer
+    must wake and retry in 60 s, not after the rest of the hour."""
+    _script_attempts(ctx, monkeypatch,
+                     [None, SubsonicUnreachable("cloudflare blip")])
+    delays: list[float] = []
+    real_wait = ctx._wait_or_woken
+
+    async def recording_wait(delay):
+        delays.append(delay)
+        return await real_wait(delay)
+    monkeypatch.setattr(ctx, "_wait_or_woken", recording_wait)
+
+    timer = asyncio.create_task(ctx.sync_timer())
+    for _ in range(20):
+        await asyncio.sleep(0)
+    interval = ctx.cfg.sync.interval_seconds
+    assert delays == [interval]
+
+    await ctx.trigger_sync()  # e.g. PUT /api/library/source
+    assert ctx._sync_task is not None
+    assert await ctx._sync_task is False
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert delays == [interval, 60]
+    timer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await timer
+
+
+@pytest.mark.asyncio
+async def test_external_sync_success_resets_backoff(ctx, monkeypatch):
+    _script_attempts(ctx, monkeypatch, [SubsonicUnreachable("down"), None])
+    delays: list[float] = []
+    real_wait = ctx._wait_or_woken
+
+    async def recording_wait(delay):
+        delays.append(delay)
+        return await real_wait(delay)
+    monkeypatch.setattr(ctx, "_wait_or_woken", recording_wait)
+
+    timer = asyncio.create_task(ctx.sync_timer())
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert delays == [60]
+    await ctx.trigger_sync()  # "Sync now" succeeds
+    assert ctx._sync_task is not None
+    assert await ctx._sync_task is True
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert delays == [60, ctx.cfg.sync.interval_seconds]
+    timer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await timer
 
 
 # ---- cache drive loss ----

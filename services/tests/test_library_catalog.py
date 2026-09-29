@@ -4,7 +4,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from boombox_library.catalog import sync_full
+from boombox_library import catalog
+from boombox_library.catalog import (
+    prune_deferred_status,
+    request_forced_prune,
+    sync_full,
+)
 from boombox_library.db import connect, migrate
 
 
@@ -356,6 +361,109 @@ async def test_sync_full_prunes_many_albums_under_fraction(tmp_path: Path):
     client._albums = albums[:920]  # 80 removed = 8%
     await sync_full(client, db)
     assert db.execute("SELECT COUNT(*) FROM albums").fetchone()[0] == 920
+
+
+def _albums_count(db) -> int:
+    return db.execute("SELECT COUNT(*) FROM albums").fetchone()[0]
+
+
+async def _seed_200(tmp_path: Path):
+    db = connect(tmp_path / "library.db")
+    migrate(db)
+    albums, tracks = _many_albums(200)
+    client = FakeSubsonic(
+        artists=[{"id": "ar1", "name": "X", "albumCount": 200}],
+        albums=albums, tracks_per_album=tracks,
+    )
+    await sync_full(client, db)
+    return db, client, albums
+
+
+@pytest.mark.asyncio
+async def test_persistent_mass_removal_is_eventually_pruned(tmp_path: Path, monkeypatch):
+    """The guard is a hold-off, not a permanent block: the same albums
+    missing on 3 consecutive syncs spanning >= 30 min are a real delete."""
+    db, client, albums = await _seed_200(tmp_path)
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(catalog.time, "time", lambda: clock["t"])
+    client._albums = albums[:100]
+
+    await sync_full(client, db)  # round 1: deferred
+    assert _albums_count(db) == 200
+    st = prune_deferred_status(db)
+    assert st is not None and st["albums"] == 100 and st["rounds"] == 1
+
+    clock["t"] += 3600
+    await sync_full(client, db)  # round 2: deferred
+    assert _albums_count(db) == 200
+    assert prune_deferred_status(db)["rounds"] == 2
+
+    clock["t"] += 3600
+    await sync_full(client, db)  # round 3: confirmed
+    assert _albums_count(db) == 100
+    assert db.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 100
+    assert prune_deferred_status(db) is None
+
+
+@pytest.mark.asyncio
+async def test_rapid_resyncs_do_not_confirm_a_mass_prune(tmp_path: Path, monkeypatch):
+    """Three back-to-back "Sync now" taps during a server rescan must not
+    count as confirmation — the rounds also need to span 30 min."""
+    db, client, albums = await _seed_200(tmp_path)
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(catalog.time, "time", lambda: clock["t"])
+    client._albums = albums[:100]
+    for _ in range(4):
+        clock["t"] += 60
+        await sync_full(client, db)
+    assert _albums_count(db) == 200
+    clock["t"] += 1800
+    await sync_full(client, db)
+    assert _albums_count(db) == 100
+
+
+@pytest.mark.asyncio
+async def test_prune_hold_off_restarts_when_missing_set_changes(tmp_path: Path, monkeypatch):
+    db, client, albums = await _seed_200(tmp_path)
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(catalog.time, "time", lambda: clock["t"])
+    client._albums = albums[:100]
+    await sync_full(client, db)
+    clock["t"] += 3600
+    await sync_full(client, db)
+    assert prune_deferred_status(db)["rounds"] == 2
+    client._albums = albums[:90]  # a different shortfall: not the same event
+    clock["t"] += 3600
+    await sync_full(client, db)
+    assert _albums_count(db) == 200
+    assert prune_deferred_status(db)["rounds"] == 1
+
+
+@pytest.mark.asyncio
+async def test_healthy_listing_clears_deferred_prune(tmp_path: Path):
+    """A temporary truncation that recovers leaves no pending state."""
+    db, client, albums = await _seed_200(tmp_path)
+    client._albums = albums[:100]
+    await sync_full(client, db)
+    assert prune_deferred_status(db) is not None
+    client._albums = albums
+    await sync_full(client, db)
+    assert prune_deferred_status(db) is None
+    assert _albums_count(db) == 200
+
+
+@pytest.mark.asyncio
+async def test_forced_prune_is_one_shot(tmp_path: Path):
+    db, client, albums = await _seed_200(tmp_path)
+    request_forced_prune(db)
+    client._albums = albums[:100]
+    await sync_full(client, db)
+    assert _albums_count(db) == 100
+    assert prune_deferred_status(db) is None
+    # Consumed: the next mass shortfall is guarded again.
+    client._albums = albums[:10]
+    await sync_full(client, db)
+    assert _albums_count(db) == 100
 
 
 # ---- starred refresh ----

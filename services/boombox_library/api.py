@@ -20,7 +20,8 @@ from aiohttp import web
 
 from . import __version__, stream_proxy
 from .art import fetch_art
-from .config import LibraryConfig, SourceConfig
+from .catalog import prune_deferred_status, request_forced_prune
+from .config import LibraryConfig
 from .models import PinKind, PinSource
 from .pins import pin as _pin_fn
 from .pins import unpin as _unpin_fn
@@ -67,6 +68,7 @@ def build_app(ctx: Context) -> web.Application:
     app.router.add_get("/api/library/search", _search)
     app.router.add_post("/api/library/pin", _pin)
     app.router.add_post("/api/library/sync/run", _sync_run)
+    app.router.add_post("/api/library/sync/prune", _sync_prune)
     app.router.add_get("/api/library/track/{track_id}/playback", _resolver)
     app.router.add_post("/api/library/resolve", _resolve_batch)
     app.router.add_get("/api/library/artist/{artist_id}", _artist_detail)
@@ -92,6 +94,8 @@ async def _health(req: web.Request) -> web.Response:
         "cache_mount": str(drive.mount_path) if drive and drive.mount_path else None,
         "last_sync_ts": ctx.last_sync_ts,
         "syncing": ctx.syncing,
+        # A large album removal the prune guard is holding off, or null.
+        "prune_deferred": prune_deferred_status(ctx.conn),
     })
 
 
@@ -104,7 +108,10 @@ async def _source_get(req: web.Request) -> web.Response:
 async def _source_put(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
     body = await req.json()
-    new_source = SourceConfig(
+    # replace(), not a fresh SourceConfig: fields the form doesn't send
+    # (max_bitrate_kbps, set by hand in library.yml) must survive a save.
+    new_source = replace(
+        ctx.cfg.source,
         url=body.get("url", ""),
         username=body.get("username", ""),
         password=body.get("password", ""),
@@ -257,6 +264,15 @@ def _resolve_one(
         source_url=src.url, source_username=src.username, source_password=src.password,
         file_exists=existing.__contains__,
     )
+
+
+async def _sync_prune(req: web.Request) -> web.Response:
+    """Override the prune guard once: the next complete sync reaps every
+    album Navidrome no longer lists, however many. Starts that sync."""
+    ctx: Context = req.app["ctx"]
+    request_forced_prune(ctx.conn)
+    await ctx.trigger_sync()
+    return web.json_response({"ok": True})
 
 
 async def _resolver(req: web.Request) -> web.Response:

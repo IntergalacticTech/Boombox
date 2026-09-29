@@ -435,12 +435,13 @@ buttons and offline-miss CTAs.
 
 | Endpoint | Used by |
 |----------|---------|
-| `GET  /api/library/health` | UI: sync indicator (`navidrome_reachable`, `cache_present`, `last_sync_ts`, `syncing`) |
+| `GET  /api/library/health` | UI: sync indicator (`navidrome_reachable`, `cache_present`, `last_sync_ts`, `syncing`, `prune_deferred` — a large album removal the prune guard is holding off, or `null`) |
 | `GET  /api/library/source` / `PUT` / `POST /source/test` | Settings → Home Library: source config + Test/Save |
 | `GET  /api/library/browse?type=artists\|albums\|playlists` | LibraryDrawer Home Library root; served from precomputed ETag-tagged JSON snapshots when present, falls back to SQLite |
 | `GET  /api/library/search?q=` | Search bar; FTS5-backed |
 | `POST /api/library/pin` | `{kind, id, mode: pin\|unpin, source?: user\|favorite}` — schedules downloads and is the auto-coupling target for the favorite heart |
 | `POST /api/library/sync/run` | Settings → "Sync now" |
+| `POST /api/library/sync/prune` | Admin/curl: override the prune guard once — the next complete sync reaps every album Navidrome no longer lists (otherwise a >10% & >50-album removal is reaped only after 3 consecutive syncs over ≥30 min see the same missing set) |
 | `GET  /api/library/track/{id}/playback` | Resolver: decide cache vs stream vs offline-miss for a given Subsonic track id |
 | `GET  /api/library/cache/stats` | CachePanel: stacked-bar of reserved / pinned / streamed / free |
 | `GET  /api/library/cache/candidates` | App polling: surfaces newly-plugged USB drives (writable only) for the adopt overlay |

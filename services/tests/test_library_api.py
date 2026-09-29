@@ -504,3 +504,50 @@ async def test_unpin_endpoint_accepts_source(client):
     assert r.status == 200
     rows = list(conn.execute("SELECT * FROM pins WHERE target_id='al1'"))
     assert len(rows) == 1
+
+
+# ----- source save keeps fields the form doesn't send -----
+
+@pytest.mark.asyncio
+async def test_source_put_keeps_max_bitrate(client):
+    """The Settings / wizard form only sends url+username+password; a
+    hand-set source.max_bitrate_kbps must survive the save."""
+    c, ctx, _ = client
+    ctx.cfg = LibraryConfig(
+        source=SourceConfig(url="http://old", username="o", password="x",
+                            max_bitrate_kbps=192),
+        sync=DEFAULT_CONFIG.sync, cache=DEFAULT_CONFIG.cache,
+    )
+    r = await c.put("/api/library/source", json={
+        "url": "https://music.example", "username": "u", "password": "p",
+    })
+    assert r.status == 200
+    assert ctx.cfg.source.url == "https://music.example"
+    assert ctx.cfg.source.username == "u"
+    assert ctx.cfg.source.password == "p"
+    assert ctx.cfg.source.max_bitrate_kbps == 192
+
+
+# ----- prune guard override + visibility -----
+
+@pytest.mark.asyncio
+async def test_sync_prune_sets_one_shot_force_and_triggers(client):
+    c, ctx, conn = client
+    r = await c.post("/api/library/sync/prune")
+    assert r.status == 200
+    assert ctx.synced == 1
+    assert conn.execute(
+        "SELECT value FROM sync_state WHERE key='prune_force'").fetchone()
+
+
+@pytest.mark.asyncio
+async def test_health_reports_prune_deferred(client):
+    c, _, conn = client
+    body = await (await c.get("/api/library/health")).json()
+    assert body["prune_deferred"] is None
+    conn.execute(
+        "INSERT INTO sync_state(key, value) VALUES ('prune_deferred', ?)",
+        ('{"fingerprint": "f", "albums": 200, "rounds": 1, "since": 5.0}',))
+    body = await (await c.get("/api/library/health")).json()
+    assert body["prune_deferred"]["albums"] == 200
+    assert body["prune_deferred"]["rounds"] == 1

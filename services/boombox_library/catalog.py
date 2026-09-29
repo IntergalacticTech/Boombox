@@ -8,6 +8,8 @@ Sync is upsert-based and keeps the FTS5 search index in lockstep.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
 from sqlite3 import Connection
@@ -22,10 +24,22 @@ _ALBUM_PAGE_SIZE = 500
 # Prune guard. A sync that would reap more than this fraction of the local
 # albums AND more than this many albums is treated as suspect (a truncated
 # album listing from a flaky remote, a Navidrome rescan in progress, a
-# library folder temporarily unmounted on the server) and skipped for the
-# round — the next healthy sync prunes normally. Small deltas always prune.
+# library folder temporarily unmounted on the server) and deferred — the
+# next healthy sync prunes normally. Small deltas always prune.
+#
+# A deferral is a hold-off, not a permanent block: when the SAME set of
+# albums is missing on PRUNE_CONFIRM_ROUNDS consecutive complete syncs
+# spanning at least PRUNE_CONFIRM_MIN_SECONDS, it's a real removal (folder
+# deleted, Navidrome regenerated its album IDs) and is reaped. A one-shot
+# override (request_forced_prune, POST /api/library/sync/prune) reaps on
+# the next complete sync. The pending state lives in sync_state so a
+# restart doesn't reset the count.
 PRUNE_MAX_FRACTION = 0.10
 PRUNE_MIN_ALBUMS = 50
+PRUNE_CONFIRM_ROUNDS = 3
+PRUNE_CONFIRM_MIN_SECONDS = 30 * 60
+_PRUNE_DEFERRED_KEY = "prune_deferred"
+_PRUNE_FORCE_KEY = "prune_force"
 
 
 class SubsonicProto(Protocol):
@@ -161,6 +175,70 @@ def _prune_is_safe(existing: int, removing: int) -> bool:
     if removing <= PRUNE_MIN_ALBUMS:
         return True
     return removing <= existing * PRUNE_MAX_FRACTION
+
+
+def _state_get(conn: Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM sync_state WHERE key=?",
+                       (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _state_set(conn: Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO sync_state(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+
+
+def _state_del(conn: Connection, key: str) -> None:
+    conn.execute("DELETE FROM sync_state WHERE key=?", (key,))
+
+
+def request_forced_prune(conn: Connection) -> None:
+    """Let the next complete sync reap albums even past the prune guard."""
+    _state_set(conn, _PRUNE_FORCE_KEY, "1")
+
+
+def prune_deferred_status(conn: Connection) -> dict | None:
+    """The pending (guard-deferred) removal, or None. Surfaced by /health."""
+    try:
+        raw = _state_get(conn, _PRUNE_DEFERRED_KEY)
+        if raw is None:
+            return None
+        d = json.loads(raw)
+        return {"albums": int(d["albums"]), "rounds": int(d["rounds"]),
+                "since": float(d["since"]),
+                "confirm_rounds": PRUNE_CONFIRM_ROUNDS}
+    except Exception:  # noqa: BLE001 — health must never 500 on bad state
+        return None
+
+
+def _prune_hold_off(conn: Connection, removing_ids: list[str],
+                    now: float) -> tuple[bool, dict]:
+    """Guard tripped: record this round against the deferred removal.
+
+    Returns (prune_now, state). The count continues only while the exact
+    same album set is missing; a different set restarts it at round 1.
+    """
+    fp = hashlib.sha1("\n".join(sorted(removing_ids)).encode()).hexdigest()
+    prev: dict = {}
+    raw = _state_get(conn, _PRUNE_DEFERRED_KEY)
+    if raw:
+        try:
+            prev = json.loads(raw)
+        except ValueError:
+            prev = {}
+    if prev.get("fingerprint") == fp:
+        state = {**prev, "rounds": int(prev.get("rounds", 0)) + 1}
+    else:
+        state = {"fingerprint": fp, "albums": len(removing_ids),
+                 "rounds": 1, "since": now}
+    confirmed = (state["rounds"] >= PRUNE_CONFIRM_ROUNDS
+                 and now - float(state["since"]) >= PRUNE_CONFIRM_MIN_SECONDS)
+    if confirmed:
+        _state_del(conn, _PRUNE_DEFERRED_KEY)
+    else:
+        _state_set(conn, _PRUNE_DEFERRED_KEY, json.dumps(state))
+    return confirmed, state
 
 
 def _upsert_playlist(conn: Connection, pl: dict, now: float) -> None:
@@ -321,7 +399,8 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
     # source-of-truth list — if the walk above raised, the whole
     # sync_full caller catches it and we never reach here, so a partial
     # walk can never drive a destructive delete. A listing that completed
-    # but came back suspiciously short is caught by _prune_is_safe.
+    # but came back suspiciously short is caught by _prune_is_safe and
+    # held off (not blocked forever) by _prune_hold_off.
     seen_album_ids = {aid for aid, _ in all_albums_seen}
     if seen_album_ids:
         conn.execute("BEGIN")
@@ -332,18 +411,38 @@ async def sync_full(client: SubsonicProto, conn: Connection) -> dict:
             conn.executemany("INSERT INTO _seen_albums(id) VALUES (?)",
                              ((aid,) for aid in seen_album_ids))
             existing = conn.execute("SELECT COUNT(*) FROM albums").fetchone()[0]
-            removing = conn.execute(
-                "SELECT COUNT(*) FROM albums "
-                "WHERE id NOT IN (SELECT id FROM _seen_albums)"
-            ).fetchone()[0]
-            removed = 0
+            removing_ids = [r[0] for r in conn.execute(
+                "SELECT id FROM albums "
+                "WHERE id NOT IN (SELECT id FROM _seen_albums)")]
+            removing = len(removing_ids)
+            forced = _state_get(conn, _PRUNE_FORCE_KEY) is not None
+            _state_del(conn, _PRUNE_FORCE_KEY)  # one-shot, used or not
+            prune = bool(removing)
             if removing and not _prune_is_safe(existing, removing):
-                log.warning(
-                    "sync_full: refusing to prune %d of %d albums (> %d%% and "
-                    "> %d) — listing looks truncated; skipping prune this round",
-                    removing, existing, int(PRUNE_MAX_FRACTION * 100),
-                    PRUNE_MIN_ALBUMS)
-            elif removing:
+                if forced:
+                    log.warning("sync_full: forced prune of %d of %d albums",
+                                removing, existing)
+                    _state_del(conn, _PRUNE_DEFERRED_KEY)
+                else:
+                    prune, st = _prune_hold_off(conn, removing_ids, now)
+                    if prune:
+                        log.warning(
+                            "sync_full: pruning %d of %d albums — the same "
+                            "albums were missing on %d consecutive syncs",
+                            removing, existing, st["rounds"])
+                    else:
+                        log.warning(
+                            "sync_full: refusing to prune %d of %d albums "
+                            "(> %d%% and > %d) — listing looks truncated; "
+                            "deferred (round %d of %d)",
+                            removing, existing, int(PRUNE_MAX_FRACTION * 100),
+                            PRUNE_MIN_ALBUMS, st["rounds"],
+                            PRUNE_CONFIRM_ROUNDS)
+            else:
+                # Healthy listing: any earlier suspect shortfall is over.
+                _state_del(conn, _PRUNE_DEFERRED_KEY)
+            removed = 0
+            if prune:
                 cursor = conn.execute(
                     "DELETE FROM albums WHERE id NOT IN (SELECT id FROM _seen_albums)"
                 )

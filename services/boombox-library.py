@@ -17,6 +17,7 @@ import signal
 import time
 from pathlib import Path
 
+import aiohttp
 from aiohttp import web
 from boombox_library import __version__
 from boombox_library.api import build_app
@@ -63,12 +64,23 @@ ART_CACHE_DIR = Path("/opt/boombox/state/art-cache")
 SNAPSHOT_DIR = Path("/opt/boombox/state/snapshots")
 MOPIDY_CONF = Path("/etc/mopidy/mopidy.conf")
 CACHE_POLL_SECONDS = 5
-# After a failed ping/sync, retry after 60 s, 120 s, 240 s, … capped at the
-# configured sync interval; the first success resets to the normal cadence.
-# A remote homelab behind Cloudflare blips far more often than a LAN NAS,
-# and waiting a full hour to notice it's back leaves the kiosk "offline".
+# After a TRANSIENT ping/sync failure (unreachable, timeout, Cloudflare
+# page), retry after 60 s, 120 s, 240 s, … capped at the configured sync
+# interval; the first success resets to the normal cadence. A remote
+# homelab behind Cloudflare blips far more often than a LAN NAS, and
+# waiting a full hour to notice it's back leaves the kiosk "offline".
+# Permanent failures (bad password, a local bug) wait the full interval:
+# hammering them only adds sync load and failed-auth hits at the edge.
 SYNC_RETRY_BASE_SECONDS = 60
 PORT = 6687
+
+
+def is_transient(exc: BaseException) -> bool:
+    """A failure worth a quick retry: the link, not the config or our code."""
+    if isinstance(exc, SubsonicAuthError):
+        return False
+    return isinstance(exc, (SubsonicUnreachable, asyncio.TimeoutError,
+                            aiohttp.ClientError, ConnectionError))
 
 
 def retry_delay(failures: int, interval: float,
@@ -97,6 +109,10 @@ class ServiceContext:
         # Phase 2: surfaced through /api/library/health for the UI's SyncIndicator
         self.last_sync_ts: float = 0.0
         self.syncing: bool = False
+        # Consecutive transient sync failures (drives sync_timer's backoff)
+        # and a wake-up for it when a sync it didn't start finishes.
+        self._transient_failures = 0
+        self._sync_done = asyncio.Event()
         # cache_poll's one-time startup check of cache_state vs. the drive
         self._cache_rows_checked = False
         self._load_sidecar_if_present()
@@ -198,10 +214,27 @@ class ServiceContext:
         escaping exception would vanish as "Task exception was never
         retrieved" — and, worse, leave _online stuck at its previous value.
         Any ping failure, of any type, reports the source offline.
+
+        Every run, whoever started it (sync_timer, Settings' "Sync now",
+        a source save), updates _transient_failures and wakes sync_timer
+        so it schedules the next attempt from this outcome.
         """
+        failure: BaseException | None = None
+        try:
+            failure = await self._sync_attempt()
+        finally:
+            if failure is not None and is_transient(failure):
+                self._transient_failures += 1
+            else:
+                self._transient_failures = 0
+            self._sync_done.set()
+        return failure is None
+
+    async def _sync_attempt(self) -> BaseException | None:
+        """_sync_once's body; returns the failure (None on success)."""
         if not self.cfg.source.url:
             log.info("no source configured; skipping sync")
-            return True
+            return None
         self.syncing = True
         try:
             async with SubsonicClient(self.cfg.source.url,
@@ -212,7 +245,7 @@ class ServiceContext:
                 except Exception as e:
                     log.warning("ping failed: %s: %s", type(e).__name__, e)
                     self._online = False
-                    return False
+                    return e
                 self._online = True
                 try:
                     t0 = time.monotonic()
@@ -232,20 +265,20 @@ class ServiceContext:
                         log.exception("snapshot write failed; "
                                       "browse will fall back to SQLite")
                     self.last_sync_ts = time.time()
-                    return True
+                    return None
                 except SubsonicUnreachable as e:
                     # The link dropped mid-sync (timeout, Cloudflare page).
                     log.warning("sync aborted, source unreachable: %s", e)
                     self._online = False
-                    return False
+                    return e
                 except Exception as e:
                     log.exception("sync failed: %s", e)
-                    return False
-        except Exception:
+                    return e
+        except Exception as e:
             # Client setup/teardown itself failed — treat as unreachable.
             log.exception("sync client failed")
             self._online = False
-            return False
+            return e
         finally:
             self.syncing = False
 
@@ -257,24 +290,40 @@ class ServiceContext:
             return True
         return await task
 
+    async def _wait_or_woken(self, delay: float) -> bool:
+        """Sleep `delay` s; True if a sync finished first (cut short)."""
+        try:
+            await asyncio.wait_for(self._sync_done.wait(), delay)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
     async def sync_timer(self) -> None:
         """First-boot immediate sync, then every interval_seconds — or
-        sooner, with exponential backoff, while the source is failing."""
-        failures = 0
+        sooner, with exponential backoff, while the source is unreachable.
+
+        A sync started elsewhere (a source save from the setup wizard,
+        "Sync now") wakes the timer, which re-arms from that sync's outcome:
+        a failed first-run sync after the wizard is retried in 60 s, not
+        after whatever full interval the timer was already sleeping.
+        """
         while True:
-            ok = False
             try:
-                ok = await self._sync_cycle()
+                await self._sync_cycle()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("sync cycle failed; will retry")
-            failures = 0 if ok else failures + 1
-            delay = retry_delay(failures, self.cfg.sync.interval_seconds)
-            if failures:
-                log.info("sync failed %d time(s) in a row; retrying in %ds",
-                         failures, delay)
-            await asyncio.sleep(delay)
+                self._transient_failures += 1
+            while True:
+                failures = self._transient_failures
+                delay = retry_delay(failures, self.cfg.sync.interval_seconds)
+                if failures:
+                    log.info("sync unreachable %d time(s) in a row; "
+                             "retrying in %ds", failures, delay)
+                self._sync_done.clear()
+                if not await self._wait_or_woken(delay):
+                    break
 
     async def cache_poll(self) -> None:
         while True:

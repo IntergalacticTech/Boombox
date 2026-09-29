@@ -13,7 +13,7 @@ from pathlib import Path
 
 log = logging.getLogger("boombox-library.db")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def fts_rowid(content_type: str, id_: str) -> int:
@@ -148,6 +148,14 @@ _MIGRATIONS = [
     # No DDL; the data rewrite lives in _rebuild_search_index_rowids below
     # because the rowid is computed in Python.
     "SELECT 1;",
+    # v4 — small key/value store for sync bookkeeping that must survive a
+    # restart (the prune guard's deferred-removal hold-off, see catalog.py).
+    """
+    CREATE TABLE IF NOT EXISTS sync_state (
+        key    TEXT PRIMARY KEY,
+        value  TEXT NOT NULL
+    );
+    """,
 ]
 
 
