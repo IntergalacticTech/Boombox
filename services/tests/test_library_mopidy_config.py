@@ -102,13 +102,16 @@ def test_remove_strips_duplicate_sections(tmp_path: Path):
     assert conf.read_text() == "[core]\nx = 1\n"
 
 
-def test_rewritten_file_is_owner_only(tmp_path: Path):
+def test_rewritten_file_keeps_original_mode(tmp_path: Path):
+    """Mopidy runs as its own user; the rewrite must not tighten a
+    world-readable conf to 0600 (that locked Mopidy out of its config)."""
     conf = tmp_path / "mopidy.conf"
-    conf.write_text(_LEGACY)
-    conf.chmod(0o600)
-    remove_subsonic_block(conf)
-    assert stat.S_IMODE(conf.stat().st_mode) == 0o600
-    assert not (tmp_path / "mopidy.conf.tmp").exists()
+    for mode in (0o644, 0o600):
+        conf.write_text(_LEGACY)
+        conf.chmod(mode)
+        assert remove_subsonic_block(conf)
+        assert stat.S_IMODE(conf.stat().st_mode) == mode
+        assert not (tmp_path / "mopidy.conf.tmp").exists()
 
 
 def test_write_shim_never_writes_credentials(tmp_path: Path):

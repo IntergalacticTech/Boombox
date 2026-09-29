@@ -35,7 +35,7 @@ repo organises itself in your head.
    │   (music)    │       │  state    │ │  audio   │ │  buttons    │
    └──────┬───────┘       │  :6681    │ │  :6682   │ │  :6684+GPIO │
           │               └─────┬─────┘ └─────┬────┘ └──────┬──────┘
-          │  alsasink           │             │             │
+          │  pulsesink (tcp)    │             │             │
           ▼                     │  playerctl  │  parec      │ HTTP/RPC
    ┌──────────────┐             ▼             ▼             ▼
    │  PipeWire    │       ┌─────────────────────────────────────────┐

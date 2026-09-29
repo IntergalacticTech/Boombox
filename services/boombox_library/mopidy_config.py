@@ -34,7 +34,10 @@ _SUBSONIC_BLOCK_RE = re.compile(
 def remove_subsonic_block(path: Path) -> bool:
     """Idempotently strip every [subsonic] section from mopidy.conf,
     preserving all other sections and comments. Atomic via .tmp + fsync +
-    rename; the tmp file is created 0o600 like the original install.
+    rename. The rewritten file keeps the original's permission bits:
+    Mopidy runs as its own `mopidy` user and must still be able to read
+    it (a forced 0600 on a boombox-user-owned file locked Mopidy out of
+    its whole config — it silently fell back to package defaults).
 
     Returns True when the file was rewritten, False when there was nothing
     to remove (including when the file doesn't exist — never creates it).
@@ -49,8 +52,10 @@ def remove_subsonic_block(path: Path) -> bool:
     # trailing whitespace if [subsonic] was the last section).
     stripped = re.sub(r"\n{3,}", "\n\n", stripped).rstrip() + "\n"
 
+    mode = path.stat().st_mode & 0o777
     tmp = path.with_suffix(path.suffix + ".tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, mode)
     with os.fdopen(fd, "w") as fh:
         fh.write(stripped)
         fh.flush()

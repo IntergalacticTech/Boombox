@@ -105,7 +105,7 @@ sudo apt install -y \
   nginx apache2-utils samba \
   chromium unclutter grim wvkbd wlr-randr \
   playerctl \
-  pipewire pipewire-pulse wireplumber pulseaudio-utils \
+  pipewire pipewire-pulse wireplumber pulseaudio-utils gstreamer1.0-pulseaudio \
   shairport-sync \
   bluez bluez-tools bluez-firmware \
   alsa-utils \
@@ -276,6 +276,14 @@ fi
 log "installing /etc/asound.conf"
 sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/asound.conf" /etc/asound.conf
 
+# Mopidy (system user) → PipeWire (boombox user) over loopback pulse TCP.
+log "installing pipewire-pulse loopback listener for Mopidy"
+sudo install -d -m 0755 /etc/pipewire/pipewire-pulse.conf.d
+sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/config/pipewire-pulse-boombox.conf" \
+  /etc/pipewire/pipewire-pulse.conf.d/10-boombox-mopidy-tcp.conf
+# Picked up at the next session start if there's no user session yet.
+systemctl --user restart pipewire-pulse 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # 5.5. logind: ignore the PMIC power key
 # ---------------------------------------------------------------------------
@@ -393,10 +401,11 @@ sudo BOOMBOX_VIDEO_DIR="$VIDEO_DIR" python3 \
 
 log "installing /etc/mopidy/mopidy.conf"
 sudo mkdir -p /etc/mopidy
-# Install with 0600 + boombox-user ownership so boombox-library can
-# rewrite the [subsonic] block at runtime when the user saves Settings.
-# Mopidy reads the file before dropping privileges so user ownership is fine.
-sudo install -m 0600 -o "$BOOMBOX_USER" -g "$BOOMBOX_USER" \
+# Boombox-user ownership so boombox-library can strip a stale [subsonic]
+# block on Settings saves. 0644, not 0600: Mopidy runs as the `mopidy`
+# user (User=mopidy in its unit) and must read this file — at 0600 it
+# silently ignored it and ran on package defaults. It holds no secrets.
+sudo install -m 0644 -o "$BOOMBOX_USER" -g "$BOOMBOX_USER" \
     "$ACTIVE_SCRIPT_DIR/config/mopidy.conf" /etc/mopidy/mopidy.conf
 sudo sed -i "s|__MUSIC_DIR__|$MUSIC_DIR|g" /etc/mopidy/mopidy.conf
 
