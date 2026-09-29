@@ -15,6 +15,7 @@ import sqlite3
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -99,6 +100,39 @@ async def _health(req: web.Request) -> web.Response:
     })
 
 
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int] | None:
+    """(scheme, host, port) lowercased with default ports filled, or None."""
+    try:
+        u = urlsplit(url.strip())
+        port = u.port
+    except ValueError:
+        return None
+    scheme = u.scheme.lower()
+    if scheme not in _DEFAULT_PORTS or not u.hostname:
+        return None
+    return scheme, u.hostname.lower(), port or _DEFAULT_PORTS[scheme]
+
+
+def _same_origin(a: str, b: str) -> bool:
+    oa = _origin(a)
+    return oa is not None and oa == _origin(b)
+
+
+def _password_or_stored(ctx: Context, url: str, password: str | None) -> str:
+    """Blank = keep the stored password, but only for the stored server's
+    origin: the Accounts page never receives the stored password, so an
+    unchanged field arrives empty. A different server must never receive
+    the stored credential, so it gets the blank as-is and fails normally."""
+    if password:
+        return password
+    if _same_origin(url, ctx.cfg.source.url):
+        return ctx.cfg.source.password
+    return ""
+
+
 async def _source_get(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
     s = ctx.cfg.source
@@ -114,9 +148,7 @@ async def _source_put(req: web.Request) -> web.Response:
         ctx.cfg.source,
         url=body.get("url", ""),
         username=body.get("username", ""),
-        # Blank = keep: the Accounts page never receives the stored password,
-        # so an unchanged field arrives empty.
-        password=body.get("password") or ctx.cfg.source.password,
+        password=_password_or_stored(ctx, body.get("url", ""), body.get("password")),
     )
     ok, msg = await ctx.test_source(new_source.url, new_source.username, new_source.password)
     if not ok:
@@ -145,7 +177,7 @@ async def _source_test(req: web.Request) -> web.Response:
     body = await req.json()
     ok, msg = await ctx.test_source(
         body.get("url", ""), body.get("username", ""),
-        body.get("password") or ctx.cfg.source.password,
+        _password_or_stored(ctx, body.get("url", ""), body.get("password")),
     )
     return web.json_response({"ok": ok, "error": msg if not ok else ""})
 
