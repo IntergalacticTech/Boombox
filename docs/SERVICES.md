@@ -223,6 +223,12 @@ failure flip `current` back to `previous` and restart.
 - **Runtime state:** `/opt/boombox/state/updater.json` (installed/available
   versions, last attempt) and per-attempt logs under
   `/opt/boombox/state/logs/`
+- **No auto-retry of a failed release:** if the last attempt at the
+  available ref ended `rolled_back` / `smoke_failed` / `fetch_failed` /
+  `build_failed` / `broken`, the window scheduler skips it
+  (`previously_failed`) instead of re-installing every minute. `POST
+  /api/update/install` (or the UI's Install) still retries it by hand; a
+  newer ref is attempted normally.
 - **Logs:** `journalctl --user -u boombox-updater -f`
 - **Disable auto-updates:** `systemctl --user disable --now
   boombox-updater.service`. `bin/boombox-update` still works with the
@@ -437,13 +443,16 @@ release's site file with the port from the root-owned
 `/etc/boombox/web-auth.env`, installs it **together with** the shared
 snippet, runs `nginx -t` and restores both previous files on failure. It
 only installs allow-listed directives from regular files. The helper is
-root-owned and refreshed only by `install.sh`, so **a device must reinstall
-`/usr/local/sbin/boombox-setup-apply` before its first OTA to this
-release** (`sudo install -m 0755 -o root -g root
-/opt/boombox/current/install/bin/boombox-setup-apply /usr/local/sbin/`,
-or re-run `install.sh`). With an old helper the sync is skipped, the
-release's LAN-app check fails and the updater rolls back — the kiosk keeps
-working either way.
+root-owned and refreshed only by `install.sh`, so **re-run `install.sh` on
+every device before its first OTA to this release**. It refreshes both
+`/usr/local/sbin/boombox-setup-apply` *and* `/etc/sudoers.d/boombox`;
+reinstalling only the helper (the old `sudo install … boombox-setup-apply`
+one-liner) leaves the previous sudoers fragment's snippet-only nginx grant
+in place. With an old helper the update stops at **preflight** ("reinstall
+the root helper — re-run install.sh") before anything is swapped or
+restarted, and the scheduler will not auto-retry that release (see
+`boombox-updater`: a ref whose last attempt failed is only re-attempted
+manually or superseded by a newer one) — the kiosk keeps working either way.
 
 Accounts routes (`services/boombox_setup/accounts.py`):
 

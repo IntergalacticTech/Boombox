@@ -65,9 +65,13 @@ and any other HTTP client on the LAN.
 > screen with transport controls (play/pause/next/previous/stop, shuffle,
 > mute, volume) themed to match
 > the active skin. Use the browser's **Add to Home Screen** to install it
-> as a standalone app. The next phase adds the remaining screens
-> (sources, video, playlists, file browser, extras) and a Web Bluetooth
-> pairing flow for off-network Android control; the CYD hardware remote
+> as a standalone app. It has since grown into the full LAN app: Now
+> playing, Music (Home Library browse + play/queue on the boombox), Video
+> (browse Jellyfin and play on the boombox), Playlists, Search, More
+> (files) and **Admin → Accounts** (`#/accounts`, unlocked with the web
+> password as a short-lived admin session). `/remote/` and `/accounts/`
+> 301 to `/` and `/#/accounts`. A Web Bluetooth pairing flow for
+> off-network Android control is not built; the CYD hardware remote
 > already uses this same API and is unaffected.
 
 The remote API can:

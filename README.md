@@ -28,7 +28,7 @@ visualizer, and keeps the kiosk pinned to its UI.
                                                           ├─ /api/library/*   → 6687
                                                           ├─ /api/rfid/*      → 6688
                                                           ├─ / on :8090 (LAN app — pairing)
-                                                          └─ LAN :8090 requires auth
+                                                          └─ everything else on :8090 → Basic auth
 ```
 
 ## Repo layout
