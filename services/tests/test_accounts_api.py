@@ -80,7 +80,6 @@ async def test_accounts_refuses_loopback_even_with_user(client):
     assert r.status == 403  # no X-Real-IP = direct on-box call
 
 
-@pytest.mark.skip("route in Task 4")
 async def test_accounts_mutation_needs_json_and_same_origin(client):
     r = await client.post("/api/accounts/music/test", data="x", headers=LAN)
     assert r.status == 415
@@ -140,3 +139,51 @@ async def test_summary_streaming_non_dict_subresult(client, ctx):
     assert r.status == 200
     body = await r.json()
     assert body["streaming"] == {"state": "ok", "detail": "spotify"}
+
+
+async def test_music_get_merges_health_and_never_returns_password(client):
+    r = await client.get("/api/accounts/music", headers=LAN)
+    body = await r.json()
+    assert body["url"] == "https://m.example" and body["reachable"] is True
+    assert "password" not in body and body["last_sync_ts"] == 1.0
+
+
+async def test_music_put_passes_blank_password_through(client, ctx):
+    r = await client.put("/api/accounts/music", headers=LAN,
+                         json={"url": "https://m2.example", "username": "bb"})
+    assert r.status == 200
+    assert ctx.music_calls[-1] == ("save", "https://m2.example", "bb", "")
+
+
+async def test_music_get_library_down_degrades(client, ctx):
+    async def boom():
+        raise OSError("connection refused")
+    ctx.music_get = boom
+    r = await client.get("/api/accounts/music", headers=LAN)
+    assert r.status == 200
+    body = await r.json()
+    assert body["configured"] is False and body["reachable"] is False
+    assert body["error"]
+
+
+async def test_music_put_rejects_bad_url_and_bad_json(client, ctx):
+    r = await client.put("/api/accounts/music", headers=LAN,
+                         json={"url": "m.example", "username": "bb"})
+    assert r.status == 400 and (await r.json())["ok"] is False
+    r = await client.put("/api/accounts/music", data="{not json",
+                         headers={**LAN, "Content-Type": "application/json"})
+    assert r.status == 400
+    r = await client.post("/api/accounts/music/test", json=["x"], headers=LAN)
+    assert r.status == 400
+    assert ctx.music_calls == []
+
+
+async def test_music_put_failure_scrubs_password(client, ctx):
+    async def leaky(url, username, password):
+        return False, f"auth failed ?p={password}"
+    ctx.music_save = leaky
+    r = await client.put("/api/accounts/music", headers=LAN,
+                         json={"url": "https://m.example", "username": "bb",
+                               "password": "hunter2"})
+    assert r.status == 400
+    assert "hunter2" not in (await r.text())

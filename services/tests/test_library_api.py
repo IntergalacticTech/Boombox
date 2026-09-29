@@ -1,6 +1,7 @@
 """Tests for boombox_library.api — HTTP routes."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,8 @@ class FakeContext:
         # Phase 3: album-art proxy + browse snapshots
         self.art_cache_dir = art_cache_dir or Path("/tmp/boombox-art-test")
         self.snapshot_dir = snapshot_dir or Path("/tmp/boombox-snap-test")
+        self.tested: list[tuple[str, str, str]] = []
+        self.saved: list = []
 
     async def is_online(self) -> bool:
         return self._ping_ok
@@ -46,9 +49,11 @@ class FakeContext:
         return self.cache_state
 
     def save_config(self, cfg):
+        self.saved.append(cfg)
         self.cfg = cfg
 
     async def test_source(self, url, username, password) -> tuple[bool, str]:
+        self.tested.append((url, username, password))
         return (self._ping_ok, "" if self._ping_ok else "auth failed")
 
     # Phase 2 hooks consumed by api.py routes
@@ -611,3 +616,25 @@ async def test_health_reports_prune_deferred(client):
     body = await (await c.get("/api/library/health")).json()
     assert body["prune_deferred"]["albums"] == 200
     assert body["prune_deferred"]["rounds"] == 1
+
+
+# ----- blank password = keep stored (Accounts page never receives it) -----
+
+@pytest.mark.asyncio
+async def test_source_put_blank_password_keeps_current(client):
+    c, ctx, _ = client
+    ctx.cfg = replace(ctx.cfg, source=replace(ctx.cfg.source, password="s3cret"))
+    r = await c.put("/api/library/source",
+                    json={"url": "https://m.example", "username": "bb", "password": ""})
+    assert r.status == 200
+    assert ctx.tested[-1][2] == "s3cret"          # tested with the stored password
+    assert ctx.saved[-1].source.password == "s3cret"
+
+
+@pytest.mark.asyncio
+async def test_source_test_blank_password_uses_current(client):
+    c, ctx, _ = client
+    ctx.cfg = replace(ctx.cfg, source=replace(ctx.cfg.source, password="s3cret"))
+    await c.post("/api/library/source/test",
+                 json={"url": "https://m.example", "username": "bb"})
+    assert ctx.tested[-1][2] == "s3cret"

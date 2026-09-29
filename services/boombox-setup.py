@@ -238,6 +238,14 @@ class ServiceContext:
             "reachable": reachable,
         }
 
+    async def library_health(self) -> dict:
+        try:
+            s = await self._http()
+            async with s.get(f"{LIBRARY_BASE}/api/library/health") as r:
+                return await self._json_or_none(r) or {}
+        except Exception:
+            return {}
+
     async def music_test(self, url, username, password) -> tuple[bool, str]:
         s = await self._http()
         try:

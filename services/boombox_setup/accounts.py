@@ -86,6 +86,72 @@ async def _streaming_state(ctx: Any) -> dict[str, str]:
     return _state("ok" if installed else "absent", ", ".join(installed))
 
 
+async def _music_get(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    try:
+        m = await ctx.music_get()
+    except Exception:
+        log.exception("accounts music: library source unreadable")
+        return web.json_response({
+            "url": "", "username": "", "configured": False, "reachable": False,
+            "last_sync_ts": None, "syncing": False, "prune_deferred": None,
+            "error": "library service not answering"})
+    h = await ctx.library_health()
+    return web.json_response({
+        "url": m.get("url", ""), "username": m.get("username", ""),
+        "configured": bool(m.get("configured")), "reachable": bool(m.get("reachable")),
+        "last_sync_ts": h.get("last_sync_ts"), "syncing": bool(h.get("syncing")),
+        "prune_deferred": h.get("prune_deferred"),
+    })
+
+
+async def _json_body(req: web.Request) -> dict | None:
+    """The request's JSON object, or None when the body isn't one."""
+    try:
+        b = await req.json()
+    except ValueError:
+        return None
+    return b if isinstance(b, dict) else None
+
+
+def _bad_body() -> web.Response:
+    return web.json_response({"ok": False, "error": "expected a JSON object"}, status=400)
+
+
+def _music_fields(b: dict) -> tuple[str, str, str]:
+    # Blank password is passed through: the library keeps the stored one.
+    return (str(b.get("url", "")).strip(), str(b.get("username", "")).strip(),
+            str(b.get("password") or ""))
+
+
+async def _music_test(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    b = await _json_body(req)
+    if b is None:
+        return _bad_body()
+    ok, err = await ctx.music_test(*_music_fields(b))
+    return web.json_response({"ok": ok, "error": "" if ok else err})
+
+
+async def _music_put(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    b = await _json_body(req)
+    if b is None:
+        return _bad_body()
+    url, user, pw = _music_fields(b)
+    if not url.startswith(("http://", "https://")) or not user:
+        return web.json_response({"ok": False, "error": "URL and username are required"},
+                                 status=400)
+    ok, err = await ctx.music_save(url, user, pw)
+    if not ok:
+        return web.json_response(
+            {"ok": False, "error": err.replace(pw, "***") if pw else err}, status=400)
+    return web.json_response({"ok": True})
+
+
 def add_routes(app: web.Application) -> None:
     r = app.router
     r.add_get("/api/accounts/summary", _summary)
+    r.add_get("/api/accounts/music", _music_get)
+    r.add_post("/api/accounts/music/test", _music_test)
+    r.add_put("/api/accounts/music", _music_put)

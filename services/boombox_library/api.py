@@ -114,7 +114,9 @@ async def _source_put(req: web.Request) -> web.Response:
         ctx.cfg.source,
         url=body.get("url", ""),
         username=body.get("username", ""),
-        password=body.get("password", ""),
+        # Blank = keep: the Accounts page never receives the stored password,
+        # so an unchanged field arrives empty.
+        password=body.get("password") or ctx.cfg.source.password,
     )
     ok, msg = await ctx.test_source(new_source.url, new_source.username, new_source.password)
     if not ok:
@@ -142,7 +144,8 @@ async def _source_test(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
     body = await req.json()
     ok, msg = await ctx.test_source(
-        body.get("url", ""), body.get("username", ""), body.get("password", ""),
+        body.get("url", ""), body.get("username", ""),
+        body.get("password") or ctx.cfg.source.password,
     )
     return web.json_response({"ok": ok, "error": msg if not ok else ""})
 
