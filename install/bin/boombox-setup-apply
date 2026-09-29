@@ -19,6 +19,9 @@
 #   wifi-scan  {}                     → list nearby SSIDs (brings wlan0 up)
 #   wifi-join  {ssid, psk}            → join a network on wlan0 (leaves eth0)
 #   jellyfin   {mode, base?, api_key?}→ point video at built-in or your server
+#   streaming-status {}                 → AirPlay/Spotify installed/active/name
+#   streaming  {airplay_name?, airplay_password?, airplay_password_clear?,
+#               spotify_name?}          → rename receivers / set AirPlay password
 #
 # Result is always JSON: {"ok": bool, ...} on stdout, exit 0. Hard errors
 # (bad JSON, unknown action) exit non-zero with {"ok": false, "error": ...}.
@@ -35,7 +38,11 @@ import tempfile
 BOOMBOX_ENV = "/etc/boombox/boombox.env"
 JELLYFIN_ENV = "/etc/boombox/jellyfin.env"
 JELLYFIN_KEY_FILE = "/etc/boombox/jellyfin-api-key"
-SHAIRPORT_CONF = "/etc/shairport-sync.conf"
+# Debian packages read /etc; DietPi's source build reads /usr/local/etc
+# (sysconfdir), which the old single path silently missed.
+SHAIRPORT_CONF_CANDIDATES = ["/etc/shairport-sync.conf",
+                             "/usr/local/etc/shairport-sync.conf"]
+RASPOTIFY_CONF = "/etc/raspotify/conf"
 HOSTS_FILE = "/etc/hosts"
 WLAN_IF = "wlan0"
 
@@ -261,27 +268,19 @@ def _set_hostname(slug: str) -> None:
 
 
 def _set_shairport_name(name: str) -> bool:
-    """Set the AirPlay advertised name in shairport-sync.conf's general block."""
-    if not os.path.exists(SHAIRPORT_CONF):
+    """Set the AirPlay advertised name (general block)."""
+    sp = shairport_conf_path()
+    if sp is None:
         return False
     try:
-        with open(SHAIRPORT_CONF) as f:
+        with open(sp) as f:
             conf = f.read()
-        # Quote-escape for the conf's C-string syntax.
-        safe = name.replace("\\", "\\\\").replace('"', '\\"')
-        if re.search(r'(?m)^\s*name\s*=', conf):
-            new = re.sub(r'(?m)^(\s*)name\s*=\s*"[^"]*"\s*;',
-                         rf'\1name = "{safe}";', conf)
-        elif re.search(r"(?m)^\s*general\s*=\s*\{", conf):
-            new = re.sub(r"(?m)^(\s*general\s*=\s*\{)",
-                         rf'\1\n\tname = "{safe}";', conf, count=1)
-        else:
-            return False
+        new = shairport_set(conf, "name", name)
         if new != conf:
-            _atomic_write(SHAIRPORT_CONF, new, 0o644)
+            _atomic_write(sp, new, 0o644)
             _restart_system_units(["shairport-sync"])
         return True
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 
@@ -307,6 +306,134 @@ def _restart_system_units(units: list[str]) -> None:
                 _run(["systemctl", "restart", u], timeout=20)
         except Exception:
             pass
+
+
+# Receiver names: same shape as device names (no quotes/backslash/$/control).
+def validate_receiver_name(raw: object) -> str:
+    # fullmatch: re.match's `$` would let a trailing newline through.
+    if not isinstance(raw, str) or not _NAME_RE.fullmatch(raw):
+        raise ValueError("name must be 1-32 letters, digits, spaces or . ' _ -")
+    return raw
+
+
+def validate_receiver_password(raw: object) -> str:
+    if (not isinstance(raw, str) or not 8 <= len(raw) <= 64
+            or any(ord(c) < 32 or ord(c) == 127 for c in raw)):
+        raise ValueError("AirPlay password must be 8-64 printable characters")
+    return raw
+
+
+def shairport_conf_path() -> str | None:
+    for p in SHAIRPORT_CONF_CANDIDATES:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _c_escape(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _c_unescape(s: str) -> str:
+    return re.sub(r'\\(.)', r'\1', s)
+
+
+_ACTIVE_KEY = r'(?m)^(\s*){key}\s*=\s*"((?:[^"\\]|\\.)*)"\s*;[^\n]*$'
+_COMMENTED_KEY = r'(?m)^\s*//\s*{key}\s*=[^\n]*$'
+
+
+def shairport_get(conf: str, key: str) -> str | None:
+    m = re.search(_ACTIVE_KEY.format(key=re.escape(key)), conf)
+    return _c_unescape(m.group(2)) if m else None
+
+
+def shairport_set(conf: str, key: str, value: str | None) -> str:
+    """Set (value) or remove (None) `key = "value";` in the general block."""
+    active = re.compile(_ACTIVE_KEY.format(key=re.escape(key)))
+    if value is None:
+        return active.sub("", conf)
+    line = f'\t{key} = "{_c_escape(value)}";'
+    if active.search(conf):
+        return active.sub(lambda _m: line, conf, count=1)
+    commented = re.compile(_COMMENTED_KEY.format(key=re.escape(key)))
+    if commented.search(conf):
+        return commented.sub(lambda _m: line, conf, count=1)
+    m = re.search(r"(?m)^\s*general\s*=\s*\{", conf)
+    if not m:
+        raise ValueError("shairport-sync.conf has no general block")
+    return conf[:m.end()] + "\n" + line + conf[m.end():]
+
+
+def raspotify_get_name(conf: str) -> str | None:
+    m = re.search(r'(?m)^\s*LIBRESPOT_NAME\s*=\s*"?([^"\n]*)"?\s*$', conf)
+    return m.group(1) if m else None
+
+
+def raspotify_set_name(conf: str, name: str) -> str:
+    line = f'LIBRESPOT_NAME="{name}"'
+    pat = re.compile(r'(?m)^\s*#?\s*LIBRESPOT_NAME\s*=.*$')
+    if pat.search(conf):
+        return pat.sub(lambda _m: line, conf, count=1)
+    return conf.rstrip("\n") + "\n" + line + "\n"
+
+
+def _unit_active(unit: str) -> bool:
+    try:
+        return _run(["systemctl", "is-active", unit], timeout=8).stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def action_streaming_status(_body: dict) -> dict:
+    sp = shairport_conf_path()
+    airplay = {"installed": sp is not None, "active": False, "name": "",
+               "password_set": False}
+    if sp:
+        with open(sp) as f:
+            conf = f.read()
+        airplay.update(active=_unit_active("shairport-sync"),
+                       name=shairport_get(conf, "name") or "",
+                       password_set=shairport_get(conf, "password") is not None)
+    spotify = {"installed": os.path.exists(RASPOTIFY_CONF), "active": False, "name": ""}
+    if spotify["installed"]:
+        with open(RASPOTIFY_CONF) as f:
+            spotify.update(active=_unit_active("raspotify"),
+                           name=raspotify_get_name(f.read()) or "")
+    return {"ok": True, "airplay": airplay, "spotify": spotify}
+
+
+def action_streaming(body: dict) -> dict:
+    changed: list[str] = []
+    wants_airplay = any(k in body for k in
+                        ("airplay_name", "airplay_password", "airplay_password_clear"))
+    if wants_airplay:
+        sp = shairport_conf_path()
+        if sp is None:
+            return {"ok": False, "error": "AirPlay (shairport-sync) is not installed"}
+        with open(sp) as f:
+            conf = f.read()
+        new = conf
+        if "airplay_name" in body:
+            new = shairport_set(new, "name", validate_receiver_name(body["airplay_name"]))
+        if body.get("airplay_password_clear"):
+            new = shairport_set(new, "password", None)
+        elif "airplay_password" in body:
+            new = shairport_set(new, "password",
+                                validate_receiver_password(body["airplay_password"]))
+        if new != conf:
+            _atomic_write(sp, new, 0o644)
+            _restart_system_units(["shairport-sync"])
+        changed.append("airplay")
+    if "spotify_name" in body:
+        if not os.path.exists(RASPOTIFY_CONF):
+            return {"ok": False, "error": "Spotify Connect is not installed"}
+        name = validate_receiver_name(body["spotify_name"])
+        with open(RASPOTIFY_CONF) as f:
+            conf = f.read()
+        _atomic_write(RASPOTIFY_CONF, raspotify_set_name(conf, name), 0o644)
+        _restart_system_units(["raspotify"])
+        changed.append("spotify")
+    return {"ok": True, "changed": changed}
 
 
 DIETPI_WIFIDB = "/boot/dietpi/func/dietpi-wifidb"
@@ -613,6 +740,8 @@ ACTIONS = {
     "wifi-scan": action_wifi_scan,
     "wifi-join": action_wifi_join,
     "jellyfin": action_jellyfin,
+    "streaming-status": action_streaming_status,
+    "streaming": action_streaming,
 }
 
 
