@@ -1,6 +1,7 @@
 """/api/accounts/* — auth gate and card endpoints."""
 from __future__ import annotations
 
+import aiohttp
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from boombox_setup.api import build_app
@@ -23,6 +24,7 @@ class FakeAccountsContext:
                        "JELLYFIN_API_KEY": "k"}
         self.music_calls: list[tuple] = []
         self.restarted: list[list[str]] = []
+        self._http_session: aiohttp.ClientSession | None = None
 
     # setup Context surface used by build_app / status
     def read_identity(self):
@@ -51,6 +53,10 @@ class FakeAccountsContext:
         return True, ""
     async def library_health(self): return dict(self.health)
     def jellyfin_env(self): return dict(self.jf_env)
+    async def http(self):
+        if self._http_session is None:
+            self._http_session = aiohttp.ClientSession()
+        return self._http_session
 
 
 @pytest.fixture
@@ -65,6 +71,8 @@ async def client(ctx):
     await c.start_server()
     yield c
     await c.close()
+    if ctx._http_session is not None:
+        await ctx._http_session.close()
 
 
 async def test_accounts_requires_basic_auth_user(client):
@@ -187,3 +195,125 @@ async def test_music_put_failure_scrubs_password(client, ctx):
                                "password": "hunter2"})
     assert r.status == 400
     assert "hunter2" not in (await r.text())
+
+
+async def test_video_get_redacts_key(client, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    seen = []
+    async def who(s, base, key, dev):
+        seen.append((base, key, dev))
+        return "jwc"
+    monkeypatch.setattr(jf, "device_user", who)
+    body = await (await client.get("/api/accounts/video", headers=LAN)).json()
+    assert body["key_set"] is True and "k" not in str(body.get("api_key", ""))
+    assert "api_key" not in body
+    assert body["kiosk_device_id"] == "boombox-markii-kiosk"
+    assert body["mode"] == "remote" and body["base"] == "https://v.example"
+    assert body["kiosk_user"] == "jwc"
+    assert seen == [("https://v.example", "k", "boombox-markii-kiosk")]
+
+
+async def test_video_get_builtin_without_key_skips_lookup(client, ctx, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    async def boom(*a, **k): raise AssertionError("no lookup without a key")
+    monkeypatch.setattr(jf, "device_user", boom)
+    ctx.jf_env = {}
+    body = await (await client.get("/api/accounts/video", headers=LAN)).json()
+    assert body["mode"] == "builtin" and body["key_set"] is False
+    assert body["base"] == "http://127.0.0.1:8096" and body["kiosk_user"] is None
+
+
+async def test_video_save_blank_key_keeps_current(client, ctx, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    async def ok(*a, **k): return {"ServerName": "5CVideo"}
+    monkeypatch.setattr(jf, "system_info", ok)
+    r = await client.put("/api/accounts/video", headers=LAN,
+                         json={"mode": "remote", "base": "https://v2.example"})
+    assert r.status == 200
+    sent = ctx.applied[-1]
+    assert sent["action"] == "jellyfin" and "api_key" not in sent
+    assert ctx.restarted  # consumers restarted
+
+
+async def test_video_save_refuses_failing_server_unless_forced(client, ctx, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    async def boom(*a, **k): raise jf.JellyfinError("Couldn't reach the Jellyfin server")
+    monkeypatch.setattr(jf, "system_info", boom)
+    r = await client.put("/api/accounts/video", headers=LAN,
+                         json={"mode": "remote", "base": "https://down.example"})
+    assert r.status == 400 and (await r.json())["can_force"] is True
+    assert not ctx.applied
+    r = await client.put("/api/accounts/video", headers=LAN,
+                         json={"mode": "remote", "base": "https://down.example", "force": True})
+    assert r.status == 200
+
+
+async def test_video_save_rejects_bad_base(client):
+    r = await client.put("/api/accounts/video", headers=LAN,
+                         json={"mode": "remote", "base": "ftp://x"})
+    assert r.status == 400
+
+
+async def test_video_save_tests_with_new_key_and_rejects_bad_json(client, ctx, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    keys = []
+    async def ok(s, base, key):
+        keys.append(key)
+        return {}
+    monkeypatch.setattr(jf, "system_info", ok)
+    r = await client.put("/api/accounts/video", headers=LAN,
+                         json={"mode": "remote", "base": "https://v2.example/",
+                               "api_key": "newkey"})
+    assert r.status == 200 and keys == ["newkey"]
+    assert ctx.applied[-1] == {"action": "jellyfin", "mode": "remote",
+                               "base": "https://v2.example", "api_key": "newkey"}
+    r = await client.put("/api/accounts/video", headers=LAN, json=["x"])
+    assert r.status == 400
+    r = await client.put("/api/accounts/video", headers=LAN, json={"mode": "weird"})
+    assert r.status == 400
+
+
+async def test_video_save_builtin_and_apply_failure(client, ctx):
+    r = await client.put("/api/accounts/video", headers=LAN, json={"mode": "builtin"})
+    assert r.status == 200 and ctx.applied[-1] == {"action": "jellyfin", "mode": "builtin"}
+    ctx.apply_results["jellyfin"] = {"ok": False, "error": "disk full"}
+    n = len(ctx.restarted)
+    r = await client.put("/api/accounts/video", headers=LAN, json={"mode": "builtin"})
+    assert r.status == 400 and (await r.json())["error"] == "disk full"
+    assert len(ctx.restarted) == n
+
+
+async def test_video_test_endpoint(client, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    keys = []
+    async def ok(s, base, key):
+        keys.append(key)
+        return {"ServerName": "5CVideo"}
+    monkeypatch.setattr(jf, "system_info", ok)
+    r = await client.post("/api/accounts/video/test", headers=LAN,
+                          json={"base": "https://v.example"})
+    assert await r.json() == {"ok": True, "error": "", "server_name": "5CVideo"}
+    assert keys == ["k"]  # blank key = stored key
+    r = await client.post("/api/accounts/video/test", headers=LAN, json={"base": "nope"})
+    assert (await r.json())["ok"] is False
+    async def boom(*a, **k): raise jf.JellyfinError("Jellyfin rejected the API key")
+    monkeypatch.setattr(jf, "system_info", boom)
+    r = await client.post("/api/accounts/video/test", headers=LAN,
+                          json={"base": "https://v.example", "api_key": "bad"})
+    assert r.status == 200
+    assert await r.json() == {"ok": False, "error": "Jellyfin rejected the API key"}
+
+
+async def test_video_users(client, ctx, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    async def users(s, base, key): return [{"id": "u1", "name": "jwc", "admin": True}]
+    monkeypatch.setattr(jf, "list_users", users)
+    body = await (await client.get("/api/accounts/video/users", headers=LAN)).json()
+    assert body == {"users": [{"id": "u1", "name": "jwc", "admin": True}]}
+    async def boom(*a, **k): raise jf.JellyfinError("Couldn't reach the Jellyfin server")
+    monkeypatch.setattr(jf, "list_users", boom)
+    body = await (await client.get("/api/accounts/video/users", headers=LAN)).json()
+    assert body["users"] == [] and "reach" in body["error"]
+    ctx.jf_env = {}
+    body = await (await client.get("/api/accounts/video/users", headers=LAN)).json()
+    assert body["users"] == [] and body["error"]

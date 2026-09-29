@@ -123,6 +123,12 @@ class ServiceContext:
             "has_key": bool(env.get("JELLYFIN_API_KEY")),
         }
 
+    def jellyfin_env(self) -> dict[str, str]:
+        return _read_env_file(JELLYFIN_ENV)
+
+    async def http(self) -> aiohttp.ClientSession:
+        return await self._http()
+
     def lan_host(self) -> str:
         """Best LAN address for the QR URL: the primary global IPv4, else
         the mDNS hostname."""

@@ -11,16 +11,22 @@ write-only: no response ever carries a password, API key or token.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
 from aiohttp import web
+
+from . import jellyfin_signin as jf
 
 log = logging.getLogger("boombox-setup.accounts")
 
 PREFIX = "/api/accounts/"
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_BASE_RE = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+(/[A-Za-z0-9._~%/+-]*)?$")
+_VIDEO_UNITS = ["boombox-remote.service", "boombox-kiosk-guard.service",
+                "boombox-buttons.service"]
 
 
 def check_auth(req: web.Request) -> web.Response | None:
@@ -149,9 +155,108 @@ async def _music_put(req: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+def kiosk_device_id(ctx: Any) -> str:
+    return f"{ctx.read_identity()['id']}-kiosk"
+
+
+def _jf(ctx: Any) -> tuple[str, str]:
+    env = ctx.jellyfin_env()
+    return (env.get("BOOMBOX_JELLYFIN_BASE") or "http://127.0.0.1:8096",
+            env.get("JELLYFIN_API_KEY", ""))
+
+
+def _bad_base() -> dict[str, Any]:
+    return {"ok": False, "error": "Enter an http(s):// address"}
+
+
+async def _video_get(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    env = ctx.jellyfin_env()
+    base, key = _jf(ctx)
+    dev = kiosk_device_id(ctx)
+    user = None
+    if key:
+        try:
+            user = await jf.device_user(await ctx.http(), base, key, dev)
+        except Exception:
+            user = None
+    return web.json_response({
+        "mode": "remote" if env.get("BOOMBOX_JELLYFIN_BASE") else "builtin",
+        "base": base, "key_set": bool(key),
+        "kiosk_device_id": dev, "kiosk_user": user,
+    })
+
+
+async def _video_test(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    b = await _json_body(req)
+    if b is None:
+        return _bad_body()
+    base = str(b.get("base", "")).strip().rstrip("/")
+    key = str(b.get("api_key") or "") or _jf(ctx)[1]
+    if not _BASE_RE.match(base):
+        return web.json_response(_bad_base())
+    try:
+        info = await jf.system_info(await ctx.http(), base, key)
+    except jf.JellyfinError as e:
+        return web.json_response({"ok": False, "error": str(e)})
+    return web.json_response({"ok": True, "error": "",
+                              "server_name": str(info.get("ServerName", ""))})
+
+
+async def _video_put(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    b = await _json_body(req)
+    if b is None:
+        return _bad_body()
+    mode = b.get("mode")
+    payload: dict[str, Any] = {"action": "jellyfin", "mode": mode}
+    if mode == "remote":
+        base = str(b.get("base", "")).strip().rstrip("/")
+        if not _BASE_RE.match(base):
+            return web.json_response(_bad_base(), status=400)
+        payload["base"] = base
+        if b.get("api_key"):
+            payload["api_key"] = str(b["api_key"])
+        # Spec: validate → test → write; never overwrite a working config
+        # with one that fails, unless the owner explicitly chose "Save anyway".
+        if b.get("force") is not True:
+            try:
+                await jf.system_info(await ctx.http(), base,
+                                     str(b.get("api_key") or "") or _jf(ctx)[1])
+            except jf.JellyfinError as e:
+                return web.json_response({"ok": False, "error": str(e),
+                                          "can_force": True}, status=400)
+    elif mode != "builtin":
+        return web.json_response({"ok": False, "error": "unknown mode"}, status=400)
+    r = await ctx.apply(payload)
+    if not isinstance(r, dict) or not r.get("ok"):
+        err = r.get("error") if isinstance(r, dict) else None
+        return web.json_response({"ok": False, "error": err or "save failed"},
+                                 status=400)
+    await ctx.restart_units(_VIDEO_UNITS)
+    return web.json_response({"ok": True})
+
+
+async def _video_users(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    base, key = _jf(ctx)
+    if not key:
+        return web.json_response({"users": [], "error": "Save an API key first"})
+    try:
+        users = await jf.list_users(await ctx.http(), base, key)
+    except jf.JellyfinError as e:
+        return web.json_response({"users": [], "error": str(e)})
+    return web.json_response({"users": users})
+
+
 def add_routes(app: web.Application) -> None:
     r = app.router
     r.add_get("/api/accounts/summary", _summary)
     r.add_get("/api/accounts/music", _music_get)
     r.add_post("/api/accounts/music/test", _music_test)
     r.add_put("/api/accounts/music", _music_put)
+    r.add_get("/api/accounts/video", _video_get)
+    r.add_post("/api/accounts/video/test", _video_test)
+    r.add_put("/api/accounts/video", _video_put)
+    r.add_get("/api/accounts/video/users", _video_users)
