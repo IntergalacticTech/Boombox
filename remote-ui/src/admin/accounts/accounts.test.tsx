@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { AccountsSection } from "../AccountsSection";
+import { AccountsSection, ACCOUNTS_DESKTOP_COLUMNS } from "../AccountsSection";
 import { adminSession } from "../session";
 
 const BASE_R: Record<string, unknown> = {
@@ -305,11 +305,17 @@ describe("Admin gate", () => {
     expect(adminSession.token()).toBe("tok");
   });
 
-  it("two columns on desktop, one on phones", async () => {
+  it("desktop fits as many >= 320 px cards as the column allows; phones get one", async () => {
     const { unmount } = render(<AccountsSection desktop />);
-    expect((await screen.findByTestId("accounts-grid")).dataset.columns).toBe("2");
+    const grid = await screen.findByTestId("accounts-grid");
+    expect(grid.dataset.columns).toBe("auto");
+    expect(ACCOUNTS_DESKTOP_COLUMNS).toBe("repeat(auto-fit, minmax(min(320px, 100%), 1fr))");
+    expect(grid.style.gridTemplateColumns).toContain("auto-fit");
+    expect(grid.style.gridTemplateColumns).not.toContain("repeat(2");
     unmount();
     render(<AccountsSection desktop={false} />);
-    expect((await screen.findByTestId("accounts-grid")).dataset.columns).toBe("1");
+    const phone = await screen.findByTestId("accounts-grid");
+    expect(phone.dataset.columns).toBe("1");
+    expect(phone.style.gridTemplateColumns).toBe("minmax(0, 1fr)");
   });
 });

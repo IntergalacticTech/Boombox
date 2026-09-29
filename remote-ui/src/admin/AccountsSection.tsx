@@ -10,6 +10,12 @@ import { WebLoginCard } from "./accounts/WebLoginCard";
 import { LockScreen } from "./LockScreen";
 import { lock, useAdminSession } from "./session";
 
+export const ACCOUNTS_CARD_MIN_PX = 320;
+/** Desktop Accounts grid: as many >= 320 px cards as the centre column fits
+ *  (one column on a narrow window, two or more on a wide one); min() keeps a
+ *  single card from overflowing a pane narrower than 320 px. */
+export const ACCOUNTS_DESKTOP_COLUMNS = `repeat(auto-fit, minmax(min(${ACCOUNTS_CARD_MIN_PX}px, 100%), 1fr))`;
+
 export const UNREACHABLE = "Couldn't reach the Boombox.";
 
 function Section({ title, status, children }: {
@@ -47,9 +53,9 @@ function AccountsCards({ desktop }: { desktop: boolean }) {
         </SecondaryButton>
       </header>
       {error && <ErrorText>{error}</ErrorText>}
-      <div data-testid="accounts-grid" data-columns={desktop ? 2 : 1} style={{
+      <div data-testid="accounts-grid" data-columns={desktop ? "auto" : 1} style={{
         display: "grid", gap: 16, alignItems: "start",
-        gridTemplateColumns: desktop ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)",
+        gridTemplateColumns: desktop ? ACCOUNTS_DESKTOP_COLUMNS : "minmax(0, 1fr)",
       }}>
         <Section title="Music server" status={summary?.music}><MusicCard onChanged={refresh} /></Section>
         <Section title="Video server" status={summary?.video}><VideoCard onChanged={refresh} /></Section>
