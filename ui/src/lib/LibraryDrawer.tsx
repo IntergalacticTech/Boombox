@@ -10,7 +10,7 @@
 // alone are already a huge UX win over "use your phone".
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { browse, browseHomeLibrary, getHistory, lookup, playUris, queueUris, search, ROOTS, RADIO_STATIONS, type Ref, type MopidyTrack, type HistoryEntry, type RadioStation } from "./library";
+import { browse, browseHomeLibrary, capHomeTrackList, expandHomeRef, getHistory, lookup, parseHomeUri, playUris, search, searchHomeLibrary, ROOTS, RADIO_STATIONS, type Ref, type MopidyTrack, type HistoryEntry, type RadioStation } from "./library";
 import { AlbumThumb } from "./AlbumThumb";
 import { getFavorites } from "./favorites";
 import { useIncrementalRender } from "./useIncrementalRender";
@@ -56,6 +56,13 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MopidyTrack[] | null>(null);
   const [searching, setSearching] = useState(false);
+  // Home Library search hits (artists / albums / tracks as home:* refs).
+  // Non-null only while searching from inside the Home Library tree; other
+  // sources keep Mopidy's flat track search in searchResults.
+  const [homeResults, setHomeResults] = useState<Ref[] | null>(null);
+  // Transient playback failure (e.g. every track offline and uncached).
+  // Shown as a banner above the list without replacing it.
+  const [notice, setNotice] = useState<string | null>(null);
   // Phase RFID-6: when App owns bindUid (the drawer is opened by the
   // RfidBindOverlay), the drawer enters bind mode — the next tap on a
   // home:* album/artist/playlist row fires boombox:rfid-bind-target
@@ -77,26 +84,44 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
   const here = stack.length === 0 ? null : stack[stack.length - 1];
   const hereUri = here?.uri ?? null;
   const searchActive = query.trim().length > 0;
+  // Anywhere under home:* searches the boombox-library catalog instead of
+  // Mopidy (the Subsonic catalog isn't a Mopidy backend).
+  const homeScope = hereUri?.startsWith("home:") ?? false;
 
   // Debounced search. When the query is non-empty, we override the directory
-  // browse with a flat track list of search results.
+  // browse with the search results.
   useEffect(() => {
     const q = query.trim();
-    if (!q) { setSearchResults(null); setSearching(false); return; }
+    if (!q) { setSearchResults(null); setHomeResults(null); setSearching(false); return; }
     setSearching(true);
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
-        const hits = await search(q);
-        if (!cancelled) setSearchResults(hits);
+        if (homeScope) {
+          const refs = await searchHomeLibrary(q);
+          if (!cancelled) { setHomeResults(refs); setSearchResults(null); }
+        } else {
+          const hits = await search(q);
+          if (!cancelled) { setSearchResults(hits); setHomeResults(null); }
+        }
       } catch {
-        if (!cancelled) setSearchResults([]);
+        if (!cancelled) {
+          setSearchResults(homeScope ? null : []);
+          setHomeResults(homeScope ? [] : null);
+        }
       } finally {
         if (!cancelled) setSearching(false);
       }
     }, 220);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [query]);
+  }, [query, homeScope]);
+
+  // Playback notices fade on their own; a new one restarts the timer.
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   // Whenever we descend, fetch directory contents OR resolve track metadata.
   useEffect(() => {
@@ -214,26 +239,49 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
     return () => window.removeEventListener("keydown", onKey);
   }, [stack, onClose]);
 
+  // Ref rows to render: Home Library search hits while searching there,
+  // otherwise the current directory.
+  const listItems = searchActive ? (homeResults ?? []) : items;
+
   // Incremental render so a 9 k-album browse doesn't lock the touchscreen
   // for seconds on mount. Only kicks in past the initial slice; under 100
   // items there's no slicing and no IntersectionObserver overhead.
   const { visible: visibleCount, sentinelRef } = useIncrementalRender(
-    items.length, 100, 100,
+    listItems.length, 100, 100,
   );
 
   const allTrackUris = useMemo(() => {
+    if (searchActive && homeResults) return homeResults.filter(r => r.type === "track").map(r => r.uri);
     if (searchActive && searchResults) return searchResults.map(t => t.uri);
     if (history) return history.map(h => h.ref.uri);
     if (tracks) return tracks.map(t => t.uri);
     return items.filter(r => r.type === "track").map(r => r.uri);
-  }, [items, tracks, searchActive, searchResults, history]);
+  }, [items, tracks, searchActive, searchResults, homeResults, history]);
 
-  const visibleTracks = searchActive ? (searchResults ?? []) : tracks;
+  const visibleTracks = searchActive ? (homeResults ? null : (searchResults ?? [])) : tracks;
+
+  // A Home Library artist page lists albums, not tracks — "Play all" there
+  // expands every album (capped) via expandHomeRef.
+  const homeArtistHere = !searchActive && !!hereUri && items.length > 0
+    && parseHomeUri(hereUri)?.kind === "artist";
+
+  /** Run a playback action; close on success, surface failures inline. */
+  const runPlayback = async (action: () => Promise<void>) => {
+    try {
+      await action();
+      onClose();
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const playAll = async () => {
+    if (homeArtistHere && allTrackUris.length === 0 && hereUri) {
+      await runPlayback(async () => playUris(await expandHomeRef({ uri: hereUri })));
+      return;
+    }
     if (allTrackUris.length === 0) return;
-    await playUris(allTrackUris);
-    onClose();
+    await runPlayback(() => playUris(capHomeTrackList(allTrackUris)));
   };
 
   const playTrackAt = async (idx: number) => {
@@ -241,11 +289,10 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
     // play on tap (the spec says album/artist/playlist detail only).
     if (bindMode) return;
     if (allTrackUris.length === 0) return;
-    const head = allTrackUris[idx];
-    const tail = allTrackUris.slice(idx + 1);
-    await playUris([head]);
-    if (tail.length > 0) await queueUris(tail);
-    onClose();
+    // Tapped track first, then the rest of the list behind it. playUris
+    // starts the head before appending, and resolves home:track: refs in
+    // one batch (skipping any that are offline and uncached).
+    await runPlayback(() => playUris(capHomeTrackList(allTrackUris.slice(Math.max(0, idx)))));
   };
 
   const enterRef = (r: Ref) => {
@@ -266,7 +313,7 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
     }
     if (r.type === "track") {
       // Play this track immediately + queue the rest of the visible track list.
-      const idx = items.findIndex(i => i.uri === r.uri);
+      const idx = allTrackUris.indexOf(r.uri);
       void playTrackAt(idx === -1 ? 0 : idx);
       return;
     }
@@ -280,6 +327,14 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
     // album in bind mode would start playback instead of binding the card.
     if (bindMode && r.uri.startsWith("home:") && r.type !== "directory") {
       enterRef(r);
+      return;
+    }
+    if (r.uri.startsWith("home:")) {
+      await runPlayback(async () => {
+        const uris = await expandHomeRef(r);
+        if (uris.length === 0) throw new Error(`“${r.name}” has no tracks.`);
+        await playUris(uris);
+      });
       return;
     }
     try {
@@ -333,7 +388,7 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
               borderRadius: 8, fontWeight: 700, fontSize: 13, letterSpacing: "0.06em",
               display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
             }}>
-              <span>BIND MODE · pick an album, artist, or playlist for card {bindMode.uid.slice(0, 8)}…</span>
+              <span>BIND MODE · pick an album, artist, playlist, or track for card {bindMode.uid.slice(0, 8)}…</span>
               <button
                 onClick={() => {
                   setBindMode(null);
@@ -381,7 +436,7 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
               </div>
             </div>
 
-            {allTrackUris.length > 0 && (
+            {(allTrackUris.length > 0 || homeArtistHere) && (
               <button
                 onClick={playAll}
                 style={{
@@ -394,7 +449,7 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                   letterSpacing: "0.06em",
                   cursor: "pointer",
                 }}
-              >▶ PLAY ALL ({allTrackUris.length})</button>
+              >{allTrackUris.length > 0 ? `▶ PLAY ALL (${allTrackUris.length})` : "▶ PLAY ALL"}</button>
             )}
           </div>
 
@@ -448,6 +503,19 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
           overflowX: "hidden",
           // Scroll snapping isn't ideal for music lists; just plain scroll.
         }}>
+          {notice && (
+            <div
+              role="alert"
+              onClick={() => setNotice(null)}
+              style={{
+                margin: 12, padding: "10px 14px",
+                background: "rgba(255,139,139,0.12)",
+                border: "1px solid rgba(255,139,139,0.35)",
+                borderRadius: 10, color: "#ff8b8b", fontSize: 14,
+                cursor: "pointer",
+              }}
+            >{notice}</div>
+          )}
           {error && (
             <div style={{padding: 24, color: "#ff8b8b"}}>Library error: {error}</div>
           )}
@@ -549,7 +617,7 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                       ) : null}
                     />
                   ))
-                : (items.length > 0 && items.every(r => r.type === "album"))
+                : (listItems.length > 0 && listItems.every(r => r.type === "album"))
                 ? (
                     <>
                       <div style={{
@@ -559,7 +627,7 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                         padding: 12,
                         justifyItems: "center",
                       }}>
-                        {items.slice(0, visibleCount).map(r => (
+                        {listItems.slice(0, visibleCount).map(r => (
                           <div
                             key={r.uri}
                             onClick={() => enterRef(r)}
@@ -606,24 +674,26 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                           </div>
                         ))}
                       </div>
-                      {visibleCount < items.length && (
+                      {visibleCount < listItems.length && (
                         <div ref={sentinelRef} style={{ height: 1 }} />
                       )}
                     </>
                   )
                 : (
                     <>
-                      {items.slice(0, visibleCount).map(r => {
+                      {listItems.slice(0, visibleCount).map(r => {
                         const isAlbum = r.type === "album";
                         const isArtist = r.type === "artist";
+                        const isTrack = r.type === "track";
                         return (
                           <Row
                             key={r.uri}
                             title={r.name}
-                            subtitle={r.type === "album" ? "Album" : r.type === "artist" ? "Artist" : r.type === "track" ? "Track" : "Folder"}
+                            subtitle={isAlbum ? "Album" : isArtist ? "Artist" : isTrack ? (r.artist || "Track") : r.type === "playlist" ? "Playlist" : "Folder"}
+                            meta={isTrack && r.lengthMs ? formatDuration(r.lengthMs) : undefined}
                             onClick={() => enterRef(r)}
-                            icon={r.type === "track" ? "▶" : "›"}
-                            thumb={(isAlbum || isArtist) ? (
+                            icon={isTrack ? "▶" : "›"}
+                            thumb={(isAlbum || isArtist || (isTrack && r.artId)) ? (
                               <AlbumThumb
                                 album={isAlbum ? r.name : undefined}
                                 artist={isArtist ? r.name : undefined}
@@ -635,12 +705,12 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                           />
                         );
                       })}
-                      {visibleCount < items.length && (
+                      {visibleCount < listItems.length && (
                         <div ref={sentinelRef} style={{ height: 1 }} />
                       )}
                     </>
                   )}
-              {searchActive && !searching && (searchResults?.length ?? 0) === 0 && (
+              {searchActive && !searching && (homeResults ?? searchResults ?? []).length === 0 && (
                 <div style={{padding: 24, fontFamily: "'JetBrains Mono', monospace", color: "rgba(255,255,255,0.5)"}}>
                   No matches for “{query}”.
                 </div>

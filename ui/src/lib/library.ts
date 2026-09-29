@@ -12,6 +12,9 @@ export type Ref = {
    * absent on legacy Mopidy-Local rows. AlbumThumb uses it to hit the local
    * art proxy at /api/library/art/<id> instead of iTunes Search. */
   artId?: string;
+  /** Home Library track rows only: display artist + duration (ms). */
+  artist?: string;
+  lengthMs?: number;
 };
 
 export type MopidyTrack = {
@@ -72,18 +75,28 @@ export function getImages(uris: string[]): Promise<Record<string, MopidyImage[]>
   return rpc<Record<string, MopidyImage[]>>("core.library.get_images", { uris });
 }
 
-/** Replace the current tracklist with the given URIs and start playing the first. */
+/** Replace the current tracklist with the given URIs and start playing the first.
+ *
+ * home:track:<id> refs are resolved to cache/stream URIs first (see
+ * resolvePlayableUris). The head track is added and started before the
+ * rest are appended: Mopidy's stream backend scans every http URI on add,
+ * so adding a whole album up front would delay the first note by N scans. */
 export async function playUris(uris: string[]): Promise<void> {
   if (uris.length === 0) return;
+  const playable = await resolvePlayableUris(uris);
   await rpc("core.tracklist.clear");
-  await rpc("core.tracklist.add", { uris });
+  await rpc("core.tracklist.add", { uris: playable.slice(0, 1) });
   await rpc("core.playback.play");
+  if (playable.length > 1) {
+    await rpc("core.tracklist.add", { uris: playable.slice(1) });
+  }
 }
 
 /** Append URIs to the current tracklist without interrupting playback. */
 export async function queueUris(uris: string[]): Promise<void> {
   if (uris.length === 0) return;
-  await rpc("core.tracklist.add", { uris });
+  const playable = await resolvePlayableUris(uris);
+  await rpc("core.tracklist.add", { uris: playable });
 }
 
 export type TlTrack = { tlid: number; track: MopidyTrack };
@@ -209,6 +222,78 @@ export async function getHistory(): Promise<HistoryEntry[]> {
 
 import * as libraryApi from "./libraryApi";
 
+/** Home Library track ref prefix. These never reach Mopidy as-is —
+ * playUris/queueUris swap them for a file:// (cache) or proxy stream URI. */
+export const HOME_TRACK_PREFIX = "home:track:";
+
+/** Upper bound on tracks queued by one "play artist" / "play all". */
+export const MAX_EXPANDED_TRACKS = 500;
+
+/** Thrown when every requested track resolved to offline_miss — the drawer
+ * shows the message instead of silently doing nothing. */
+export class PlaybackUnavailableError extends Error {
+  constructor(message = "Can't play that right now — it isn't cached and the Home Library server is unreachable.") {
+    super(message);
+    this.name = "PlaybackUnavailableError";
+  }
+}
+
+/** Split a home:<kind>:<id> URI. Ids may themselves contain colons. */
+export function parseHomeUri(uri: string): { kind: string; id: string } | null {
+  if (!uri.startsWith("home:")) return null;
+  const colon = uri.indexOf(":", 5);
+  if (colon === -1) return null;
+  return { kind: uri.slice(5, colon), id: uri.slice(colon + 1) };
+}
+
+/** Swap every home:track:<id> for its playable URI via ONE POST /resolve.
+ * Order is preserved; offline_miss / uri-less items are dropped. Other URIs
+ * (local:, file://, radio streams…) pass through untouched. Throws
+ * PlaybackUnavailableError when nothing playable is left. */
+export async function resolvePlayableUris(uris: string[]): Promise<string[]> {
+  const ids = uris
+    .filter(u => u.startsWith(HOME_TRACK_PREFIX))
+    .map(u => u.slice(HOME_TRACK_PREFIX.length));
+  if (ids.length === 0) return uris;
+
+  const items = await libraryApi.resolveTracks(ids);
+  const byId = new Map<string, string>();
+  for (const it of items) {
+    if (it && it.source !== "offline_miss" && it.uri) byId.set(it.id, it.uri);
+  }
+  const out: string[] = [];
+  let dropped = 0;
+  for (const u of uris) {
+    if (!u.startsWith(HOME_TRACK_PREFIX)) { out.push(u); continue; }
+    const resolved = byId.get(u.slice(HOME_TRACK_PREFIX.length));
+    if (resolved) out.push(resolved); else dropped += 1;
+  }
+  if (dropped > 0) {
+    console.warn(`[library] skipped ${dropped} of ${ids.length} Home Library track(s): not cached and not streamable`);
+  }
+  if (out.length === 0) {
+    throw new PlaybackUnavailableError(ids.length > 1
+      ? `None of these ${ids.length} tracks can play right now — they aren't cached and the Home Library server is unreachable.`
+      : undefined);
+  }
+  return out;
+}
+
+function homeTrackRef(t: libraryApi.LibraryTrack, artId?: string): Ref {
+  return {
+    uri: `${HOME_TRACK_PREFIX}${t.id}`,
+    name: t.title,
+    type: "track",
+    artist: t.artist || undefined,
+    lengthMs: t.duration ? t.duration * 1000 : undefined,
+    artId,
+  };
+}
+
+function homeAlbumRef(a: { id: string; name: string; art_id?: string }): Ref {
+  return { uri: `home:album:${a.id}`, name: a.name, type: "album", artId: a.art_id };
+}
+
 export async function browseHomeLibrary(uri: string): Promise<Ref[]> {
   if (uri === "home:root") {
     return [
@@ -229,10 +314,7 @@ export async function browseHomeLibrary(uri: string): Promise<Ref[]> {
     // Cached-only filter is enforced row-side by the StatusBadge / cache poll
     // in Phase 2; a dedicated server-side filter lands in Phase 3.
     const items = await libraryApi.browse("albums");
-    return items.map(a => ({
-      uri: `home:album:${a.id}`, name: a.name, type: "album" as const,
-      artId: a.art_id,
-    }));
+    return items.map(homeAlbumRef);
   }
   if (uri === "home:playlists") {
     const items = await libraryApi.browse("playlists");
@@ -240,8 +322,104 @@ export async function browseHomeLibrary(uri: string): Promise<Ref[]> {
       uri: `home:playlist:${p.id}`, name: p.name, type: "playlist" as const,
     }));
   }
-  // Deeper drilldowns (home:album:X / home:artist:X) need dedicated
-  // /album/<id> / /artist/<id> endpoints — Phase 1 didn't ship them, so
-  // for v1 we leave drilldown empty rather than throwing.
+  const parsed = parseHomeUri(uri);
+  if (parsed?.kind === "artist") {
+    const { albums } = await libraryApi.getArtist(parsed.id);
+    return albums.map(homeAlbumRef);
+  }
+  if (parsed?.kind === "album") {
+    // Track rows borrow the album's cover so the list isn't a wall of glyphs.
+    const { album, tracks } = await libraryApi.getAlbum(parsed.id);
+    return tracks.map(t => homeTrackRef(t, album.art_id));
+  }
+  if (parsed?.kind === "playlist") {
+    const { tracks } = await libraryApi.getPlaylist(parsed.id);
+    return tracks.map(t => homeTrackRef(t));
+  }
   return [];
+}
+
+/** Flatten a Home Library ref into ordered home:track: URIs — album and
+ * playlist in listed order, artist as every album's tracks in the order
+ * /artist/<id> lists the albums. Capped at MAX_EXPANDED_TRACKS. */
+export async function expandHomeRef(ref: Pick<Ref, "uri">): Promise<string[]> {
+  const parsed = parseHomeUri(ref.uri);
+  if (!parsed) return [];
+  let uris: string[] = [];
+  if (parsed.kind === "track") {
+    uris = [ref.uri];
+  } else if (parsed.kind === "album" || parsed.kind === "playlist") {
+    uris = (await browseHomeLibrary(ref.uri)).map(r => r.uri);
+  } else if (parsed.kind === "artist") {
+    const { albums } = await libraryApi.getArtist(parsed.id);
+    for (const al of albums) {
+      // One more album than needed is enough to know we're truncating.
+      if (uris.length > MAX_EXPANDED_TRACKS) break;
+      const { tracks } = await libraryApi.getAlbum(al.id);
+      uris.push(...tracks.map(t => `${HOME_TRACK_PREFIX}${t.id}`));
+    }
+  }
+  if (uris.length > MAX_EXPANDED_TRACKS) {
+    console.warn(`[library] ${ref.uri}: queueing the first ${MAX_EXPANDED_TRACKS} tracks only`);
+    uris = uris.slice(0, MAX_EXPANDED_TRACKS);
+  }
+  return uris;
+}
+
+/** Trim a track list that contains Home Library refs to MAX_EXPANDED_TRACKS
+ * (a big Navidrome playlist would otherwise mean thousands of resolves and
+ * stream scans). Lists without home refs — local, radio — are untouched. */
+export function capHomeTrackList(uris: string[]): string[] {
+  if (uris.length <= MAX_EXPANDED_TRACKS) return uris;
+  if (!uris.some(u => u.startsWith(HOME_TRACK_PREFIX))) return uris;
+  console.warn(`[library] queueing the first ${MAX_EXPANDED_TRACKS} of ${uris.length} tracks`);
+  return uris.slice(0, MAX_EXPANDED_TRACKS);
+}
+
+/** Map /api/library/search hits to home:* refs, grouped artists → albums →
+ * tracks (server order kept within each group). */
+export function homeSearchRefs(results: libraryApi.SearchResult[]): Ref[] {
+  const rank: Record<string, number> = { artist: 0, album: 1, track: 2 };
+  return results
+    .filter(r => r.content_type in rank)
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => rank[a.r.content_type] - rank[b.r.content_type] || a.i - b.i)
+    .map(({ r }) => ({
+      uri: r.content_type === "track"
+        ? `${HOME_TRACK_PREFIX}${r.id}`
+        : `home:${r.content_type}:${r.id}`,
+      name: r.title,
+      type: r.content_type,
+    }));
+}
+
+export async function searchHomeLibrary(query: string): Promise<Ref[]> {
+  return homeSearchRefs(await libraryApi.search(query));
+}
+
+/** True for URIs served by the boombox-library stream proxy — the loopback
+ * form Mopidy plays (http://127.0.0.1:6687/api/library/stream/<id>) or the
+ * nginx-relative /api/library/stream/<id>. */
+export function isLibraryStreamUri(uri: string | null | undefined): boolean {
+  return !!uri && /^(?:https?:\/\/[^/]+)?\/api\/library\/stream\/[^/?#]+/i.test(uri);
+}
+
+/** A display title that never leaks a raw URL (proxy stream URIs, links with
+ * api keys in the query string…) onto the screen. Mopidy's stream backend
+ * leaves Track.name empty when the file carries no title tag. */
+export function friendlyTrackTitle(
+  name: string | null | undefined, uri: string | null | undefined,
+): string {
+  const looksLikeUrl = (s: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(s);
+  if (name && !looksLikeUrl(name)) return name;
+  const u = uri || name || "";
+  if (isLibraryStreamUri(u)) return "Home Library track";
+  if (u.startsWith("file://")) {
+    const base = decodeURIComponent(u).split("/").pop() ?? "";
+    return base || "Local file";
+  }
+  if (/^https?:\/\//i.test(u)) {
+    try { return `Stream · ${new URL(u).hostname}`; } catch { return "Stream"; }
+  }
+  return u || "Unknown track";
 }

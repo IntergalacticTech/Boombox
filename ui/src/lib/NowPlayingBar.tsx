@@ -11,6 +11,7 @@ import { useActiveSource, isExternalActive, controlExternal } from "./activeSour
 import { AlbumThumb } from "./AlbumThumb";
 import { LyricsDrawer } from "./LyricsDrawer";
 import { toggleFavorite, useFavorites } from "./favorites";
+import { isLibraryStreamUri } from "./library";
 
 type Props = {
   onDismiss?: () => void;
@@ -338,7 +339,7 @@ function SourceBadge({ uri, externalLabel }: { uri: string | null; externalLabel
     else                                         { glyph = "🎵"; label = externalLabel; }
   } else if (uri) {
     if (uri.startsWith("file://"))           { glyph = "⬇"; label = "Cache"; }
-    else if (uri.startsWith("subsonic:"))    { glyph = "⚡"; label = "Stream"; }
+    else if (uri.startsWith("subsonic:") || isLibraryStreamUri(uri)) { glyph = "⚡"; label = "Stream"; }
     else if (uri.startsWith("spotify:"))     { glyph = "🎵"; label = "Spotify"; }
     else if (uri.startsWith("local:"))       { glyph = "🎵"; label = "USB"; }
   }

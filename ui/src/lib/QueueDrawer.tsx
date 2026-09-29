@@ -5,7 +5,7 @@
 // Tap × on a row → remove from queue (current track stays playing).
 
 import { useEffect, useRef, useState } from "react";
-import { getQueue, getCurrentTlid, playTlid, removeTlid, type TlTrack } from "./library";
+import { friendlyTrackTitle, getQueue, getCurrentTlid, playTlid, removeTlid, type TlTrack } from "./library";
 import { DrawerHomeBtn } from "./ChromeButtons";
 
 function formatDuration(ms: number): string {
@@ -169,7 +169,7 @@ export function QueueDrawer({ onClose, onHome }: Props) {
                     <div style={{
                       fontSize: 15, fontWeight: 600,
                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                    }}>{t.track.name || t.track.uri}</div>
+                    }}>{friendlyTrackTitle(t.track.name, t.track.uri)}</div>
                     <div style={{
                       fontSize: 12, color: "rgba(255,255,255,0.55)",
                       fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.04em",

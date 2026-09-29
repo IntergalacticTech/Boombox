@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PlayState, Track } from "./types";
 import { TRACKS, mmss } from "./shared";
+import { friendlyTrackTitle } from "./library";
 
 type RpcCall = { id: number; resolve: (v: unknown) => void; reject: (e: unknown) => void };
 type EventListener = (event: string, data: Record<string, unknown>) => void;
@@ -147,7 +148,8 @@ function rawToTrack(raw: RawTlTrack["track"] | null | undefined): Track | null {
   const artist = (raw.artists ?? []).map(a => a?.name).filter(Boolean).join(", ") || "Unknown Artist";
   return {
     uri: raw.uri ?? "",
-    title: raw.name ?? "Unknown Track",
+    // Untagged stream-proxy tracks can surface their URL as the name.
+    title: raw.name ? friendlyTrackTitle(raw.name, raw.uri) : "Unknown Track",
     artist,
     album: raw.album?.name ?? "",
     time: mmss(len),
