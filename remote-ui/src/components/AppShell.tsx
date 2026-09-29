@@ -7,7 +7,7 @@ import { NowPanel } from "./NowPanel";
 import { MiniPlayer } from "./MiniPlayer";
 import { SectionMessage } from "./SectionMessage";
 import { NowPlaying } from "../screens/NowPlaying";
-import { Library } from "../screens/Library";
+import { Music } from "../screens/Music";
 import { Playlists } from "../screens/Playlists";
 import { Search } from "../screens/Search";
 import { Files } from "../screens/Files";
@@ -20,7 +20,7 @@ export function renderSection(route: Route, p: SectionProps, onOpenSettings: () 
                               adminLocked: boolean): ReactNode {
   switch (route) {
     case "now": return <NowPlaying onOpenLibrary={() => p.navigate("music")} />;
-    case "music": return <Library />;
+    case "music": return <Music params={p.params} navigate={p.navigate} />;
     case "video":
       return <SectionMessage title="Video" message="Video isn't available in this version yet." />;
     case "search": return <Search autoFocus={p.desktop} />;
