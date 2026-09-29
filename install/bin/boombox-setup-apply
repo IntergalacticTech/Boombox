@@ -38,6 +38,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -56,9 +57,38 @@ NGINX_SITE = "/etc/nginx/sites-available/boombox"
 NGINX_SNIPPET = "/etc/nginx/snippets/boombox-common.conf"
 # The release being activated. Templates are read from here and nowhere
 # else — no path comes from the caller.
+# Deliberately hard-coded (not $BOOMBOX_ROOT): a root helper must not honour
+# the caller's environment.
 RELEASE_CONFIG_DIR = "/opt/boombox/current/install/config"
 NGINX_BIN = "/usr/sbin/nginx"
 DEFAULT_WEB_PORT = "8090"
+# The templates come from the release tree, which the (unprivileged) boombox
+# user controls — so root only installs what this allowlist permits. Nothing
+# here opens a file for writing or loads code: no log_format/access_log/
+# error_log (nginx's master opens log paths as root → e.g. /etc/cron.d),
+# no load_module, no *_temp_path, no include of anything but the snippet.
+# Derived from install/config/nginx.conf + nginx-boombox-common.conf; a test
+# fails CI when a template grows a directive that isn't listed here.
+NGINX_ALLOWED_DIRECTIVES = frozenset({
+    "map", "server", "location",
+    "listen", "server_name", "root", "alias", "index", "try_files", "return",
+    "include", "add_header", "default_type", "expires",
+    "auth_basic", "auth_basic_user_file",
+    "gzip", "gzip_vary", "gzip_min_length", "gzip_proxied", "gzip_comp_level",
+    "gzip_types",
+    "proxy_pass", "proxy_http_version", "proxy_set_header", "proxy_read_timeout",
+    "proxy_send_timeout", "proxy_buffering", "proxy_request_buffering",
+    "client_max_body_size",
+})
+# Block directive → the contexts it may open in ("main" = site top level;
+# the snippet is parsed as if inside `server`).
+NGINX_BLOCK_PARENTS = {
+    "map": {"main"},
+    "server": {"main"},
+    "location": {"server", "location"},
+}
+NGINX_SNIPPET_INCLUDE = "/etc/nginx/snippets/boombox-common.conf"
+NGINX_TEMPLATE_MAX_BYTES = 1 << 20
 HOSTS_FILE = "/etc/hosts"
 WLAN_IF = "wlan0"
 
@@ -900,6 +930,154 @@ def render_site(template: str, port: str) -> str:
     return template.replace("__REMOTE_WEB_PORT__", port)
 
 
+class TemplateRejected(ValueError):
+    """A release's nginx template failed the allowlist / file checks."""
+
+
+_NGINX_SPACE = " \t\r\n"
+_NGINX_ESCAPES = {'"': '"', "'": "'", "\\": "\\", "t": "\t", "r": "\r", "n": "\n"}
+
+
+def _nginx_unescape(raw: str) -> str:
+    # ngx_conf_read_token's copy loop: \" \' \\ \t \r \n; others kept.
+    out, i = [], 0
+    while i < len(raw):
+        if raw[i] == "\\" and i + 1 < len(raw) and raw[i + 1] in _NGINX_ESCAPES:
+            out.append(_NGINX_ESCAPES[raw[i + 1]])
+            i += 2
+        else:
+            out.append(raw[i])
+            i += 1
+    return "".join(out)
+
+
+def _nginx_statements(text: str) -> list[tuple[list[str], str]]:
+    """Split config into (words, terminator) with terminator ';', '{' or '}'.
+
+    Mirrors nginx's tokenizer, not a naive one: `#` starts a comment and a
+    quote opens a string ONLY at a token boundary (`/x#` and `a"` are plain
+    words to nginx), a backslash escapes the next char, `${` stays in a word
+    and `}` only closes a block at a token boundary. Anything nginx would
+    reject is rejected here too."""
+    out: list[tuple[list[str], str]] = []
+    words: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch in _NGINX_SPACE:
+            i += 1
+        elif ch == "#":
+            j = text.find("\n", i)
+            i = n if j < 0 else j + 1
+        elif ch in ";{":
+            if not words:
+                raise TemplateRejected(f"template is not valid nginx config: unexpected '{ch}'")
+            out.append((words, ch))
+            words = []
+            i += 1
+        elif ch == "}":
+            if words:
+                raise TemplateRejected("template is not valid nginx config: unexpected '}'")
+            out.append(([], "}"))
+            i += 1
+        elif ch in "\"'":
+            quote, i, start = ch, i + 1, i + 1
+            while True:
+                if i >= n:
+                    raise TemplateRejected("template is not valid nginx config: unterminated string")
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    break
+                i += 1
+            words.append(_nginx_unescape(text[start:i]))
+            i += 1
+            if i < n and text[i] not in _NGINX_SPACE + ";{":
+                raise TemplateRejected("template is not valid nginx config: text after a string")
+        else:
+            start, variable = i, False
+            while i < n:
+                c = text[i]
+                if c == "{" and variable:
+                    i += 1
+                    continue
+                variable = False
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == "$":
+                    variable = True
+                elif c in _NGINX_SPACE + ";{":
+                    break
+                i += 1
+            words.append(_nginx_unescape(text[start:min(i, n)]))
+    if words:
+        raise TemplateRejected("template is not valid nginx config: unexpected end of file")
+    return out
+
+
+def _shown(name: str) -> str:
+    # Never echo arbitrary bytes back (a template could be any root-readable
+    # file's content); only something shaped like a directive name.
+    return name if re.fullmatch(r"[a-z_][a-z0-9_]{0,63}", name) else "(not a directive name)"
+
+
+def check_nginx_template(text: str, *, site: bool) -> None:
+    """Raise TemplateRejected unless every directive is allow-listed, blocks
+    nest only where permitted, braces balance and `include` names exactly
+    the shared snippet (site file only). `site=False` checks the snippet as
+    the body of a `server` block it cannot close."""
+    stack = ["main" if site else "server"]
+    for words, term in _nginx_statements(text):
+        if term == "}":
+            if len(stack) == 1:
+                raise TemplateRejected("template is not valid nginx config: unbalanced '}'")
+            stack.pop()
+            continue
+        if stack[-1] == "map":
+            if term != ";" or len(words) != 2:
+                raise TemplateRejected("template is not valid nginx config: bad map entry")
+            continue
+        name = words[0]
+        denied = TemplateRejected(
+            f"template uses a directive the boombox doesn't allow: {_shown(name)}")
+        if name not in NGINX_ALLOWED_DIRECTIVES:
+            raise denied
+        parents = NGINX_BLOCK_PARENTS.get(name)
+        if (term == "{") != (parents is not None):
+            raise TemplateRejected(f"template is not valid nginx config: misplaced block {_shown(name)}")
+        if parents is not None:
+            if stack[-1] not in parents:
+                raise denied
+            stack.append(name)
+        elif stack[-1] == "main":
+            raise denied                   # only map/server at the top level
+        if name == "include" and (not site or words[1:] != [NGINX_SNIPPET_INCLUDE]):
+            raise denied
+    if len(stack) != 1:
+        raise TemplateRejected("template is not valid nginx config: unclosed block")
+
+
+def _read_template(name: str) -> str:
+    """Read a release template: a regular file, never through a final-
+    component symlink (O_NOFOLLOW), size-capped."""
+    path = os.path.join(RELEASE_CONFIG_DIR, name)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        raise TemplateRejected(f"{name} is missing or not a regular file") from None
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_size > NGINX_TEMPLATE_MAX_BYTES:
+            raise TemplateRejected(f"{name} is not a regular file (or is too large)")
+        data = f.read(NGINX_TEMPLATE_MAX_BYTES + 1)
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise TemplateRejected(f"{name} is not UTF-8 text") from None
+
+
 def _read_or_none(path: str) -> str | None:
     try:
         with open(path) as f:
@@ -916,10 +1094,15 @@ def action_nginx_sync(_body: dict) -> dict:
     and restores both previous files if it fails. Does not reload — the
     apply-release restart step does."""
     port = web_port()
-    with open(os.path.join(RELEASE_CONFIG_DIR, "nginx.conf")) as f:
-        site = render_site(f.read(), port)
-    with open(os.path.join(RELEASE_CONFIG_DIR, "nginx-boombox-common.conf")) as f:
-        snippet = f.read()
+    # Validate BOTH before writing anything: root must not install arbitrary
+    # http-context config from the user-writable release tree.
+    try:
+        site = render_site(_read_template("nginx.conf"), port)
+        snippet = _read_template("nginx-boombox-common.conf")
+        check_nginx_template(site, site=True)
+        check_nginx_template(snippet, site=False)
+    except TemplateRejected as e:
+        return {"ok": False, "error": str(e)}
     old = {NGINX_SITE: _read_or_none(NGINX_SITE), NGINX_SNIPPET: _read_or_none(NGINX_SNIPPET)}
     if old[NGINX_SITE] == site and old[NGINX_SNIPPET] == snippet:
         return {"ok": True, "changed": False}
