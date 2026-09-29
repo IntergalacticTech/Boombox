@@ -133,6 +133,7 @@ async def device_user(s: aiohttp.ClientSession, base: str, key: str,
 # Kiosk session injection over the Chrome DevTools Protocol
 
 _KIOSK_DOWN = "kiosk not reachable — is the screen on?"
+INJECT_CAP = 40.0  # seconds for the whole websocket phase of an injection
 
 
 def credentials_blob(base: str, server_id: str, server_name: str, user_id: str,
@@ -192,7 +193,7 @@ async def inject_kiosk(cdp_base: str, jf_base: str, device_id: str,
             if isinstance(m, dict) and m.get("id") == msg_id:
                 return _obj(m.get("result"))
 
-    try:
+    async def session() -> None:
         # No Origin header: Chromium's --remote-allow-origins only lists the
         # CDP address itself, and websockets sends none by default.
         async with websockets.connect(page["webSocketDebuggerUrl"],
@@ -207,8 +208,15 @@ async def inject_kiosk(cdp_base: str, jf_base: str, device_id: str,
             else:
                 await call(ws, "Page.navigate", {"url": return_url})
                 raise JellyfinError("the kiosk couldn't open the Jellyfin page")
-            await call(ws, "Runtime.evaluate", {"expression": js, "returnByValue": True})
+            r = await call(ws, "Runtime.evaluate", {"expression": js, "returnByValue": True})
             await call(ws, "Page.navigate", {"url": return_url})
+            # A thrown setItem/removeItem is reported in exceptionDetails, not
+            # as a failed call — check the script really finished.
+            if r.get("exceptionDetails") or _eval_value(r) != "ok":
+                raise JellyfinError("the kiosk couldn't save the Jellyfin session")
+
+    try:
+        await asyncio.wait_for(session(), INJECT_CAP)
     except (OSError, asyncio.TimeoutError, ValueError,
             websockets.WebSocketException) as e:
         raise JellyfinError(_KIOSK_DOWN) from e

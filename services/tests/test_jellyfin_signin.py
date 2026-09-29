@@ -1,6 +1,7 @@
 """jellyfin_signin HTTP helpers against a fake Jellyfin."""
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -129,7 +130,10 @@ def test_credentials_blob_shape():
     assert s["UserId"] == "u1" and s["AccessToken"] == "tok"
 
 
-async def test_inject_kiosk_drives_cdp(aiohttp_server):
+async def fake_cdp(aiohttp_server, write_result=None, hang=False):
+    """A fake kiosk CDP endpoint: the ready probe answers "complete", the
+    storage write answers `write_result` (default: the script's 'ok'); with
+    hang=True the socket never answers at all."""
     sent: list[dict] = []
 
     async def json_list(req):
@@ -143,21 +147,58 @@ async def test_inject_kiosk_drives_cdp(aiohttp_server):
         async for msg in w:
             m = json.loads(msg.data)
             sent.append(m)
-            result = {"result": {"value": "complete"}} if m["method"] == "Runtime.evaluate" else {}
-            await w.send_str(json.dumps({"id": m["id"], "result": result.get("result", {})}))
+            if hang:
+                continue
+            result: dict = {}
+            if m["method"] == "Runtime.evaluate":
+                if "readyState" in m["params"]["expression"]:
+                    result = {"result": {"type": "string", "value": "complete"}}
+                else:
+                    result = write_result if write_result is not None else {
+                        "result": {"type": "string", "value": "ok"}}
+            await w.send_str(json.dumps({"id": m["id"], "result": result}))
         return w
 
     app = web.Application()
     app.router.add_get("/json", json_list)
     app.router.add_get("/devtools/page/1", ws)
     srv = await aiohttp_server(app)
-    await jf.inject_kiosk(str(srv.make_url("")).rstrip("/"), "https://v.example",
-                          "dev-kiosk", '{"Servers":[]}')
+    return str(srv.make_url("")).rstrip("/"), sent
+
+
+async def test_inject_kiosk_drives_cdp(aiohttp_server):
+    cdp, sent = await fake_cdp(aiohttp_server)
+    await jf.inject_kiosk(cdp, "https://v.example", "dev-kiosk", '{"Servers":[]}')
     methods = [m["method"] for m in sent]
     assert methods[0] == "Page.navigate" and sent[0]["params"]["url"] == "https://v.example/web/"
     js = " ".join(m["params"].get("expression", "") for m in sent if m["method"] == "Runtime.evaluate")
     assert "_deviceId2" in js and "jellyfin_credentials" in js and "dev-kiosk" in js
     assert sent[-1]["method"] == "Page.navigate" and sent[-1]["params"]["url"] == "http://localhost/"
+
+
+@pytest.mark.parametrize("creds", ['{"Servers":[]}', None])
+@pytest.mark.parametrize("write_result", [
+    # setItem threw (e.g. QuotaExceededError): Chrome still answers "success"
+    {"result": {"type": "object", "subtype": "error"},
+     "exceptionDetails": {"text": "Uncaught", "exceptionId": 1}},
+    {"result": {"type": "undefined"}},          # script didn't reach 'ok'
+])
+async def test_inject_kiosk_write_failure_raises(aiohttp_server, creds, write_result):
+    cdp, sent = await fake_cdp(aiohttp_server, write_result=write_result)
+    with pytest.raises(jf.JellyfinError, match="kiosk"):
+        await jf.inject_kiosk(cdp, "https://v.example", "dev-kiosk", creds)
+    # the kiosk is still sent home
+    assert sent[-1]["method"] == "Page.navigate" and sent[-1]["params"]["url"] == "http://localhost/"
+
+
+async def test_inject_kiosk_overall_cap(aiohttp_server, monkeypatch):
+    monkeypatch.setattr(jf, "INJECT_CAP", 0.3)
+    cdp, _ = await fake_cdp(aiohttp_server, hang=True)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    with pytest.raises(jf.JellyfinError, match="kiosk not reachable"):
+        await jf.inject_kiosk(cdp, "https://v.example", "dev-kiosk", "{}")
+    assert loop.time() - t0 < 5  # the per-message 15 s wait was cut short
 
 
 async def test_inject_kiosk_unreachable():
