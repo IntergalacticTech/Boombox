@@ -46,7 +46,12 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (input === "/mopidy/rpc") {
       rpcMethods.push({ method: body.method, params: body.params });
-      return json({ jsonrpc: "2.0", id: body.id, result: [] });
+      // tracklist.add answers with the added TlTracks; an empty list would
+      // tell playUris the head failed to add.
+      const result = body.method === "core.tracklist.add"
+        ? (body.params.uris as string[]).map((uri, i) => ({ tlid: i + 1, track: { uri } }))
+        : [];
+      return json({ jsonrpc: "2.0", id: body.id, result });
     }
     const key = `${method} ${input}`;
     libCalls.push(key);
@@ -96,8 +101,10 @@ describe("LibraryDrawer · Home Library", () => {
     await openAlbum(utils);
     fireEvent.click(utils.getByText("Side A"));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    const adds = rpcMethods.filter(c => c.method === "core.tracklist.add").map(c => c.params);
-    expect(adds).toEqual([
+    // The tail is appended in the background after the drawer closes.
+    const adds = () => rpcMethods.filter(c => c.method === "core.tracklist.add").map(c => c.params);
+    await waitFor(() => expect(adds()).toHaveLength(2));
+    expect(adds()).toEqual([
       { uris: ["http://127.0.0.1:6687/api/library/stream/t1"] },
       { uris: ["http://127.0.0.1:6687/api/library/stream/t2"] },
     ]);
@@ -129,10 +136,11 @@ describe("LibraryDrawer · Home Library", () => {
     await utils.findByText("Record");
     fireEvent.click(utils.getByText("▶ PLAY ALL"));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    const adds = rpcMethods.filter(c => c.method === "core.tracklist.add").flatMap(
+    const adds = () => rpcMethods.filter(c => c.method === "core.tracklist.add").flatMap(
       c => (c.params as { uris: string[] }).uris,
     );
-    expect(adds).toEqual([
+    await waitFor(() => expect(adds()).toHaveLength(2));
+    expect(adds()).toEqual([
       "http://127.0.0.1:6687/api/library/stream/t1",
       "http://127.0.0.1:6687/api/library/stream/t2",
     ]);
@@ -171,6 +179,58 @@ describe("LibraryDrawer · Home Library", () => {
     });
   });
 
+  it("opening an album search hit leaves search and lists its tracks", async () => {
+    routes["GET /api/library/search?q=rec"] = {
+      results: [{ content_type: "album", id: "al1", title: "Record" }],
+    };
+    const utils = render(<LibraryDrawer onClose={() => {}} />);
+    fireEvent.click(await utils.findByText("Home Library"));
+    await utils.findByText("Artists");
+    const box = utils.getByPlaceholderText("Search library…") as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "rec" } });
+    fireEvent.click(await utils.findByText("Record"));
+    await utils.findByText("Side B");
+    expect(utils.getByText("Side A")).toBeInTheDocument();
+    expect(libCalls).toContain("GET /api/library/album/al1");
+    expect(box.value).toBe("");
+    // One Back returns to the level the search started from.
+    fireEvent.click(utils.getByText("‹ Back"));
+    await utils.findByText("Artists");
+  });
+
+  it("a failed Home Library search reports an error, not 'No matches'", async () => {
+    // No route for /api/library/search → 404.
+    const utils = render(<LibraryDrawer onClose={() => {}} />);
+    fireEvent.click(await utils.findByText("Home Library"));
+    await utils.findByText("Artists");
+    fireEvent.change(utils.getByPlaceholderText("Search library…"), { target: { value: "zzz" } });
+    expect(await utils.findByText(/Library search failed/)).toBeInTheDocument();
+    expect(utils.queryByText(/No matches/)).toBeNull();
+  });
+
+  it("ignores extra play taps while a request is in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    routes["POST /api/library/resolve"] = async (b: unknown) => {
+      await gate;
+      return {
+        items: (b as { ids: string[] }).ids.map(id => ({
+          id, source: "stream", uri: `http://127.0.0.1:6687/api/library/stream/${id}`, cache_status: "absent",
+        })),
+      };
+    };
+    const onClose = vi.fn();
+    const utils = render(<LibraryDrawer onClose={onClose} />);
+    await openAlbum(utils);
+    fireEvent.click(utils.getByText("Side A"));
+    fireEvent.click(utils.getByText("Side B"));
+    fireEvent.click(utils.getByText(/PLAY ALL/));
+    release();
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(libCalls.filter(k => k === "POST /api/library/resolve")).toHaveLength(1);
+    expect(rpcMethods.filter(c => c.method === "core.tracklist.clear")).toHaveLength(1);
+  });
+
   it("searching outside Home Library still uses Mopidy", async () => {
     const utils = render(<LibraryDrawer onClose={() => {}} />);
     fireEvent.change(utils.getByPlaceholderText("Search library…"), { target: { value: "x" } });
@@ -178,7 +238,10 @@ describe("LibraryDrawer · Home Library", () => {
     expect(libCalls.some(k => k.includes("/api/library/search"))).toBe(false);
   });
 
-  it("bind mode: tapping a home track binds it instead of playing", async () => {
+  // Album / artist / playlist rows bind on tap in bind mode, so track rows
+  // inside a drilldown are unreachable there — search hits are the only way
+  // to bind a single track (covered by the next test).
+  it("bind mode: tapping a home album tile binds the album instead of playing", async () => {
     const onTarget = vi.fn();
     const handler = (e: Event) => onTarget((e as CustomEvent).detail);
     window.addEventListener("boombox:rfid-bind-target", handler);
@@ -189,6 +252,7 @@ describe("LibraryDrawer · Home Library", () => {
       fireEvent.click(await utils.findByText("Record"));
       expect(onTarget).toHaveBeenCalledWith({ kind: "album", id: "al1", label: "Record" });
       expect(rpcMethods).toHaveLength(0);
+      expect(libCalls).not.toContain("POST /api/library/resolve");
     } finally {
       window.removeEventListener("boombox:rfid-bind-target", handler);
     }

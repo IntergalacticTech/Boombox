@@ -142,14 +142,23 @@ type RawTlTrack = {
   };
 };
 
-function rawToTrack(raw: RawTlTrack["track"] | null | undefined): Track | null {
+/** Now-playing title: the tag title, a friendly label for untagged stream /
+ * file URIs, else "Unknown Track" (never a bare URI). */
+function trackTitle(name: string | undefined, uri: string | undefined): string {
+  if (!name && !uri) return "Unknown Track";
+  const title = friendlyTrackTitle(name, uri);
+  return !name && title === uri ? "Unknown Track" : title;
+}
+
+export function rawToTrack(raw: RawTlTrack["track"] | null | undefined): Track | null {
   if (!raw) return null;
   const len = Math.floor((raw.length ?? 0) / 1000);
   const artist = (raw.artists ?? []).map(a => a?.name).filter(Boolean).join(", ") || "Unknown Artist";
   return {
     uri: raw.uri ?? "",
-    // Untagged stream-proxy tracks can surface their URL as the name.
-    title: raw.name ? friendlyTrackTitle(raw.name, raw.uri) : "Unknown Track",
+    // Untagged stream-proxy tracks surface their URL as the name, or no
+    // name at all (metadata_blacklist / failed scan) — map both.
+    title: trackTitle(raw.name, raw.uri),
     artist,
     album: raw.album?.name ?? "",
     time: mmss(len),

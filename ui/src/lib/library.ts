@@ -75,20 +75,70 @@ export function getImages(uris: string[]): Promise<Record<string, MopidyImage[]>
   return rpc<Record<string, MopidyImage[]>>("core.library.get_images", { uris });
 }
 
+/** How many leading URIs playUris tries one at a time before giving up on
+ * a fast start and adding everything left in one batch. */
+const HEAD_ATTEMPTS = 3;
+/** Tail URIs per core.tracklist.add. Each stream URI costs Mopidy a scan
+ * (an HTTP open through the proxy); small batches let pause/next/volume
+ * RPCs slot in between instead of waiting out the whole list. */
+const TAIL_CHUNK = 10;
+
+// Bumped by every playUris call. A background tail append stops as soon as
+// a newer request has replaced the queue, so two quick taps never merge.
+let playGeneration = 0;
+
+/** core.tracklist.add returns the added TlTracks; an empty list means Mopidy
+ * couldn't look the URI up (evicted cache file, missing local: track…).
+ * Anything else (a stubbed null) counts as success. */
+async function addUris(uris: string[]): Promise<boolean> {
+  const added = await rpc<unknown>("core.tracklist.add", { uris });
+  return !(Array.isArray(added) && added.length === 0);
+}
+
+async function appendTail(uris: string[], generation: number): Promise<void> {
+  for (let i = 0; i < uris.length; i += TAIL_CHUNK) {
+    if (generation !== playGeneration) return;
+    await rpc("core.tracklist.add", { uris: uris.slice(i, i + TAIL_CHUNK) });
+  }
+}
+
 /** Replace the current tracklist with the given URIs and start playing the first.
  *
  * home:track:<id> refs are resolved to cache/stream URIs first (see
  * resolvePlayableUris). The head track is added and started before the
  * rest are appended: Mopidy's stream backend scans every http URI on add,
- * so adding a whole album up front would delay the first note by N scans. */
+ * so adding a whole album up front would delay the first note by N scans.
+ * If a head URI fails to add, the next one is tried (up to HEAD_ATTEMPTS).
+ *
+ * Resolves once playback has started. The tail is appended in the
+ * background, in chunks; the returned promise does not wait for it. */
 export async function playUris(uris: string[]): Promise<void> {
   if (uris.length === 0) return;
   const playable = await resolvePlayableUris(uris);
+  const generation = ++playGeneration;
   await rpc("core.tracklist.clear");
-  await rpc("core.tracklist.add", { uris: playable.slice(0, 1) });
+  let next = 0;
+  let started = false;
+  while (next < playable.length && next < HEAD_ATTEMPTS && !started) {
+    started = await addUris(playable.slice(next, next + 1));
+    next += 1;
+  }
+  if (!started) {
+    // Every head we tried failed — add the remainder in one go and let
+    // Mopidy start whichever of them did add.
+    if (next >= playable.length || !(await addUris(playable.slice(next)))) {
+      throw new PlaybackUnavailableError("Couldn't queue any of those tracks.");
+    }
+    next = playable.length;
+  }
+  // A newer playUris replaced the queue while our head was being scanned.
+  if (generation !== playGeneration) return;
   await rpc("core.playback.play");
-  if (playable.length > 1) {
-    await rpc("core.tracklist.add", { uris: playable.slice(1) });
+  const tail = playable.slice(next);
+  if (tail.length > 0) {
+    void appendTail(tail, generation).catch(e => {
+      console.warn("[library] failed to queue the rest of the tracks:", e);
+    });
   }
 }
 

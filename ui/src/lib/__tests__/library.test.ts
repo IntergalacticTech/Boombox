@@ -21,6 +21,8 @@ type Rpc = { method: string; params: unknown };
 let rpcCalls: Rpc[];
 let libCalls: { key: string; body: unknown }[];
 let routes: Record<string, unknown>;
+// Per-method RPC results (default null). A function gets the params.
+let rpcResults: Record<string, unknown>;
 
 function json(body: unknown, status = 200): Response {
   return {
@@ -34,12 +36,15 @@ beforeEach(() => {
   rpcCalls = [];
   libCalls = [];
   routes = {};
+  rpcResults = {};
   vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
     const method = (init?.method ?? "GET").toUpperCase();
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (input === "/mopidy/rpc") {
       rpcCalls.push({ method: body.method, params: body.params });
-      return json({ jsonrpc: "2.0", id: body.id, result: null });
+      const r = rpcResults[body.method];
+      const result = typeof r === "function" ? (r as (p: unknown) => unknown)(body.params) : (r ?? null);
+      return json({ jsonrpc: "2.0", id: body.id, result });
     }
     const key = `${method} ${input}`;
     libCalls.push({ key, body });
@@ -173,6 +178,7 @@ describe("playUris / queueUris", () => {
   it("playUris clears, starts the head, then appends the rest (resolved)", async () => {
     stubResolve();
     await playUris(["home:track:a", "home:track:b", "home:track:c"]);
+    await vi.waitFor(() => expect(rpcCalls).toHaveLength(4));
     expect(rpcCalls.map(c => c.method)).toEqual([
       "core.tracklist.clear", "core.tracklist.add", "core.playback.play", "core.tracklist.add",
     ]);
@@ -195,6 +201,77 @@ describe("playUris / queueUris", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await expect(playUris(["home:track:a"])).rejects.toThrow(/can't play/i);
     expect(rpcCalls).toHaveLength(0);
+  });
+
+  it("playUris tries the next head when the first fails to add", async () => {
+    // Mopidy returns [] from tracklist.add when lookup fails (e.g. an
+    // evicted cache file); "gone" never adds.
+    rpcResults["core.tracklist.add"] = (p: unknown) =>
+      (p as { uris: string[] }).uris.filter(u => u !== "file:///gone.flac").map((uri, i) => ({ tlid: i, track: { uri } }));
+    await playUris(["file:///gone.flac", "local:track:2", "local:track:3"]);
+    await vi.waitFor(() => expect(rpcCalls).toHaveLength(5));
+    expect(rpcCalls.map(c => [c.method, c.params])).toEqual([
+      ["core.tracklist.clear", {}],
+      ["core.tracklist.add", { uris: ["file:///gone.flac"] }],
+      ["core.tracklist.add", { uris: ["local:track:2"] }],
+      ["core.playback.play", {}],
+      ["core.tracklist.add", { uris: ["local:track:3"] }],
+    ]);
+  });
+
+  it("playUris throws when nothing adds, without calling play", async () => {
+    rpcResults["core.tracklist.add"] = [];
+    await expect(playUris(["local:a", "local:b"])).rejects.toBeInstanceOf(PlaybackUnavailableError);
+    expect(rpcCalls.map(c => c.method)).not.toContain("core.playback.play");
+  });
+
+  it("playUris appends a long tail in chunks without waiting for it", async () => {
+    const uris = Array.from({ length: 26 }, (_, i) => `local:track:${i}`);
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    let adds = 0;
+    rpcResults["core.tracklist.add"] = () => [{ tlid: ++adds }];
+    // Hold the first tail chunk: playUris must still resolve.
+    const realFetch = globalThis.fetch as unknown as (u: string, i?: RequestInit) => Promise<Response>;
+    vi.stubGlobal("fetch", vi.fn(async (u: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      if (body.method === "core.tracklist.add" && adds >= 1) await gate;
+      return realFetch(u, init);
+    }));
+    await playUris(uris);
+    expect(rpcCalls.map(c => c.method)).toEqual([
+      "core.tracklist.clear", "core.tracklist.add", "core.playback.play",
+    ]);
+    release();
+    await vi.waitFor(() => expect(rpcCalls).toHaveLength(6));
+    const tail = rpcCalls.slice(3).map(c => (c.params as { uris: string[] }).uris.length);
+    expect(tail).toEqual([10, 10, 5]);
+  });
+
+  it("a newer playUris stops the older one's tail", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    let adds = 0;
+    rpcResults["core.tracklist.add"] = () => [{ tlid: ++adds }];
+    const realFetch = globalThis.fetch as unknown as (u: string, i?: RequestInit) => Promise<Response>;
+    vi.stubGlobal("fetch", vi.fn(async (u: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      // Hold the first request's first tail chunk.
+      if (body.method === "core.tracklist.add" && adds === 1) { adds += 1; await gate; }
+      return realFetch(u, init);
+    }));
+    const first = Array.from({ length: 25 }, (_, i) => `local:old:${i}`);
+    await playUris(first);
+    await playUris(["local:new:0", "local:new:1"]);
+    release();
+    await vi.waitFor(() => expect(rpcCalls.filter(c => c.method === "core.tracklist.add").length).toBeGreaterThanOrEqual(4));
+    await new Promise(r => setTimeout(r, 20));
+    const addedOld = rpcCalls
+      .filter(c => c.method === "core.tracklist.add")
+      .flatMap(c => (c.params as { uris: string[] }).uris)
+      .filter(u => u.startsWith("local:old:"));
+    // Head + the one chunk already in flight; the rest are dropped.
+    expect(addedOld).toHaveLength(11);
   });
 
   it("queueUris resolves home refs before core.tracklist.add", async () => {

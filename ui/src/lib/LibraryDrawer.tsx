@@ -10,7 +10,7 @@
 // alone are already a huge UX win over "use your phone".
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { browse, browseHomeLibrary, capHomeTrackList, expandHomeRef, getHistory, lookup, parseHomeUri, playUris, search, searchHomeLibrary, ROOTS, RADIO_STATIONS, type Ref, type MopidyTrack, type HistoryEntry, type RadioStation } from "./library";
+import { browse, browseHomeLibrary, capHomeTrackList, expandHomeRef, friendlyTrackTitle, getHistory, lookup, parseHomeUri, playUris, search, searchHomeLibrary, ROOTS, RADIO_STATIONS, type Ref, type MopidyTrack, type HistoryEntry, type RadioStation } from "./library";
 import { AlbumThumb } from "./AlbumThumb";
 import { getFavorites } from "./favorites";
 import { useIncrementalRender } from "./useIncrementalRender";
@@ -60,6 +60,9 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
   // Non-null only while searching from inside the Home Library tree; other
   // sources keep Mopidy's flat track search in searchResults.
   const [homeResults, setHomeResults] = useState<Ref[] | null>(null);
+  // Set when the Home Library search request itself failed, so an outage
+  // reads as an error instead of "No matches".
+  const [searchError, setSearchError] = useState<string | null>(null);
   // Transient playback failure (e.g. every track offline and uncached).
   // Shown as a banner above the list without replacing it.
   const [notice, setNotice] = useState<string | null>(null);
@@ -80,6 +83,11 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
     if (bindMode) setStack([{ uri: "home:root", name: "Home Library" }]);
   }, [bindMode]);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // True while a play request is in flight (resolve → clear → head add →
+  // play). Extra taps are ignored so two requests can't interleave into one
+  // mixed queue; the ref guards synchronously, the state dims the list.
+  const busyRef = useRef(false);
+  const [busy, setBusy] = useState(false);
 
   const here = stack.length === 0 ? null : stack[stack.length - 1];
   const hereUri = here?.uri ?? null;
@@ -92,22 +100,23 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
   // browse with the search results.
   useEffect(() => {
     const q = query.trim();
-    if (!q) { setSearchResults(null); setHomeResults(null); setSearching(false); return; }
+    if (!q) { setSearchResults(null); setHomeResults(null); setSearchError(null); setSearching(false); return; }
     setSearching(true);
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
         if (homeScope) {
           const refs = await searchHomeLibrary(q);
-          if (!cancelled) { setHomeResults(refs); setSearchResults(null); }
+          if (!cancelled) { setHomeResults(refs); setSearchResults(null); setSearchError(null); }
         } else {
           const hits = await search(q);
-          if (!cancelled) { setSearchResults(hits); setHomeResults(null); }
+          if (!cancelled) { setSearchResults(hits); setHomeResults(null); setSearchError(null); }
         }
-      } catch {
+      } catch (e) {
         if (!cancelled) {
           setSearchResults(homeScope ? null : []);
           setHomeResults(homeScope ? [] : null);
+          setSearchError(homeScope ? (e instanceof Error ? e.message : String(e)) : null);
         }
       } finally {
         if (!cancelled) setSearching(false);
@@ -267,11 +276,17 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
 
   /** Run a playback action; close on success, surface failures inline. */
   const runPlayback = async (action: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
     try {
       await action();
       onClose();
     } catch (e) {
       setNotice(e instanceof Error ? e.message : String(e));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
     }
   };
 
@@ -317,6 +332,13 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
       void playTrackAt(idx === -1 ? 0 : idx);
       return;
     }
+    // Opening a search hit leaves search mode — otherwise the list keeps
+    // showing the hits and the directory loader never runs for the new level.
+    if (searchActive) {
+      setQuery("");
+      setHomeResults(null);
+      setSearchResults(null);
+    }
     setStack(s => [...s, { uri: r.uri, name: r.name }]);
   };
 
@@ -337,13 +359,17 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
       });
       return;
     }
+    if (busyRef.current) return;
+    busyRef.current = true;
     try {
       const refs = await browse(r.uri);
       const trackUris = refs.filter(x => x.type === "track").map(x => x.uri);
       if (trackUris.length === 0) return;
       await playUris(trackUris);
       onClose();
-    } catch { /* ignore */ }
+    } catch { /* ignore */ } finally {
+      busyRef.current = false;
+    }
   };
 
   return (
@@ -497,11 +523,13 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
         </div>
 
         {/* Body */}
-        <div ref={listRef} style={{
+        <div ref={listRef} aria-busy={busy} style={{
           flex: 1,
           overflowY: "auto",
           overflowX: "hidden",
           // Scroll snapping isn't ideal for music lists; just plain scroll.
+          opacity: busy ? 0.6 : 1,
+          transition: "opacity 120ms",
         }}>
           {notice && (
             <div
@@ -576,11 +604,13 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                     // Lookup resolved metadata if we got it, else fall back to
                     // the Ref's "Artist - Title" name.
                     const t = (tracks ?? []).find(x => x.uri === h.ref.uri);
-                    const fallbackName = h.ref.name || h.ref.uri;
+                    // Untagged proxy streams have an empty ref name — never
+                    // show their raw URL.
+                    const fallbackName = friendlyTrackTitle(h.ref.name, h.ref.uri);
                     const dashIdx = !t ? fallbackName.indexOf(" - ") : -1;
                     const fallbackArtist = dashIdx > 0 ? fallbackName.slice(0, dashIdx) : "";
                     const fallbackTitle = dashIdx > 0 ? fallbackName.slice(dashIdx + 3) : fallbackName;
-                    const title = t?.name ?? fallbackTitle;
+                    const title = t?.name ? friendlyTrackTitle(t.name, t.uri) : fallbackTitle;
                     const artist = t ? joinArtists(t) : fallbackArtist;
                     const album = t?.album?.name ?? "";
                     return (
@@ -589,7 +619,7 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                         title={title}
                         subtitle={artist + (album ? ` · ${album}` : "")}
                         meta={relativeTime(h.ts)}
-                        onClick={() => { void playUris([h.ref.uri]).then(onClose); }}
+                        onClick={() => { void runPlayback(() => playUris([h.ref.uri])); }}
                         icon="▶"
                         thumb={(artist || album) ? (
                           <AlbumThumb artist={artist} album={album} track={title} seed={h.ref.uri} size={40}/>
@@ -710,7 +740,12 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                       )}
                     </>
                   )}
-              {searchActive && !searching && (homeResults ?? searchResults ?? []).length === 0 && (
+              {searchActive && !searching && searchError && (
+                <div role="alert" style={{padding: 24, color: "#ff8b8b"}}>
+                  Library search failed: {searchError}
+                </div>
+              )}
+              {searchActive && !searching && !searchError && (homeResults ?? searchResults ?? []).length === 0 && (
                 <div style={{padding: 24, fontFamily: "'JetBrains Mono', monospace", color: "rgba(255,255,255,0.5)"}}>
                   No matches for “{query}”.
                 </div>
