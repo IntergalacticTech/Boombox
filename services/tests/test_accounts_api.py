@@ -1,13 +1,19 @@
-"""/api/accounts/* — auth gate and card endpoints."""
+"""/api/accounts/* — admin-session gate and card endpoints."""
 from __future__ import annotations
+
+import logging
 
 import aiohttp
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
+from boombox_setup.accounts import ADMIN_KEY
+from boombox_setup.admin_session import IDLE_TTL_S, LOCKOUT_S, AdminSessions
 from boombox_setup.api import build_app
 
-LAN = {"X-Real-IP": "192.168.1.50", "X-Boombox-User": "boombox",
-       "X-Boombox-Host": "192.168.1.81:8090"}
+WEB_PASSWORD = "correct horse battery"
+LAN_NO_TOKEN = {"X-Real-IP": "192.168.1.50", "X-Boombox-Host": "192.168.1.81:8090"}
+# The `client` fixture adds a fresh admin "Authorization: Bearer …" per test.
+LAN: dict[str, str] = dict(LAN_NO_TOKEN)
 
 
 class FakeAccountsContext:
@@ -25,6 +31,7 @@ class FakeAccountsContext:
         self.music_calls: list[tuple] = []
         self.restarted: list[list[str]] = []
         self._http_session: aiohttp.ClientSession | None = None
+        self.web_pw: str | None = WEB_PASSWORD
 
     # setup Context surface used by build_app / status
     def read_identity(self):
@@ -53,6 +60,7 @@ class FakeAccountsContext:
         return True, ""
     async def library_health(self): return dict(self.health)
     def jellyfin_env(self): return dict(self.jf_env)
+    def web_password(self): return self.web_pw
     async def http(self):
         if self._http_session is None:
             self._http_session = aiohttp.ClientSession()
@@ -67,6 +75,9 @@ async def ctx():
 @pytest.fixture
 async def client(ctx):
     app = build_app(ctx)
+    token, _ = app[ADMIN_KEY].issue()
+    LAN.clear()
+    LAN.update(LAN_NO_TOKEN, Authorization=f"Bearer {token}")
     c = TestClient(TestServer(app))
     await c.start_server()
     yield c
@@ -75,17 +86,21 @@ async def client(ctx):
         await ctx._http_session.close()
 
 
-async def test_accounts_requires_basic_auth_user(client):
-    r = await client.get("/api/accounts/summary", headers={"X-Real-IP": "192.168.1.50"})
+async def test_accounts_requires_admin_token(client):
+    r = await client.get("/api/accounts/summary", headers=LAN_NO_TOKEN)
     assert r.status == 401
-
-
-async def test_accounts_refuses_loopback_even_with_user(client):
+    assert (await r.json())["error"] == "admin session required"
     r = await client.get("/api/accounts/summary",
-                         headers={"X-Real-IP": "127.0.0.1", "X-Boombox-User": "boombox"})
+                         headers={**LAN_NO_TOKEN, "X-Boombox-User": "boombox"})
+    assert r.status == 401            # the old Basic-auth user header opens nothing
+
+
+async def test_accounts_refuses_loopback_even_with_token(client):
+    r = await client.get("/api/accounts/summary", headers={**LAN, "X-Real-IP": "127.0.0.1"})
     assert r.status == 403
-    r = await client.get("/api/accounts/summary", headers={"X-Boombox-User": "boombox"})
-    assert r.status == 403  # no X-Real-IP = direct on-box call
+    no_ip = {k: v for k, v in LAN.items() if k != "X-Real-IP"}
+    r = await client.get("/api/accounts/summary", headers=no_ip)
+    assert r.status == 403            # no X-Real-IP = direct on-box call
 
 
 async def test_accounts_mutation_needs_json_and_same_origin(client):
@@ -537,3 +552,122 @@ async def test_streaming_clear_false_dropped_true_forwarded(client, ctx):
                          json={"airplay_password_clear": True})
     assert r.status == 200
     assert ctx.applied[-1] == {"action": "streaming", "airplay_password_clear": True}
+
+
+# ---- admin session ---------------------------------------------------------
+
+async def _login(c, password, headers=None):
+    return await c.post("/api/accounts/session", json={"password": password},
+                        headers=LAN_NO_TOKEN if headers is None else headers)
+
+
+async def _client_with_clock(ctx, clock):
+    app = build_app(ctx)
+    app[ADMIN_KEY] = AdminSessions(clock=lambda: clock[0])
+    c = TestClient(TestServer(app))
+    await c.start_server()
+    return app, c
+
+
+async def test_login_ok_returns_token_that_opens_accounts(client):
+    r = await _login(client, WEB_PASSWORD)
+    assert r.status == 200
+    body = await r.json()
+    assert body["ok"] is True and len(body["token"]) == 64 and body["expires_at"] > 0
+    r = await client.get("/api/accounts/summary",
+                         headers={**LAN_NO_TOKEN, "Authorization": f"Bearer {body['token']}"})
+    assert r.status == 200
+
+
+async def test_login_wrong_password_is_401_and_logged_without_the_password(client, caplog):
+    with caplog.at_level(logging.INFO, logger="boombox-setup.accounts"):
+        r = await _login(client, "hunter2-wrong")
+        ok = await _login(client, WEB_PASSWORD)
+    assert r.status == 401 and (await r.json())["error"] == "wrong password"
+    assert ok.status == 200
+    assert "hunter2-wrong" not in caplog.text and WEB_PASSWORD not in caplog.text
+    assert "admin login from 192.168.1.50: wrong password" in caplog.text
+    assert "admin login from 192.168.1.50: ok" in caplog.text
+
+
+async def test_login_refused_from_loopback_even_with_right_password(client):
+    for headers in ({"X-Real-IP": "127.0.0.1"}, {"X-Real-IP": "::1"},
+                    {"X-Real-IP": "localhost"}, {}):
+        r = await _login(client, WEB_PASSWORD, headers=headers)
+        assert r.status == 403, headers
+
+
+async def test_login_needs_json_and_same_origin(client):
+    r = await client.post("/api/accounts/session", data="password=x", headers=LAN_NO_TOKEN)
+    assert r.status == 415
+    r = await client.post("/api/accounts/session", json={"password": WEB_PASSWORD},
+                          headers={**LAN_NO_TOKEN, "Origin": "http://evil.example"})
+    assert r.status == 403
+    r = await client.post("/api/accounts/session", json=["x"], headers=LAN_NO_TOKEN)
+    assert r.status == 400
+
+
+async def test_login_without_web_password_is_503(client, ctx):
+    ctx.web_pw = None
+    r = await _login(client, "anything")
+    assert r.status == 503
+
+
+async def test_lockout_refuses_correct_password_until_window_passes(ctx):
+    clock = [1_000_000.0]
+    _app, c = await _client_with_clock(ctx, clock)
+    try:
+        for _ in range(5):
+            assert (await _login(c, "nope")).status == 401
+            clock[0] += 5
+        # Failures at t0, t0+5 … t0+20; the 5th locks until t0+320; now t0+25.
+        r = await _login(c, WEB_PASSWORD)
+        assert r.status == 429
+        assert (await r.json())["retry_after"] == LOCKOUT_S - 5
+        clock[0] += LOCKOUT_S - 10                               # t0+315: 5 s to go
+        assert (await _login(c, WEB_PASSWORD)).status == 429
+        clock[0] += 5                                            # t0+320: open again
+        assert (await _login(c, WEB_PASSWORD)).status == 200
+    finally:
+        await c.close()
+
+
+async def test_admin_token_expires_after_12h_idle(ctx):
+    clock = [1_000_000.0]
+    app, c = await _client_with_clock(ctx, clock)
+    try:
+        token, _ = app[ADMIN_KEY].issue()
+        hdr = {**LAN_NO_TOKEN, "Authorization": f"Bearer {token}"}
+        assert (await c.get("/api/accounts/summary", headers=hdr)).status == 200
+        clock[0] += IDLE_TTL_S - 1
+        assert (await c.get("/api/accounts/summary", headers=hdr)).status == 200
+        clock[0] += IDLE_TTL_S
+        assert (await c.get("/api/accounts/summary", headers=hdr)).status == 401
+    finally:
+        await c.close()
+
+
+async def test_logout_revokes_token(client):
+    r = await client.delete("/api/accounts/session", json={}, headers=LAN)
+    assert r.status == 200 and (await r.json()) == {"ok": True}
+    assert (await client.get("/api/accounts/summary", headers=LAN)).status == 401
+    r = await client.delete("/api/accounts/session", json={}, headers=LAN)
+    assert r.status == 200            # idempotent
+
+
+async def test_every_accounts_route_requires_admin_token(ctx):
+    app = build_app(ctx)
+    routes = sorted({(r.method, r.resource.canonical) for r in app.router.routes()
+                     if r.resource is not None
+                     and r.resource.canonical.startswith("/api/accounts/")
+                     and r.resource.canonical != "/api/accounts/session"
+                     and r.method != "HEAD"})
+    assert len(routes) >= 13
+    c = TestClient(TestServer(app))
+    await c.start_server()
+    try:
+        for method, path in routes:
+            r = await c.request(method, path, json={}, headers=LAN_NO_TOKEN)
+            assert r.status == 401, (method, path)
+    finally:
+        await c.close()
