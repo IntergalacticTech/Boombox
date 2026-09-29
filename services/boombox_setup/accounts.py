@@ -28,6 +28,9 @@ PREFIX = "/api/accounts/"
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _BASE_RE = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+(/[A-Za-z0-9._~%/+-]*)?$")
+_KEY_RE = re.compile(r"^[A-Za-z0-9]+$")
+_BUILTIN_BASE = "http://127.0.0.1:8096"
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 CDP_BASE = os.environ.get("BOOMBOX_KIOSK_CDP", "http://127.0.0.1:9222")
 _VIDEO_UNITS = ["boombox-remote.service", "boombox-kiosk-guard.service",
                 "boombox-buttons.service"]
@@ -165,8 +168,41 @@ def kiosk_device_id(ctx: Any) -> str:
 
 def _jf(ctx: Any) -> tuple[str, str]:
     env = ctx.jellyfin_env()
-    return (env.get("BOOMBOX_JELLYFIN_BASE") or "http://127.0.0.1:8096",
+    return (env.get("BOOMBOX_JELLYFIN_BASE") or _BUILTIN_BASE,
             env.get("JELLYFIN_API_KEY", ""))
+
+
+def _origin(url: str) -> tuple[str, str, int] | None:
+    """(scheme, host, port) of an http(s) URL — lowercased, default port
+    filled in — or None when it has no usable origin."""
+    try:
+        u = urlsplit(url.strip())
+        scheme = u.scheme.lower()
+        port = u.port
+    except ValueError:
+        return None
+    if scheme not in _DEFAULT_PORTS or not u.hostname:
+        return None
+    return scheme, u.hostname.lower(), port or _DEFAULT_PORTS[scheme]
+
+
+def _same_origin(a: str, b: str) -> bool:
+    oa = _origin(a)
+    return oa is not None and oa == _origin(b)
+
+
+_NEED_KEY = "Enter the API key for this server"
+_BAD_KEY = "The API key may only contain letters and digits"
+
+
+def _key_for(ctx: Any, base: str, submitted: str) -> str:
+    """The key to use against `base`: the submitted one, else the stored one —
+    but only when `base` is the stored server's origin, so a saved key is
+    never sent to a different host. "" when there is none."""
+    if submitted:
+        return submitted
+    stored_base, stored_key = _jf(ctx)
+    return stored_key if _same_origin(base, stored_base) else ""
 
 
 def _bad_base() -> dict[str, Any]:
@@ -197,9 +233,14 @@ async def _video_test(req: web.Request) -> web.Response:
     if b is None:
         return _bad_body()
     base = str(b.get("base", "")).strip().rstrip("/")
-    key = str(b.get("api_key") or "") or _jf(ctx)[1]
+    submitted = str(b.get("api_key") or "")
     if not _BASE_RE.match(base):
         return web.json_response(_bad_base())
+    if submitted and not _KEY_RE.match(submitted):
+        return _err(_BAD_KEY, 400)
+    key = _key_for(ctx, base, submitted)
+    if not key:
+        return web.json_response({"ok": False, "error": _NEED_KEY})
     try:
         info = await jf.system_info(await ctx.http(), base, key)
     except jf.JellyfinError as e:
@@ -215,24 +256,38 @@ async def _video_put(req: web.Request) -> web.Response:
         return _bad_body()
     mode = b.get("mode")
     payload: dict[str, Any] = {"action": "jellyfin", "mode": mode}
+    env = ctx.jellyfin_env()
+    old_mode = "remote" if env.get("BOOMBOX_JELLYFIN_BASE") else "builtin"
+    old_base = _jf(ctx)[0]
     if mode == "remote":
         base = str(b.get("base", "")).strip().rstrip("/")
         if not _BASE_RE.match(base):
             return web.json_response(_bad_base(), status=400)
         payload["base"] = base
-        if b.get("api_key"):
-            payload["api_key"] = str(b["api_key"])
+        submitted = str(b.get("api_key") or "")
+        if submitted and not _KEY_RE.match(submitted):
+            return _err(_BAD_KEY, 400)
+        key = _key_for(ctx, base, submitted)
+        if not key:
+            # A stored key is kept only for the same server; a new host
+            # needs its own (even with "Save anyway").
+            return _err(_NEED_KEY, 400)
+        if submitted:
+            payload["api_key"] = submitted
         # Spec: validate → test → write; never overwrite a working config
         # with one that fails, unless the owner explicitly chose "Save anyway".
         if b.get("force") is not True:
             try:
-                await jf.system_info(await ctx.http(), base,
-                                     str(b.get("api_key") or "") or _jf(ctx)[1])
+                await jf.system_info(await ctx.http(), base, key)
             except jf.JellyfinError as e:
                 return web.json_response({"ok": False, "error": str(e),
                                           "can_force": True}, status=400)
     elif mode != "builtin":
         return web.json_response({"ok": False, "error": "unknown mode"}, status=400)
+    new_base = payload.get("base", _BUILTIN_BASE)
+    if mode != old_mode or not _same_origin(new_base, old_base):
+        # The kiosk's pinned DeviceId belongs to the old server's session.
+        payload["device_id"] = ""
     r = await ctx.apply(payload)
     if not isinstance(r, dict) or not r.get("ok"):
         err = r.get("error") if isinstance(r, dict) else None
@@ -268,6 +323,10 @@ async def _kiosk_signin(req: web.Request) -> web.Response:
     if b is None:
         return _bad_body()
     user_id = str(b.get("user_id", ""))
+    if not ctx.jellyfin_env().get("BOOMBOX_JELLYFIN_BASE"):
+        # The built-in server needs no picker: the kiosk opens it at
+        # localhost, a different origin than the one we could sign in to.
+        return _err("Kiosk sign-in is only needed for a remote Jellyfin server", 400)
     base, key = _jf(ctx)
     if not key:
         return _err("Save an API key first", 400)
@@ -297,17 +356,22 @@ async def _kiosk_signin(req: web.Request) -> web.Response:
         except jf.JellyfinError:
             log.warning("could not revoke kiosk device after failed injection")
         return _err(str(e), 502)
-    env = ctx.jellyfin_env()
-    mode = "remote" if env.get("BOOMBOX_JELLYFIN_BASE") else "builtin"
-    pin: dict[str, Any] = {"action": "jellyfin", "mode": mode, "device_id": dev}
-    if mode == "remote":
-        pin["base"] = base
-    r = await ctx.apply(pin)
+    r = await _apply_pin(ctx, dev)
     if not isinstance(r, dict) or not r.get("ok"):
         err = r.get("error") if isinstance(r, dict) else None
         return _err(err or "could not save the kiosk device id", 400)
     await ctx.restart_units(["boombox-remote.service"])
     return web.json_response({"ok": True, "user": users[user_id]["name"]})
+
+
+async def _apply_pin(ctx: Any, device_id: str) -> Any:
+    """Set (or, with "", remove) BOOMBOX_JELLYFIN_DEVICE_ID, keeping the mode."""
+    base = ctx.jellyfin_env().get("BOOMBOX_JELLYFIN_BASE")
+    pin: dict[str, Any] = {"action": "jellyfin", "mode": "remote" if base else "builtin",
+                           "device_id": device_id}
+    if base:
+        pin["base"] = base
+    return await ctx.apply(pin)
 
 
 async def _kiosk_signout(req: web.Request) -> web.Response:
@@ -324,6 +388,12 @@ async def _kiosk_signout(req: web.Request) -> web.Response:
         await jf.inject_kiosk(CDP_BASE, base, dev, None)
     except jf.JellyfinError as e:
         errors.append(str(e))
+    # Unpin so phone control falls back to finding the kiosk's session.
+    r = await _apply_pin(ctx, "")
+    if not isinstance(r, dict) or not r.get("ok"):
+        errors.append(_helper_error(r, "could not clear the kiosk device id"))
+    else:
+        await ctx.restart_units(["boombox-remote.service"])
     return web.json_response({"ok": not errors, "error": "; ".join(errors)})
 
 

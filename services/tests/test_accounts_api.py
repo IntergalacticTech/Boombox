@@ -228,10 +228,11 @@ async def test_video_save_blank_key_keeps_current(client, ctx, monkeypatch):
     async def ok(*a, **k): return {"ServerName": "5CVideo"}
     monkeypatch.setattr(jf, "system_info", ok)
     r = await client.put("/api/accounts/video", headers=LAN,
-                         json={"mode": "remote", "base": "https://v2.example"})
+                         json={"mode": "remote", "base": "https://V.example:443/jf"})
     assert r.status == 200
     sent = ctx.applied[-1]
     assert sent["action"] == "jellyfin" and "api_key" not in sent
+    assert "device_id" not in sent  # same server origin: the kiosk pin stays
     assert ctx.restarted  # consumers restarted
 
 
@@ -240,11 +241,13 @@ async def test_video_save_refuses_failing_server_unless_forced(client, ctx, monk
     async def boom(*a, **k): raise jf.JellyfinError("Couldn't reach the Jellyfin server")
     monkeypatch.setattr(jf, "system_info", boom)
     r = await client.put("/api/accounts/video", headers=LAN,
-                         json={"mode": "remote", "base": "https://down.example"})
+                         json={"mode": "remote", "base": "https://down.example",
+                               "api_key": "k2"})
     assert r.status == 400 and (await r.json())["can_force"] is True
     assert not ctx.applied
     r = await client.put("/api/accounts/video", headers=LAN,
-                         json={"mode": "remote", "base": "https://down.example", "force": True})
+                         json={"mode": "remote", "base": "https://down.example",
+                               "api_key": "k2", "force": True})
     assert r.status == 200
 
 
@@ -266,7 +269,8 @@ async def test_video_save_tests_with_new_key_and_rejects_bad_json(client, ctx, m
                                "api_key": "newkey"})
     assert r.status == 200 and keys == ["newkey"]
     assert ctx.applied[-1] == {"action": "jellyfin", "mode": "remote",
-                               "base": "https://v2.example", "api_key": "newkey"}
+                               "base": "https://v2.example", "api_key": "newkey",
+                               "device_id": ""}  # new server: drop the kiosk pin
     r = await client.put("/api/accounts/video", headers=LAN, json=["x"])
     assert r.status == 400
     r = await client.put("/api/accounts/video", headers=LAN, json={"mode": "weird"})
@@ -274,6 +278,11 @@ async def test_video_save_tests_with_new_key_and_rejects_bad_json(client, ctx, m
 
 
 async def test_video_save_builtin_and_apply_failure(client, ctx):
+    r = await client.put("/api/accounts/video", headers=LAN, json={"mode": "builtin"})
+    # remote → builtin is a mode change: the kiosk pin is dropped with it
+    assert r.status == 200 and ctx.applied[-1] == {"action": "jellyfin", "mode": "builtin",
+                                                   "device_id": ""}
+    ctx.jf_env = {"JELLYFIN_API_KEY": "k"}
     r = await client.put("/api/accounts/video", headers=LAN, json={"mode": "builtin"})
     assert r.status == 200 and ctx.applied[-1] == {"action": "jellyfin", "mode": "builtin"}
     ctx.apply_results["jellyfin"] = {"ok": False, "error": "disk full"}
@@ -373,7 +382,7 @@ async def test_signin_bad_body_and_no_key(client, ctx):
     assert r.status == 400 and "API key" in (await r.json())["error"]
 
 
-async def test_signout_revokes_and_clears_kiosk(client, monkeypatch):
+async def test_signout_revokes_and_clears_kiosk(client, ctx, monkeypatch):
     from boombox_setup import jellyfin_signin as jf
     calls: list = []
 
@@ -385,9 +394,12 @@ async def test_signout_revokes_and_clears_kiosk(client, monkeypatch):
     assert r.status == 200 and (await r.json())["ok"] is True
     assert calls == [("revoke", "boombox-markii-kiosk"),
                      ("inject", "boombox-markii-kiosk", None)]
+    assert ctx.applied[-1] == {"action": "jellyfin", "mode": "remote",
+                               "base": "https://v.example", "device_id": ""}
+    assert ["boombox-remote.service"] in ctx.restarted
 
 
-async def test_signout_reports_errors(client, monkeypatch):
+async def test_signout_reports_errors(client, ctx, monkeypatch):
     from boombox_setup import jellyfin_signin as jf
 
     async def fake_revoke(*a, **k): raise jf.JellyfinError("Couldn't reach the Jellyfin server")
@@ -398,6 +410,71 @@ async def test_signout_reports_errors(client, monkeypatch):
     body = await r.json()
     assert r.status == 200 and body["ok"] is False
     assert "reach" in body["error"] and "kiosk" in body["error"]
+    # the stale pin is cleared even when the kiosk/server can't be reached
+    assert ctx.applied[-1]["device_id"] == ""
+    ctx.apply_results["jellyfin"] = {"ok": False, "error": "disk full"}
+    body = await (await client.post("/api/accounts/video/kiosk-signout",
+                                    headers=LAN, json={})).json()
+    assert body["ok"] is False and "disk full" in body["error"]
+
+
+async def test_signin_refused_in_builtin_mode(client, ctx, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    async def boom(*a, **k): raise AssertionError("no Jellyfin/kiosk call in builtin mode")
+    for name in ("list_users", "public_info", "quick_connect_token", "inject_kiosk"):
+        monkeypatch.setattr(jf, name, boom)
+    ctx.jf_env = {"JELLYFIN_API_KEY": "k"}
+    r = await client.post("/api/accounts/video/kiosk-signin", headers=LAN,
+                          json={"user_id": "u1"})
+    assert r.status == 400
+    assert await r.json() == {"ok": False, "error":
+                              "Kiosk sign-in is only needed for a remote Jellyfin server"}
+    assert not ctx.applied
+
+
+async def test_video_test_never_forwards_stored_key_to_other_host(client, ctx, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    keys = []
+    async def ok(s, base, key):
+        keys.append((base, key))
+        return {"ServerName": "x"}
+    monkeypatch.setattr(jf, "system_info", ok)
+    for base in ("https://evil.example", "http://v.example", "https://v.example:8443"):
+        body = await (await client.post("/api/accounts/video/test", headers=LAN,
+                                        json={"base": base})).json()
+        assert body == {"ok": False, "error": "Enter the API key for this server"}
+    r = await client.put("/api/accounts/video", headers=LAN,
+                         json={"mode": "remote", "base": "https://evil.example",
+                               "force": True})
+    assert r.status == 400 and "API key" in (await r.json())["error"]
+    assert keys == [] and not ctx.applied
+    # same origin (case/default port normalised) → stored key
+    await client.post("/api/accounts/video/test", headers=LAN,
+                      json={"base": "https://V.EXAMPLE:443/jellyfin"})
+    assert keys == [("https://V.EXAMPLE:443/jellyfin", "k")]
+    # builtin: the stored key belongs to 127.0.0.1:8096, never a remote host
+    ctx.jf_env = {"JELLYFIN_API_KEY": "k"}
+    body = await (await client.post("/api/accounts/video/test", headers=LAN,
+                                    json={"base": "https://v.example"})).json()
+    assert body["ok"] is False and keys[-1][1] == "k" and len(keys) == 1
+    await client.post("/api/accounts/video/test", headers=LAN,
+                      json={"base": "http://127.0.0.1:8096"})
+    assert keys[-1] == ("http://127.0.0.1:8096", "k")
+
+
+async def test_video_key_charset_rejected(client, ctx, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    async def boom(*a, **k): raise AssertionError("bad key must not reach Jellyfin")
+    monkeypatch.setattr(jf, "system_info", boom)
+    for key in ("abc\r\nX-Evil: 1", "has space", "k-1"):
+        r = await client.post("/api/accounts/video/test", headers=LAN,
+                              json={"base": "https://v.example", "api_key": key})
+        assert r.status == 400
+        r = await client.put("/api/accounts/video", headers=LAN,
+                             json={"mode": "remote", "base": "https://v.example",
+                                   "api_key": key})
+        assert r.status == 400
+    assert not ctx.applied
 
 
 async def test_streaming_get_passthrough(client, ctx):

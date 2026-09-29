@@ -33,7 +33,7 @@ export function VideoCard({ onChanged }: { onChanged: () => void }) {
     }
     setInfo(v);
     setVersion((n) => n + 1);
-    if (v.key_set && !v.kiosk_user) loadUsers();
+    if (v.mode === "remote" && v.key_set && !v.kiosk_user) loadUsers();
     else { setUsers([]); setUsersError(null); }
   }).catch(() => setMsg("Couldn't reach the Boombox.")), [loadUsers]);
   useEffect(() => { void load(); }, [load]);
@@ -102,7 +102,9 @@ export function VideoCard({ onChanged }: { onChanged: () => void }) {
           <SecondaryButton onClick={saveAnyway} disabled={busy}>Save anyway</SecondaryButton>
         ) : undefined} />
       {forceError && <ErrorText>{forceError}</ErrorText>}
-      {info.key_set && (
+      {/* Remote only: the built-in server needs no picker (the kiosk opens it
+          at localhost, and the phone remote finds its session itself). */}
+      {info.mode === "remote" && info.key_set && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <h3 style={{ fontSize: 15, margin: 0 }}>Kiosk sign-in</h3>
           {info.kiosk_user ? (

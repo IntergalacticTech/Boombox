@@ -207,6 +207,17 @@ describe("AccountsApp", () => {
     expect(calls.some(c => c.url === "/api/accounts/video/users")).toBe(false);
   });
 
+  it("hides kiosk sign-in for the built-in server", async () => {
+    R["GET /api/accounts/video"] = { mode: "builtin", base: "http://127.0.0.1:8096",
+      key_set: true, kiosk_device_id: "boombox-markii-kiosk", kiosk_user: null };
+    render(<AccountsApp />);
+    await screen.findByText("Video server");
+    await waitFor(() => expect(calls.some(c => c.url === "/api/accounts/video")).toBe(true));
+    expect(screen.queryByText(/kiosk sign-in/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /sign kiosk in/i })).toBeNull();
+    expect(calls.some(c => c.url === "/api/accounts/video/users")).toBe(false);
+  });
+
   it("signs the kiosk out", async () => {
     R["GET /api/accounts/video"] = { ...(BASE_R["GET /api/accounts/video"] as object),
       kiosk_user: "jwc" };
