@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import sys
 from pathlib import Path
 
 SERVICE = Path(__file__).resolve().parent.parent / "boombox-resume.py"
 _spec = importlib.util.spec_from_file_location("boombox_resume_service", SERVICE)
 resume = importlib.util.module_from_spec(_spec)
+# @dataclass resolves annotations through sys.modules.
+sys.modules[_spec.name] = resume
 _spec.loader.exec_module(resume)
 
 PROXY = "http://127.0.0.1:6687/api/library/stream"
