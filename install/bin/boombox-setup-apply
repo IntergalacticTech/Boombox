@@ -88,6 +88,8 @@ NGINX_BLOCK_PARENTS = {
     "location": {"server", "location"},
 }
 NGINX_SNIPPET_INCLUDE = "/etc/nginx/snippets/boombox-common.conf"
+# `listen` flags the templates use (see _listen_ok for the address forms).
+NGINX_LISTEN_FLAGS = frozenset({"default_server"})
 NGINX_TEMPLATE_MAX_BYTES = 1 << 20
 HOSTS_FILE = "/etc/hosts"
 WLAN_IF = "wlan0"
@@ -951,17 +953,24 @@ def _nginx_unescape(raw: str) -> str:
     return "".join(out)
 
 
-def _nginx_statements(text: str) -> list[tuple[list[str], str]]:
-    """Split config into (words, terminator) with terminator ';', '{' or '}'.
+def _nginx_statements(text: str, where: str) -> list[tuple[list[str], str, int]]:
+    """Split config into (words, terminator, line); terminator ';', '{' or '}'.
 
     Mirrors nginx's tokenizer, not a naive one: `#` starts a comment and a
     quote opens a string ONLY at a token boundary (`/x#` and `a"` are plain
     words to nginx), a backslash escapes the next char, `${` stays in a word
     and `}` only closes a block at a token boundary. Anything nginx would
-    reject is rejected here too."""
-    out: list[tuple[list[str], str]] = []
+    reject is rejected here too. Errors name only the position (`where` +
+    line), never text from the file."""
+    out: list[tuple[list[str], str, int]] = []
     words: list[str] = []
+    line = 1
     i, n = 0, len(text)
+
+    def bad(pos: int) -> TemplateRejected:
+        return TemplateRejected(
+            f"template is not valid nginx config ({where} line {text.count(chr(10), 0, pos) + 1})")
+
     while i < n:
         ch = text[i]
         if ch in _NGINX_SPACE:
@@ -971,92 +980,113 @@ def _nginx_statements(text: str) -> list[tuple[list[str], str]]:
             i = n if j < 0 else j + 1
         elif ch in ";{":
             if not words:
-                raise TemplateRejected(f"template is not valid nginx config: unexpected '{ch}'")
-            out.append((words, ch))
+                raise bad(i)
+            out.append((words, ch, line))
             words = []
             i += 1
         elif ch == "}":
             if words:
-                raise TemplateRejected("template is not valid nginx config: unexpected '}'")
-            out.append(([], "}"))
+                raise bad(i)
+            out.append(([], "}", text.count("\n", 0, i) + 1))
             i += 1
-        elif ch in "\"'":
-            quote, i, start = ch, i + 1, i + 1
-            while True:
-                if i >= n:
-                    raise TemplateRejected("template is not valid nginx config: unterminated string")
-                if text[i] == "\\":
-                    i += 2
-                    continue
-                if text[i] == quote:
-                    break
-                i += 1
-            words.append(_nginx_unescape(text[start:i]))
-            i += 1
-            if i < n and text[i] not in _NGINX_SPACE + ";{":
-                raise TemplateRejected("template is not valid nginx config: text after a string")
         else:
-            start, variable = i, False
-            while i < n:
-                c = text[i]
-                if c == "{" and variable:
+            if not words:
+                line = text.count("\n", 0, i) + 1
+            if ch in "\"'":
+                quote, i, start = ch, i + 1, i + 1
+                while True:
+                    if i >= n:
+                        raise bad(start - 1)
+                    if text[i] == "\\":
+                        i += 2
+                        continue
+                    if text[i] == quote:
+                        break
                     i += 1
-                    continue
-                variable = False
-                if c == "\\":
-                    i += 2
-                    continue
-                if c == "$":
-                    variable = True
-                elif c in _NGINX_SPACE + ";{":
-                    break
+                words.append(_nginx_unescape(text[start:i]))
                 i += 1
-            words.append(_nginx_unescape(text[start:min(i, n)]))
+                if i < n and text[i] not in _NGINX_SPACE + ";{":
+                    raise bad(i)
+            else:
+                start, variable = i, False
+                while i < n:
+                    c = text[i]
+                    if c == "{" and variable:
+                        i += 1
+                        continue
+                    variable = False
+                    if c == "\\":
+                        i += 2
+                        continue
+                    if c == "$":
+                        variable = True
+                    elif c in _NGINX_SPACE + ";{":
+                        break
+                    i += 1
+                words.append(_nginx_unescape(text[start:min(i, n)]))
     if words:
-        raise TemplateRejected("template is not valid nginx config: unexpected end of file")
+        raise bad(n)
     return out
 
 
-def _shown(name: str) -> str:
-    # Never echo arbitrary bytes back (a template could be any root-readable
-    # file's content); only something shaped like a directive name.
-    return name if re.fullmatch(r"[a-z_][a-z0-9_]{0,63}", name) else "(not a directive name)"
+def _listen_ok(args: list[str], port: str) -> bool:
+    """Only the forms the templates use: loopback :80 for the kiosk, the
+    rendered LAN port on all interfaces, plus `default_server`. No unix:
+    sockets (root would create them at a release-chosen path), no other
+    ports or flags."""
+    if not args or args[0] not in {"127.0.0.1:80", "[::1]:80", port, f"[::]:{port}"}:
+        return False
+    flags = args[1:]
+    return set(flags) <= NGINX_LISTEN_FLAGS and len(flags) == len(set(flags))
 
 
-def check_nginx_template(text: str, *, site: bool) -> None:
+def check_nginx_template(text: str, *, site: bool, port: str) -> None:
     """Raise TemplateRejected unless every directive is allow-listed, blocks
-    nest only where permitted, braces balance and `include` names exactly
-    the shared snippet (site file only). `site=False` checks the snippet as
-    the body of a `server` block it cannot close."""
+    nest only where permitted, braces balance, `listen` uses a template form
+    (site only) and `include` names exactly the shared snippet (site only).
+    `site=False` checks the snippet as the body of a `server` block it
+    cannot close. Errors name only the file and line — never its content."""
+    where = "nginx.conf" if site else "nginx-boombox-common.conf"
+
+    def denied(line: int) -> TemplateRejected:
+        return TemplateRejected(
+            f"template uses a directive the boombox doesn't allow ({where} line {line})")
+
+    def invalid(line: int) -> TemplateRejected:
+        return TemplateRejected(f"template is not valid nginx config ({where} line {line})")
+
     stack = ["main" if site else "server"]
-    for words, term in _nginx_statements(text):
+    line = 1
+    for words, term, line in _nginx_statements(text, where):
         if term == "}":
             if len(stack) == 1:
-                raise TemplateRejected("template is not valid nginx config: unbalanced '}'")
+                raise invalid(line)
             stack.pop()
             continue
         if stack[-1] == "map":
-            if term != ";" or len(words) != 2:
-                raise TemplateRejected("template is not valid nginx config: bad map entry")
+            # nginx's map treats `include <file>;` (and `hostnames;`,
+            # `volatile;`) as special entries — only plain `key value;`.
+            if term != ";" or len(words) != 2 or words[0] == "include":
+                raise denied(line)
             continue
         name = words[0]
-        denied = TemplateRejected(
-            f"template uses a directive the boombox doesn't allow: {_shown(name)}")
         if name not in NGINX_ALLOWED_DIRECTIVES:
-            raise denied
+            raise denied(line)
         parents = NGINX_BLOCK_PARENTS.get(name)
         if (term == "{") != (parents is not None):
-            raise TemplateRejected(f"template is not valid nginx config: misplaced block {_shown(name)}")
+            raise invalid(line)
         if parents is not None:
             if stack[-1] not in parents:
-                raise denied
+                raise denied(line)
             stack.append(name)
         elif stack[-1] == "main":
-            raise denied                   # only map/server at the top level
+            raise denied(line)             # only map/server at the top level
         if name == "include" and (not site or words[1:] != [NGINX_SNIPPET_INCLUDE]):
-            raise denied
+            raise denied(line)
+        if name == "listen" and (not site or not _listen_ok(words[1:], port)):
+            raise denied(line)
     if len(stack) != 1:
-        raise TemplateRejected("template is not valid nginx config: unclosed block")
+        raise invalid(line)
 
 
 def _read_template(name: str) -> str:
@@ -1099,8 +1129,8 @@ def action_nginx_sync(_body: dict) -> dict:
     try:
         site = render_site(_read_template("nginx.conf"), port)
         snippet = _read_template("nginx-boombox-common.conf")
-        check_nginx_template(site, site=True)
-        check_nginx_template(snippet, site=False)
+        check_nginx_template(site, site=True, port=port)
+        check_nginx_template(snippet, site=False, port=port)
     except TemplateRejected as e:
         return {"ok": False, "error": str(e)}
     old = {NGINX_SITE: _read_or_none(NGINX_SITE), NGINX_SNIPPET: _read_or_none(NGINX_SNIPPET)}
