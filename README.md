@@ -153,6 +153,7 @@ desktop session's PipeWire / Wayland / BlueZ / `/dev/input`). `nginx` and
 - **[ARCHITECTURE.md](./docs/ARCHITECTURE.md)** — one-screen picture of how everything fits together
 - **[SERVICES.md](./docs/SERVICES.md)** — per-service reference: what each daemon does and how to debug it
 - **[HOME-LIBRARY.md](./docs/HOME-LIBRARY.md)** — Navidrome catalog sync, USB cache drive, pinning, offline play
+- **[HOME-SERVERS.md](./docs/HOME-SERVERS.md)** — run Navidrome + Jellyfin in Docker and reach them from outside the home (Cloudflare Tunnel or port-forward), securely
 - **[RFID.md](./docs/RFID.md)** — bind a card to an album/artist/playlist; tap to play
 - **[BUTTONS.md](./docs/BUTTONS.md)** — wire 17 panel buttons + an encoder, bind pins from the Settings panel, troubleshoot
 - **[SKINS.md](./docs/SKINS.md)** — end-to-end guide to creating a new touchscreen skin

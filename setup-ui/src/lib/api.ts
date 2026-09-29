@@ -3,9 +3,14 @@
 // The wizard runs in two contexts:
 //   - Kiosk (localhost): no token — API calls just work.
 //   - Phone (LAN): the handoff QR opens .../setup/#t=<TOKEN>. When a token is
-//     present in location.hash it is attached to EVERY request as BOTH an
-//     `Authorization: Bearer <token>` header AND a `?t=<token>` query param
-//     (the server accepts either).
+//     present in location.hash it is attached to EVERY request as an
+//     `Authorization: Bearer <token>` header — only a header: a URL query
+//     param would leak the token into access logs and history, so the
+//     server no longer accepts one.
+//
+// Every POST/PUT carries `Content-Type: application/json` (even without a
+// body): the server requires it on all mutations, which keeps cross-site
+// form posts from riding the kiosk's localhost trust.
 //
 // All fetches are same-origin to /api/setup/... — no cross-origin, no base
 // host juggling.
@@ -101,12 +106,9 @@ class HttpSetupApi implements SetupApi {
     storeToken(token);
   }
 
-  /** Build the same-origin URL, appending `?t=<token>` when authenticated. */
+  /** Build the same-origin URL. */
   private url(path: string): string {
-    const url = BASE + path.replace(/^\//, "");
-    if (this.token === null) return url;
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}t=${encodeURIComponent(this.token)}`;
+    return BASE + path.replace(/^\//, "");
   }
 
   private headers(json: boolean): Record<string, string> {
@@ -117,11 +119,11 @@ class HttpSetupApi implements SetupApi {
   }
 
   private async send<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const hasBody = body !== undefined;
+    const mutating = method !== "GET";
     const r = await fetch(this.url(path), {
       method,
-      headers: this.headers(hasBody),
-      body: hasBody ? JSON.stringify(body) : undefined,
+      headers: this.headers(mutating),
+      body: mutating ? JSON.stringify(body ?? {}) : undefined,
     });
     // Our token no longer authorizes (expired, or the setup service
     // restarted and lost the session): forget it and let the app return

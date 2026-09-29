@@ -60,8 +60,23 @@ case "$cmd" in
     require_valid_ref "$ref"
     log "fetch $ref → $RELEASES/$ref"
     mkdir -p "$RELEASES"
-    rm -rf "$RELEASES/$ref"
-    git clone --depth=1 --branch "$ref" "$REPO_URL" "$RELEASES/$ref"
+    rm -rf "${RELEASES:?}/$ref"
+    if [[ "$ref" == v* ]]; then
+      git clone --depth=1 --branch "$ref" "$REPO_URL" "$RELEASES/$ref"
+    else
+      # `clone --branch` only takes branch/tag names, never a commit SHA.
+      # Clone without checkout (blobless, so only the target commit's files
+      # are downloaded), then check the SHA out detached. A commit that is
+      # not reachable from any branch/tag (e.g. a PR head) isn't in the
+      # clone — fetch it by id; servers only honour want-by-id for a FULL
+      # 40-char SHA, so a short one must be reachable from a branch/tag.
+      git clone --no-checkout --filter=blob:none "$REPO_URL" "$RELEASES/$ref"
+      if ! git -C "$RELEASES/$ref" cat-file -e "$ref^{commit}" 2>/dev/null; then
+        git -C "$RELEASES/$ref" fetch origin "$ref" \
+          || fail "commit $ref not found upstream (short SHAs must be on a branch or tag)"
+      fi
+      git -C "$RELEASES/$ref" switch --detach "$ref^{commit}"
+    fi
     # Persist the resolved version for later runs to compare against.
     if [[ "$ref" == v* ]]; then
       printf '%s\n' "$ref" >"$RELEASES/$ref/VERSION"
@@ -76,23 +91,34 @@ case "$cmd" in
     log "build $ref"
     [[ -d "$RELEASES/$ref" ]] || fail "$RELEASES/$ref missing — run fetch first"
     "$VENV/bin/pip" install -r "$RELEASES/$ref/install/config/requirements.txt"
-    (
-      cd "$RELEASES/$ref/ui"
-      npm install --no-audit --no-fund
-      npm run build
-    )
-    # nginx (www-data) will serve the SPA straight from this release tree
+    # nginx (www-data) will serve each SPA straight from this release tree
     # once `swap` points `current` here — make the bundle world-readable and
-    # the release dir + ui/ world-traversable.
-    chmod -R a+rX "$RELEASES/$ref/ui/dist"
-    chmod o+x "$ROOT" "$RELEASES" "$RELEASES/$ref" "$RELEASES/$ref/ui"
-    (
-      cd "$RELEASES/$ref/remote-ui"
-      npm install --no-audit --no-fund
-      npm run build
-    )
-    chmod -R a+rX "$RELEASES/$ref/remote-ui/dist"
-    chmod o+x "$RELEASES/$ref/remote-ui"
+    # the release dir + package dir world-traversable. `npm ci` installs
+    # exactly what the committed lockfile pins (and fails loudly if it's out
+    # of sync) instead of re-resolving ranges on the device.
+    build_spa() {
+      local dir="$1"
+      (
+        cd "$dir"
+        if [[ -f package-lock.json ]]; then
+          npm ci --no-audit --no-fund
+        else
+          npm install --no-audit --no-fund
+        fi
+        npm run build
+      )
+      chmod -R a+rX "$dir/dist"
+      chmod o+x "$dir"
+    }
+    chmod o+x "$ROOT" "$RELEASES" "$RELEASES/$ref"
+    build_spa "$RELEASES/$ref/ui"
+    build_spa "$RELEASES/$ref/remote-ui"
+    # The first-run wizard (/setup/, also Settings → "Run setup again").
+    # install.sh builds it; without this an OTA update left /setup/ 404ing.
+    # Guarded so an older release that predates setup-ui still builds.
+    if [[ -f "$RELEASES/$ref/setup-ui/package.json" ]]; then
+      build_spa "$RELEASES/$ref/setup-ui"
+    fi
     ;;
 
   preflight)
@@ -101,6 +127,9 @@ case "$cmd" in
     log "preflight $ref"
     [[ -f "$RELEASES/$ref/ui/dist/index.html" ]] || fail "ui/dist/index.html missing"
     [[ -f "$RELEASES/$ref/remote-ui/dist/index.html" ]] || fail "remote-ui/dist/index.html missing"
+    if [[ -f "$RELEASES/$ref/setup-ui/package.json" ]]; then
+      [[ -f "$RELEASES/$ref/setup-ui/dist/index.html" ]] || fail "setup-ui/dist/index.html missing"
+    fi
     for unit in "$RELEASES/$ref"/install/systemd/user/*.service; do
       systemd-analyze --user verify "$unit" || fail "systemd-analyze rejected $unit"
     done
@@ -146,6 +175,18 @@ for mod in ('boombox_updater', 'boombox_buttons'):
         warn "sudoers missing nginx-snippet entry; run install.sh once to enable per-deploy nginx sync"
       fi
     fi
+    # Root-executed helpers live as root-owned copies outside the release
+    # tree precisely so this (unprivileged) deploy can NOT rewrite them —
+    # granting sudo to copy them from here would reopen that hole. So they
+    # only refresh when install.sh runs; just flag drift for the operator.
+    for pair in \
+      "services/boombox-usb-mount.sh:/usr/local/sbin/boombox-usb-mount" \
+      "install/bin/boombox-setup-apply:/usr/local/sbin/boombox-setup-apply"; do
+      src="$CURRENT/${pair%%:*}"; dst="${pair#*:}"
+      if [[ -f "$src" ]] && ! cmp -s "$src" "$dst"; then
+        warn "$dst differs from this release's ${pair%%:*} — re-run install.sh to refresh the root-owned copy"
+      fi
+    done
     ;;
 
   restart)
@@ -266,7 +307,7 @@ PYRELOAD
     ref="${1:?ref required}"
     require_valid_ref "$ref"
     log "cleanup $RELEASES/$ref"
-    rm -rf "$RELEASES/$ref"
+    rm -rf "${RELEASES:?}/$ref"
     ;;
 
   prune)

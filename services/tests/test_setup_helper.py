@@ -147,3 +147,67 @@ def test_parse_wpa_state():
     assert helper.parse_wpa_state(out) == "COMPLETED"
     assert helper.parse_wpa_state("wpa_state=4WAY_HANDSHAKE\n") == "4WAY_HANDSHAKE"
     assert helper.parse_wpa_state("no state here") == ""
+
+
+# ---- Wi-Fi credential validation (root writes these into wpa_supplicant) -----
+@pytest.mark.parametrize("ssid,psk", [
+    ("HomeNet", "correct horse"),
+    ("Open Guest", ""),                      # open network
+    ("Café Wi-Fi", "p@ss'w$rd\\x"),          # unicode SSID; shell-ish PSK chars
+    ("x" * 32, "y" * 63),
+])
+def test_wifi_credentials_accepted(ssid, psk):
+    assert helper.validate_wifi_credentials(ssid, psk) == (ssid, psk)
+
+
+@pytest.mark.parametrize("ssid,psk", [
+    ("", "password1"),
+    ("é" * 17, "password1"),                  # 34 UTF-8 bytes > 32
+    ('Net"\n\tpsk="x', "password1"),          # quote/newline injection
+    ("Net\nctrl_interface=/tmp", ""),
+    ("Net\x00", "password1"),
+    ("Net", "short"),
+    ("Net", "p" * 64),
+    ("Net", 'pass"word1'),
+    ("Net", "pass\nword1"),
+    ("Net", "pässword1"),                     # non-ASCII passphrase
+    (None, ""),
+    ("Net", None),
+])
+def test_wifi_credentials_rejected(ssid, psk):
+    with pytest.raises(ValueError):
+        helper.validate_wifi_credentials(ssid, psk)
+
+
+def test_wifi_join_rejects_injection_before_side_effects(monkeypatch):
+    # Validation must fail before the helper even looks for wlan0.
+    monkeypatch.setattr(helper, "_wlan_present",
+                        lambda: pytest.fail("reached side effects"))
+    r = helper.action_wifi_join({"ssid": 'a"\nnetwork={', "psk": "password1"})
+    assert r["ok"] is False
+
+
+def test_wpa_network_block_is_hex_encoded():
+    block = helper.wpa_network_block('we"ird', "password")
+    assert '"' not in block
+    assert "\tssid=" + 'we"ird'.encode().hex() + "\n" in block
+    # IEEE 802.11i-2004 H.4 test vector: passphrase "password", SSID "IEEE".
+    ref = helper.wpa_network_block("IEEE", "password")
+    assert "psk=f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e" in ref
+    assert helper.wpa_network_block("Open", "").count("key_mgmt=NONE") == 1
+
+
+# ---- Jellyfin base URL (written unquoted; sourced by root shell code) --------
+@pytest.mark.parametrize("base", [
+    "http://x/$(id)", "https://h`id`", "https://h;reboot", "https://h\n",
+    "https://h/a b", "https://h'x", 'https://h"x', "https://h|x", "ftp://h",
+])
+def test_jellyfin_base_rejects_shell_metachars(base):
+    assert helper.action_jellyfin({"mode": "remote", "base": base})["ok"] is False
+
+
+@pytest.mark.parametrize("base", [
+    "https://video.coblr.io", "http://192.168.1.5:8096", "http://[fe80::1]:8096/jf",
+])
+def test_jellyfin_base_accepts_plain_urls(base):
+    assert helper._BASE_URL_RE.fullmatch(base)

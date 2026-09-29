@@ -17,15 +17,22 @@
 #        music.example.com  →  Service: http://navidrome:4533
 #        video.example.com  →  Service: http://jellyfin:8096
 #      (Use the Docker service names above — cloudflared shares this network.)
-#   4. Strongly recommended: add a Cloudflare Access policy in front of each
-#      hostname (see the Security section of docs/HOME-SERVERS.md).
+#   4. Cloudflare Access: gate only the browser UIs. The boombox sends no
+#      Access headers, so Access over a whole hostname breaks sync/streaming —
+#      bypass Navidrome's /rest/* and leave the Jellyfin hostname ungated. See
+#      "Option A" step 6 in docs/HOME-SERVERS.md.
 #
 # Bring the whole stack up WITH the tunnel:
 #   docker compose -f docker-compose.yml -f docker-compose.cloudflared.yml up -d
 
 services:
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    # Pinned, like the server images in docker-compose.yml: `latest` would
+    # silently change the tunnel binary under you on any re-pull. Bump
+    # deliberately — tags are CalVer (YYYY.M.patch), listed at
+    # https://hub.docker.com/r/cloudflare/cloudflared/tags. (Chosen from
+    # memory, not a live registry check — confirm the tag exists on first pull.)
+    image: cloudflare/cloudflared:2025.4.0
     container_name: boombox-cloudflared
     restart: unless-stopped
     # Token-based (remotely-managed) tunnel: hostname → service mappings live

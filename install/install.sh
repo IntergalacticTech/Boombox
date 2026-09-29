@@ -545,8 +545,12 @@ if [[ ! -f "$SETUP_MARKER" ]] && [[ -f /etc/boombox/library.yml ]] \
   install -m 0644 /dev/null "$SETUP_MARKER" && echo 1 > "$SETUP_MARKER"
 fi
 
-# System-side template + udev rule for USB auto-mount.
-log "installing USB auto-mount (system unit + udev rule)"
+# System-side template + udev rule for USB auto-mount. The unit runs as root,
+# so it executes a root-owned copy of the script (same pattern as
+# boombox-setup-apply above) — the release tree is boombox-user-writable.
+log "installing USB auto-mount (root-owned script + system unit + udev rule)"
+sudo install -m 0755 -o root -g root "$ACTIVE_REPO/services/boombox-usb-mount.sh" \
+  /usr/local/sbin/boombox-usb-mount
 sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/systemd/system/boombox-usb-mount@.service" \
   /etc/systemd/system/boombox-usb-mount@.service
 sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/udev/99-boombox-usb.rules" \

@@ -21,6 +21,13 @@ ExecStartPre=/bin/rm -f %h/.config/chromium/SingletonLock %h/.config/chromium/Si
 ## The boombox-kiosk-guard watchdog keeps the URL pinned to localhost,
 ## and Wayland compositors don't draw a title bar on Chromium's
 ## --app windows.
+##
+## DevTools (9222) is bound to loopback by Chromium. --remote-allow-origins
+## lists only the port's own origins, NOT `*`: with `*` any web page the
+## kiosk ever renders could open a CDP websocket to 127.0.0.1:9222 and drive
+## the browser. Our CDP clients (kiosk-guard, apply-release.sh, `pi goto`,
+## `pi browse` over an SSH tunnel) use Python websockets / Playwright, which
+## send no Origin header — Chromium only enforces the list when one is sent.
 ExecStart=/usr/bin/chromium \
   --app=http://localhost/ \
   --start-maximized \
@@ -31,7 +38,7 @@ ExecStart=/usr/bin/chromium \
   --enable-wayland-ime \
   --wayland-text-input-version=3 \
   --remote-debugging-port=9222 \
-  --remote-allow-origins=* \
+  --remote-allow-origins=http://127.0.0.1:9222,http://localhost:9222 \
   --noerrdialogs \
   --disable-session-crashed-bubble \
   --overscroll-history-navigation=0 \

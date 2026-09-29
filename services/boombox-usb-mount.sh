@@ -11,7 +11,9 @@
 #
 # Runs as root (block-device access). Filesystem ownership maps to the
 # boombox user via the mount's uid/gid options where the FS supports it
-# (vfat/exfat/ntfs).
+# (vfat/exfat/ntfs). Because it runs as root, install.sh copies it root-owned
+# to /usr/local/sbin/boombox-usb-mount and the unit executes THAT copy — never
+# this file in the (boombox-user-writable) release tree.
 #
 # id is derived from the partition LABEL when present, otherwise the UUID.
 
@@ -39,6 +41,14 @@ USB_LINKS_DIR="$MUSIC_ROOT/.usb"
 VIDEO_USB_LINKS_DIR="$VIDEO_ROOT/.usb"
 
 log() { logger -t boombox-usb "$*"; echo "[boombox-usb] $*" >&2; }
+
+# Everything under $BBX_HOME is controlled by the (unprivileged) boombox user,
+# who could swap ~/Music/.usb for a symlink to e.g. /etc/systemd/system. Root
+# must never mkdir/chown/ln/rm there — those would follow the symlink and hand
+# the user a root-owned directory or delete a system file. So all per-user
+# steps run AS the user (they can only touch what they already could); root
+# only does the mount itself, under the root-owned /media/boombox.
+as_user() { runuser -u "$BBX_USER" -- "$@"; }
 
 # ---------------------------------------------------------------------------
 # Identify the device
@@ -78,13 +88,18 @@ trigger_scan() {
   local key_file=/etc/boombox/jellyfin-api-key
   # Point at the configured Jellyfin (local by default, or a home-server / VPS).
   # This unit is udev-triggered as root and inherits no user env, so read the
-  # base from /etc/boombox/jellyfin.env if present.
+  # base from /etc/boombox/jellyfin.env if present. Parse the one key rather
+  # than sourcing the file: it's written from wizard input, and sourcing it
+  # here would execute that input as root.
   local jellyfin_base="http://127.0.0.1:8096"
   if [[ -r /etc/boombox/jellyfin.env ]]; then
-    # shellcheck disable=SC1091
     local env_base
-    env_base=$(. /etc/boombox/jellyfin.env 2>/dev/null; printf '%s' "${BOOMBOX_JELLYFIN_BASE:-}")
-    [[ -n "$env_base" ]] && jellyfin_base="${env_base%/}"
+    env_base=$(sed -n 's/^[[:space:]]*BOOMBOX_JELLYFIN_BASE=//p' /etc/boombox/jellyfin.env | tail -n1)
+    env_base="${env_base%\"}"; env_base="${env_base#\"}"
+    local url_re='^https?://[]A-Za-z0-9.:/_~%+[-]+$'
+    if [[ "$env_base" =~ $url_re ]]; then
+      jellyfin_base="${env_base%/}"
+    fi
   fi
   if [[ -r "$key_file" ]]; then
     local key
@@ -107,8 +122,8 @@ case "$ACTION" in
     fstype="$(blkid -o value -s TYPE "$DEVICE" 2>/dev/null || echo unknown)"
     log "mounting $DEVICE ($fstype) → $MOUNTPOINT"
 
-    mkdir -p "$MOUNTPOINT" "$USB_LINKS_DIR" "$VIDEO_USB_LINKS_DIR"
-    chown "$BBX_USER:$BBX_USER" "$USB_LINKS_DIR" "$VIDEO_USB_LINKS_DIR" 2>/dev/null || true
+    mkdir -p "$MOUNTPOINT"
+    as_user mkdir -p "$USB_LINKS_DIR" "$VIDEO_USB_LINKS_DIR"
 
     # Already mounted? (udev fires multiple events on some devices.)
     if mountpoint -q "$MOUNTPOINT"; then
@@ -139,9 +154,8 @@ case "$ACTION" in
     # pick the drive up. Mopidy's local scanner follows symlinks by default;
     # Jellyfin needs to be configured to allow symlinked content (done in
     # install.sh).
-    ln -snf "$MOUNTPOINT" "$LINK"
-    ln -snf "$MOUNTPOINT" "$VIDEO_LINK"
-    chown -h "$BBX_USER:$BBX_USER" "$LINK" "$VIDEO_LINK" 2>/dev/null || true
+    as_user ln -snf "$MOUNTPOINT" "$LINK"
+    as_user ln -snf "$MOUNTPOINT" "$VIDEO_LINK"
 
     trigger_scan
     log "mounted $ID"
@@ -149,7 +163,7 @@ case "$ACTION" in
 
   unmount)
     log "unmounting $DEVICE (id=$ID)"
-    rm -f "$LINK" "$VIDEO_LINK"
+    as_user rm -f "$LINK" "$VIDEO_LINK" || true
     if mountpoint -q "$MOUNTPOINT"; then
       umount "$MOUNTPOINT" || umount -l "$MOUNTPOINT" || true
     fi
