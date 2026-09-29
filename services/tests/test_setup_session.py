@@ -1,7 +1,12 @@
 """Tests for boombox_setup.session — setup-token minting and verification."""
 from __future__ import annotations
 
-from boombox_setup.session import CODE_MAX_ATTEMPTS, TOKEN_TTL_S, SetupSession
+from boombox_setup.session import (
+    CODE_MAX_ATTEMPTS,
+    REOPEN_TTL_S,
+    TOKEN_TTL_S,
+    SetupSession,
+)
 
 
 def test_mint_then_verify():
@@ -101,3 +106,16 @@ def test_active_tracks_mint_expiry_and_clear():
     assert not s.active(now=TOKEN_TTL_S + 1)
     s.clear()
     assert not s.active(now=1.0)
+
+
+def test_reopen_ttl_is_an_idle_timeout():
+    s = SetupSession()
+    s.mint(now=0.0, ttl=REOPEN_TTL_S)
+    assert not s.active(now=REOPEN_TTL_S + 1)       # abandoned → closed
+    s.mint(now=1000.0, ttl=REOPEN_TTL_S)
+    # Activity slides the expiry, so a real edit isn't cut off mid-way…
+    s.touch(now=1000.0 + REOPEN_TTL_S - 1)
+    assert s.active(now=1000.0 + 2 * REOPEN_TTL_S - 2)
+    # …but touch never revives an expired session.
+    s.touch(now=1000.0 + 10 * REOPEN_TTL_S)
+    assert not s.active(now=1000.0 + 10 * REOPEN_TTL_S)

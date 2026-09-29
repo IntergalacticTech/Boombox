@@ -10,7 +10,9 @@ is localhost-only.
 Once setup is **complete**, everything but `status`/`session` is refused
 until setup is re-opened, i.e. until the kiosk mints a fresh session (Settings
 → Setup wizard opens the wizard's Welcome step, which does exactly that);
-POST /complete closes it again. `status` is open, but once complete an
+POST /complete closes it again, as does POST /session/close (the kiosk player
+calls it on load, i.e. when the wizard was left without finishing) or
+REOPEN_TTL_S without an authenticated request. `status` is open, but once complete an
 unauthenticated caller only gets `complete`/`identity`/`skin` — no Wi-Fi/IP,
 music username, video base or remote peer names.
 
@@ -31,7 +33,7 @@ from typing import Protocol
 from aiohttp import web
 
 from . import __version__
-from .session import SetupSession
+from .session import REOPEN_TTL_S, TOKEN_TTL_S, SetupSession
 
 log = logging.getLogger("boombox-setup.api")
 
@@ -112,12 +114,19 @@ async def _auth_mw(req: web.Request, handler):
     if not (is_local or sess.verify(_token_from(req))):
         return web.json_response({"error": "setup token required"}, status=401)
 
+    # Closing is allowed even when nothing is open (idempotent no-op).
+    if req.path == "/api/setup/session/close":
+        return await handler(req)
+
     ctx: Context = req.app["ctx"]
-    if ctx.is_complete() and not sess.active():
-        return web.json_response(
-            {"ok": False, "error": "setup is already complete — open "
-             "Settings → Setup wizard on the boombox to change it"},
-            status=409)
+    if ctx.is_complete():
+        if not sess.active():
+            return web.json_response(
+                {"ok": False, "error": "setup is already complete — open "
+                 "Settings → Setup wizard on the boombox to change it"},
+                status=409)
+        # Re-opened: activity keeps the short idle timeout from lapsing.
+        sess.touch()
     return await handler(req)
 
 
@@ -129,6 +138,7 @@ def build_app(ctx: Context) -> web.Application:
     r.add_get("/api/setup/status", _status)
     r.add_post("/api/setup/session", _session_start)
     r.add_post("/api/setup/session/redeem", _session_redeem)
+    r.add_post("/api/setup/session/close", _session_close)
     r.add_put("/api/setup/skin", _skin_put)
     r.add_put("/api/setup/identity", _identity)
     r.add_get("/api/setup/wifi/scan", _wifi_scan)
@@ -189,7 +199,10 @@ async def _status(req: web.Request) -> web.Response:
 async def _session_start(req: web.Request) -> web.Response:
     sess: SetupSession = req.app["session"]
     ctx: Context = req.app["ctx"]
-    token, code, expires_at = sess.mint()
+    # Re-opening a finished setup gets the short idle TTL; first-run setup
+    # keeps the long one so stepping away mid-setup never logs you out.
+    ttl = REOPEN_TTL_S if ctx.is_complete() else TOKEN_TTL_S
+    token, code, expires_at = sess.mint(ttl=ttl)
     host = ctx.lan_host()
     base_url = f"http://{host}:{ctx.lan_port}/setup/"
     return web.json_response({
@@ -200,6 +213,17 @@ async def _session_start(req: web.Request) -> web.Response:
         "url": f"{base_url}#t={token}",
         "base_url": base_url,
     })
+
+
+async def _session_close(req: web.Request) -> web.Response:
+    """Close a re-opened setup (kiosk left the wizard without finishing).
+    A no-op during first-run setup: the kiosk can't reach the player then,
+    and a phone may still be mid-flow on the live token."""
+    ctx: Context = req.app["ctx"]
+    if ctx.is_complete():
+        sess: SetupSession = req.app["session"]
+        sess.clear()
+    return web.json_response({"ok": True})
 
 
 async def _session_redeem(req: web.Request) -> web.Response:

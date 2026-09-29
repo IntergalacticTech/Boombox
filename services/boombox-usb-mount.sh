@@ -42,6 +42,14 @@ VIDEO_USB_LINKS_DIR="$VIDEO_ROOT/.usb"
 
 log() { logger -t boombox-usb "$*"; echo "[boombox-usb] $*" >&2; }
 
+# Everything under $BBX_HOME is controlled by the (unprivileged) boombox user,
+# who could swap ~/Music/.usb for a symlink to e.g. /etc/systemd/system. Root
+# must never mkdir/chown/ln/rm there — those would follow the symlink and hand
+# the user a root-owned directory or delete a system file. So all per-user
+# steps run AS the user (they can only touch what they already could); root
+# only does the mount itself, under the root-owned /media/boombox.
+as_user() { runuser -u "$BBX_USER" -- "$@"; }
+
 # ---------------------------------------------------------------------------
 # Identify the device
 # ---------------------------------------------------------------------------
@@ -114,8 +122,8 @@ case "$ACTION" in
     fstype="$(blkid -o value -s TYPE "$DEVICE" 2>/dev/null || echo unknown)"
     log "mounting $DEVICE ($fstype) → $MOUNTPOINT"
 
-    mkdir -p "$MOUNTPOINT" "$USB_LINKS_DIR" "$VIDEO_USB_LINKS_DIR"
-    chown "$BBX_USER:$BBX_USER" "$USB_LINKS_DIR" "$VIDEO_USB_LINKS_DIR" 2>/dev/null || true
+    mkdir -p "$MOUNTPOINT"
+    as_user mkdir -p "$USB_LINKS_DIR" "$VIDEO_USB_LINKS_DIR"
 
     # Already mounted? (udev fires multiple events on some devices.)
     if mountpoint -q "$MOUNTPOINT"; then
@@ -146,9 +154,8 @@ case "$ACTION" in
     # pick the drive up. Mopidy's local scanner follows symlinks by default;
     # Jellyfin needs to be configured to allow symlinked content (done in
     # install.sh).
-    ln -snf "$MOUNTPOINT" "$LINK"
-    ln -snf "$MOUNTPOINT" "$VIDEO_LINK"
-    chown -h "$BBX_USER:$BBX_USER" "$LINK" "$VIDEO_LINK" 2>/dev/null || true
+    as_user ln -snf "$MOUNTPOINT" "$LINK"
+    as_user ln -snf "$MOUNTPOINT" "$VIDEO_LINK"
 
     trigger_scan
     log "mounted $ID"
@@ -156,7 +163,7 @@ case "$ACTION" in
 
   unmount)
     log "unmounting $DEVICE (id=$ID)"
-    rm -f "$LINK" "$VIDEO_LINK"
+    as_user rm -f "$LINK" "$VIDEO_LINK" || true
     if mountpoint -q "$MOUNTPOINT"; then
       umount "$MOUNTPOINT" || umount -l "$MOUNTPOINT" || true
     fi

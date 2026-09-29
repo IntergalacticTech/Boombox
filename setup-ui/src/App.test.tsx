@@ -33,8 +33,12 @@ function routeFetch() {
   return fn;
 }
 
+const realLocation = window.location;
+
 beforeEach(() => {
   vi.unstubAllGlobals();
+  try { localStorage.clear(); } catch { /* fine */ }
+  Object.defineProperty(window, "location", { value: realLocation, writable: true });
 });
 
 describe("Setup wizard", () => {
@@ -59,5 +63,43 @@ describe("Setup wizard", () => {
     // The name field is prefilled from status.identity.name.
     expect((screen.getByLabelText(/device name/i) as HTMLInputElement).value)
       .toBe("Boombox");
+  });
+});
+
+describe("Setup wizard — phone after completion", () => {
+  it("renders the wizard after a typed code is redeemed against a redacted status", async () => {
+    // A LAN phone (not the kiosk), no #t= hash.
+    Object.defineProperty(window, "location", {
+      value: { ...realLocation, hostname: "192.168.1.50", hash: "" },
+      writable: true,
+    });
+    const REDACTED = {
+      service_version: "1.0.0", complete: true,
+      identity: STATUS.identity, skin: null,
+    };
+    const fn = vi.fn((input: string, init?: RequestInit) => {
+      const url = String(input);
+      const authed = !!(init?.headers as Record<string, string> | undefined)
+        ?.["Authorization"];
+      const body = url.startsWith("/api/setup/status")
+        ? (authed ? { ...STATUS, complete: true } : REDACTED)
+        : url.startsWith("/api/setup/session/redeem")
+          ? { ok: true, token: "tok" }
+          : { ok: true };
+      return Promise.resolve({
+        ok: true, status: 200, text: async () => JSON.stringify(body),
+      });
+    });
+    vi.stubGlobal("fetch", fn);
+    render(<App />);
+    const input = await screen.findByLabelText(/setup code/i);
+    fireEvent.change(input, { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    // Used to blank the page (TypeError reading status.wifi.connected).
+    await waitFor(() =>
+      expect(screen.getByText(/step 1 of 8/i)).toBeTruthy());
+    const statusCalls = fn.mock.calls.filter(([u]) =>
+      String(u).startsWith("/api/setup/status"));
+    expect(statusCalls.length).toBeGreaterThanOrEqual(2);
   });
 });

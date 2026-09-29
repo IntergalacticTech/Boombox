@@ -346,3 +346,58 @@ async def test_status_full_before_completion(client):
     c, _ = client
     body = await (await c.get("/api/setup/status", headers=LAN)).json()
     assert "wifi" in body and "music" in body
+
+
+@pytest.mark.asyncio
+async def test_reopen_session_gets_short_ttl(client):
+    from boombox_setup.session import REOPEN_TTL_S, TOKEN_TTL_S
+    c, ctx = client
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
+    first_run = (await r.json())["expires_at"]
+    await c.post("/api/setup/complete", json={}, headers=LOCAL)
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
+    reopen = (await r.json())["expires_at"]
+    # First-run keeps the long TTL; a re-open of a finished setup doesn't.
+    assert reopen - first_run < TOKEN_TTL_S - REOPEN_TTL_S
+
+
+@pytest.mark.asyncio
+async def test_session_close_ends_a_reopened_setup(client):
+    c, ctx = client
+    ctx.complete = True
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
+    token = (await r.json())["token"]
+    auth = {**LAN, "Authorization": f"Bearer {token}"}
+    r = await c.put("/api/setup/skin", json={"id": "meter"}, headers=auth)
+    assert r.status == 200
+    # The kiosk player loads (wizard left without finishing) → closed.
+    r = await c.post("/api/setup/session/close", json={}, headers=LOCAL)
+    assert r.status == 200
+    r = await c.put("/api/setup/skin", json={"id": "meter"}, headers=auth)
+    assert r.status == 401
+    r = await c.put("/api/setup/identity", json={"name": "Den"}, headers=LOCAL)
+    assert r.status == 409
+    # Idempotent when nothing is open.
+    r = await c.post("/api/setup/session/close", json={}, headers=LOCAL)
+    assert r.status == 200
+
+
+@pytest.mark.asyncio
+async def test_session_close_is_noop_during_first_run(client):
+    c, ctx = client
+    r = await c.post("/api/setup/session", json={}, headers=LOCAL)
+    token = (await r.json())["token"]
+    r = await c.post("/api/setup/session/close", json={}, headers=LOCAL)
+    assert r.status == 200
+    r = await c.put("/api/setup/skin", json={"id": "meter"},
+                    headers={**LAN, "Authorization": f"Bearer {token}"})
+    assert r.status == 200
+
+
+@pytest.mark.asyncio
+async def test_session_close_requires_auth(client):
+    c, ctx = client
+    ctx.complete = True
+    await c.post("/api/setup/session", json={}, headers=LOCAL)
+    r = await c.post("/api/setup/session/close", json={}, headers=LAN)
+    assert r.status == 401

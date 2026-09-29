@@ -192,7 +192,11 @@ export default function App() {
   if (!authed) {
     return (
       <ApiProvider api={api}>
-        <CodeEntry onDone={() => setAuthed(true)} />
+        {/* Drop the (possibly redacted) pre-auth status in the SAME update
+            that flips `authed`: otherwise the next render hands Wizard a
+            status with no wifi/music/video/remote before the refetch effect
+            gets to clear it, and Wizard's initializer throws. */}
+        <CodeEntry onDone={() => { setStatus(null); setAuthed(true); }} />
       </ApiProvider>
     );
   }

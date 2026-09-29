@@ -307,19 +307,24 @@ project. Do it deliberately.
 - **Keep the servers patched.** Pin image versions in `docker-compose.yml`
   (this repo does), then bump them on a schedule and re-`up`. Watch Jellyfin and
   Navidrome release notes for security fixes. On a VPS, patch the OS too.
-- **Prefer a mesh VPN or Cloudflare Access if you're unsure.** Publishing a media
-  server on the open internet is strictly riskier than not exposing it at all. A
-  **mesh VPN** (Tailscale / WireGuard) puts the boombox and the servers on one
-  private network with no public surface — often the best answer for a single
-  appliance you control. If you do go public, put **Cloudflare Access** (or
-  equivalent SSO) in front so a login gate stands ahead of the app itself.
+- **Prefer a mesh VPN if you're unsure.** Publishing a media server on the open
+  internet is strictly riskier than not exposing it at all. A **mesh VPN**
+  (Tailscale / WireGuard) puts the boombox and the servers on one private
+  network with no public surface — often the best answer for a single appliance
+  you control. If you do go public, use **Cloudflare Access** (or equivalent
+  SSO) only the way [Option A step 6](#option-a--cloudflare-tunnel-no-inbound-ports)
+  describes: gate Navidrome's **web UI** but **Bypass `/rest/*`**, and leave
+  Access **off the video hostname**. The boombox can't pass an Access login, so
+  Access over a whole hostname it calls breaks library sync, streaming and
+  video.
 - **The boombox transmits credentials to these servers — TLS protects them.**
   Navidrome auth is token+salt (password not sent in the clear), but Jellyfin
   uses an API key and native apps send passwords; without TLS those are exposed.
   This is exactly why raw HTTP exposure is banned above.
 
-Rule of thumb: **mesh VPN > public + Cloudflare Access > public + reverse-proxy
-with rate-limiting > raw port-forward (never).**
+Rule of thumb: **mesh VPN > public + Cloudflare Access on the web UIs only (per
+Option A step 6 — `/rest/*` bypassed, video hostname un-gated) > public +
+reverse-proxy with rate-limiting > raw port-forward (never).**
 
 ---
 
