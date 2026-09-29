@@ -666,6 +666,9 @@ async def main() -> None:
         import jellyfin_client
         jellyfin_client.add_routes(
             app, jellyfin_client.JellyfinClient(session))
+        # Home Library (boombox-library) browse/art pass-through + play.
+        import remote_home
+        remote_home.add_routes(app, session, remote_home.HomePlayer())
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", PORT)
