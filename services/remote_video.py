@@ -22,7 +22,7 @@ from typing import Any, Awaitable, Callable
 
 import aiohttp
 from aiohttp import web
-from jellyfin_client import DEVICE_ID_ENV, server_is_loopback
+from jellyfin_client import DEVICE_ID_ENV, _is_loopback_endpoint, server_is_loopback
 from jellyfin_env import jellyfin_base, jellyfin_token
 
 log = logging.getLogger("boombox-remote")
@@ -42,6 +42,15 @@ NOT_CONFIGURED = "video server not configured"
 NOT_SIGNED_IN = "kiosk not signed in"
 UNREACHABLE = "video server unreachable"
 KEY_REFUSED = "video server refused the stored API key"
+PLAY_TIMEOUT_S = 30.0          # whole POST /play, wake + wait included
+SESSION_WAIT_S = 20.0          # kiosk session to appear after the WATCH navigation
+SESSION_POLL_S = 1.0
+NO_SESSION = "the boombox's video player didn't open — try again"
+NO_KIOSK = "the boombox screen can't be controlled"
+PLAY_REFUSED = "video server refused to start playback"
+TIMED_OUT = "the boombox took too long to start the video — try again"
+_SESSION_ID_RE = re.compile(r"^[0-9A-Za-z-]{1,64}$")
+WakeKiosk = Callable[[], Awaitable[object]]
 
 
 class VideoError(Exception):
@@ -104,9 +113,13 @@ def image_width(raw: str | None) -> int:
 
 
 class JellyfinBrowser:
-    def __init__(self, session: aiohttp.ClientSession) -> None:
+    def __init__(self, session: aiohttp.ClientSession, *,
+                 session_wait_s: float = SESSION_WAIT_S,
+                 poll_s: float = SESSION_POLL_S) -> None:
         self._sess = session
         self._user: tuple[str, str, float] | None = None   # (device, user, fetched)
+        self._session_wait_s = session_wait_s
+        self._poll_s = poll_s
 
     def _target(self) -> tuple[str, dict[str, str]]:
         key = jellyfin_token()
@@ -218,6 +231,50 @@ class JellyfinBrowser:
         tmp.replace(path)
         return body
 
+    async def kiosk_session(self) -> dict | None:
+        """The kiosk's Jellyfin session, only while its web client holds a live
+        remote-control socket (SupportsRemoteControl is True). A session left
+        behind when the kiosk navigated away has lost its socket, so it is not
+        trusted with PlayNow. Unpinned, only an on-device server may pick a
+        loopback client; otherwise nothing."""
+        device_id = os.environ.get(DEVICE_ID_ENV, "").strip()
+        data = await self._get_json("/Sessions", {"deviceId": device_id} if device_id else None)
+        sessions = [s for s in data if isinstance(s, dict)] if isinstance(data, list) else []
+        if device_id:
+            pool = [s for s in sessions if s.get("DeviceId") == device_id]
+        elif server_is_loopback(jellyfin_base()):
+            pool = [s for s in sessions if _is_loopback_endpoint(s.get("RemoteEndPoint"))]
+        else:
+            pool = []
+        pool = [s for s in pool if s.get("SupportsRemoteControl") is True
+                and isinstance(s.get("Id"), str) and _SESSION_ID_RE.match(s["Id"])]
+        if not pool:
+            return None
+        return max(pool, key=lambda s: str(s.get("LastActivityDate") or ""))
+
+    async def play(self, item_id: str, start_ticks: int, wake: WakeKiosk) -> None:
+        """PlayNow on the kiosk. If its video player isn't up, run the WATCH
+        action (navigate the kiosk to Jellyfin) and wait for the session."""
+        await self.kiosk_user()                        # 503 / 409 before touching the kiosk
+        sess = await self.kiosk_session()
+        if sess is None:
+            await wake()
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self._session_wait_s
+            while sess is None and loop.time() < deadline:
+                await asyncio.sleep(self._poll_s)
+                sess = await self.kiosk_session()
+            if sess is None:
+                raise VideoError(504, NO_SESSION)
+        params = {"playCommand": "PlayNow", "itemIds": item_id}
+        if start_ticks > 0:
+            params["startPositionTicks"] = str(start_ticks)
+        status, _body, _ctype = await self._request("POST", f"/Sessions/{sess['Id']}/Playing",
+                                                    params)
+        if not 200 <= status < 300:
+            log.warning("jellyfin PlayNow → HTTP %s", status)
+            raise VideoError(502, PLAY_REFUSED)
+
 
 def _fail(status: int, message: str) -> web.Response:
     return web.json_response({"ok": False, "error": message}, status=status)
@@ -250,7 +307,11 @@ def _int_param(raw: str | None, default: int, lo: int, hi: int) -> int | None:
     return v if lo <= v <= hi else None
 
 
-def _make_handlers(browser: JellyfinBrowser) -> dict[str, Handler]:
+async def _cannot_wake() -> object:
+    raise VideoError(503, NO_KIOSK)
+
+
+def _make_handlers(browser: JellyfinBrowser, wake: WakeKiosk) -> dict[str, Handler]:
     async def views(_req: web.Request) -> web.StreamResponse:
         return web.json_response({"ok": True, "items": await browser.views()})
 
@@ -282,14 +343,37 @@ def _make_handlers(browser: JellyfinBrowser) -> dict[str, Handler]:
         return web.Response(body=data, content_type="image/jpeg",
                             headers={"Cache-Control": "private, max-age=86400"})
 
-    return {"views": views, "resume": resume, "items": items, "image": image}
+    async def play(req: web.Request) -> web.StreamResponse:
+        try:
+            body = await req.json()
+        except Exception:
+            return _fail(400, "invalid_json")
+        if not isinstance(body, dict):
+            return _fail(400, "expected a JSON object")
+        item_id = body.get("item_id")
+        start = body.get("start_ticks", 0)
+        if not isinstance(item_id, str) or not _ITEM_ID_RE.match(item_id):
+            return _fail(400, "bad item id")
+        if isinstance(start, bool) or not isinstance(start, int) or start < 0:
+            return _fail(400, "start_ticks must be a non-negative integer")
+        try:
+            await asyncio.wait_for(browser.play(item_id, start, wake), PLAY_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            return _fail(504, TIMED_OUT)
+        return web.json_response({"ok": True})
+
+    return {"views": views, "resume": resume, "items": items, "image": image, "play": play}
 
 
-def add_routes(app: web.Application, browser: JellyfinBrowser) -> None:
-    """Register the browse/poster routes. /video/state and /video/command stay
-    in jellyfin_client.py."""
-    h = {name: _guard(fn) for name, fn in _make_handlers(browser).items()}
+def add_routes(app: web.Application, browser: JellyfinBrowser, *,
+               wake_kiosk: WakeKiosk | None = None) -> None:
+    """Register browse/poster/play. `wake_kiosk` runs the WATCH action (kiosk →
+    Jellyfin); without it, play only works while the player is already up.
+    /video/state and /video/command stay in jellyfin_client.py."""
+    handlers = _make_handlers(browser, wake_kiosk or _cannot_wake)
+    h = {name: _guard(fn) for name, fn in handlers.items()}
     app.router.add_get("/api/remote/video/views", h["views"])
     app.router.add_get("/api/remote/video/resume", h["resume"])
     app.router.add_get("/api/remote/video/items", h["items"])
     app.router.add_get("/api/remote/video/image/{item_id}", h["image"])
+    app.router.add_post("/api/remote/video/play", h["play"])

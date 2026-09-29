@@ -1,6 +1,7 @@
 """JellyfinClient session targeting + command HTTP handling."""
 from __future__ import annotations
 
+import json
 import logging
 
 import aiohttp
@@ -215,3 +216,50 @@ async def test_command_unknown_action_short_circuits(fake_jf):
 def test_module_exports_env_names():
     assert jellyfin_client.DEVICE_ID_ENV == "BOOMBOX_JELLYFIN_DEVICE_ID"
     assert jellyfin_client.DEVICE_NAME_ENV == "BOOMBOX_JELLYFIN_DEVICE_NAME"
+
+
+async def test_state_reports_streams_and_indexes(fake_jf):
+    s = _sess("kiosk", ep="127.0.0.1")
+    s["NowPlayingItem"] = {
+        "Id": "bb22", "Name": "Pilot", "RunTimeTicks": 26_000_000_000,
+        "MediaStreams": [
+            {"Type": "Video", "Index": 0, "DisplayTitle": "1080p H264"},
+            {"Type": "Audio", "Index": 1, "DisplayTitle": "English - AAC - Stereo"},
+            {"Type": "Audio", "Index": 2, "Language": "fre"},
+            {"Type": "Subtitle", "Index": 3, "DisplayTitle": "English - SUBRIP"},
+            {"Type": "Subtitle", "Index": 4},
+        ]}
+    s["PlayState"] = {"PositionTicks": 120_000_000, "IsPaused": True,
+                      "AudioStreamIndex": 1, "SubtitleStreamIndex": -1}
+    fake_jf["sessions"] = [s]
+    async with aiohttp.ClientSession() as http:
+        st = await JellyfinClient(http).local_session_state()
+    assert st["item_id"] == "bb22" and st["playing"] is False and st["position_s"] == 12
+    assert st["audio_streams"] == [{"index": 1, "label": "English - AAC - Stereo"},
+                                   {"index": 2, "label": "fre"}]
+    assert st["subtitle_streams"] == [{"index": 3, "label": "English - SUBRIP"},
+                                      {"index": 4, "label": "Track 4"}]
+    assert st["audio_index"] == 1 and st["subtitle_index"] == -1
+
+
+async def test_set_audio_and_subtitle_commands(fake_jf):
+    async with aiohttp.ClientSession() as http:
+        c = JellyfinClient(http)
+        assert await c.command("set_audio", 2) == {"ok": True}
+        assert await c.command("set_subtitle", -1) == {"ok": True}
+    assert [p for p, _q, _b in fake_jf["posts"]] == ["/Sessions/kiosk/Command"] * 2
+    assert [json.loads(b) for _p, _q, b in fake_jf["posts"]] == [
+        {"Name": "SetAudioStreamIndex", "Arguments": {"Index": "2"}},
+        {"Name": "SetSubtitleStreamIndex", "Arguments": {"Index": "-1"}},
+    ]
+
+
+@pytest.mark.parametrize("action,value", [
+    ("set_audio", -1), ("set_audio", "2"), ("set_audio", True), ("set_subtitle", -2),
+    ("seek", -5), ("seek", None), ("volume", 101), ("volume", None),
+])
+async def test_bad_values_never_reach_jellyfin(fake_jf, action, value):
+    async with aiohttp.ClientSession() as http:
+        res = await JellyfinClient(http).command(action, value)
+    assert res == {"ok": False, "error": "bad_value"}
+    assert fake_jf["posts"] == []

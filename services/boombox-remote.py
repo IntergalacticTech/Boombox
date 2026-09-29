@@ -672,7 +672,12 @@ async def main() -> None:
         # Jellyfin browse + posters for the LAN app's Video section.
         import remote_video
         video_browser = remote_video.JellyfinBrowser(session)
-        remote_video.add_routes(app, video_browser)
+        remote_video.add_routes(
+            app, video_browser,
+            # "Play on the boombox" with the kiosk on the music UI: run the
+            # WATCH action (pause Mopidy, navigate the kiosk to Jellyfin).
+            wake_kiosk=lambda: actions.fire(dispatcher, "movies",
+                                            source="remote:video-play"))
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", PORT)
