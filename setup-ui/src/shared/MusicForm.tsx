@@ -20,6 +20,7 @@ const UNREACHABLE = "Couldn't reach the Boombox. Try again.";
  *  the Accounts page. Presentational: all I/O goes through onTest/onSave. */
 export function MusicForm({
   initial, passwordSet, onTest, onSave, saveLabel = "Save", secondary, onBack,
+  strict = false,
 }: {
   initial: { url: string; username: string };
   passwordSet: boolean;
@@ -28,6 +29,9 @@ export function MusicForm({
   saveLabel?: string;
   secondary?: ReactNode;
   onBack?: () => void;
+  /** Accounts page: also require an http(s) URL and a password (unless one
+   *  is stored). Off by default so the wizard keeps its lenient checks. */
+  strict?: boolean;
 }) {
   const [url, setUrl] = useState(initial.url);
   const [username, setUsername] = useState(initial.username);
@@ -36,7 +40,10 @@ export function MusicForm({
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const canSubmit = url.trim() !== "" && username.trim() !== "";
+  const canSubmit = strict
+    ? /^https?:\/\/\S/.test(url.trim()) && username.trim() !== ""
+      && (password !== "" || passwordSet)
+    : url.trim() !== "" && username.trim() !== "";
   const values = (): MusicValues =>
     ({ url: url.trim(), username: username.trim(), password });
 

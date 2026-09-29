@@ -32,6 +32,48 @@ describe("MusicForm", () => {
   });
 });
 
+describe("MusicForm strict", () => {
+  const setUp = (passwordSet: boolean) => {
+    render(<MusicForm strict initial={{ url: "", username: "" }} passwordSet={passwordSet}
+      onTest={vi.fn()} onSave={vi.fn()} />);
+    const save = screen.getByRole("button", { name: /save/i }) as HTMLButtonElement;
+    const test = screen.getByRole("button", { name: /^test$/i }) as HTMLButtonElement;
+    const set = (label: string, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    return { save, test, set };
+  };
+
+  it("requires an http(s) URL, a username and a password", () => {
+    const { save, test, set } = setUp(false);
+    set("Server URL", "m.local:4533");
+    set("Username", "bb");
+    set("Password", "pw");
+    expect(save.disabled).toBe(true);
+    expect(test.disabled).toBe(true);
+    set("Server URL", "http://m.local:4533");
+    expect(save.disabled).toBe(false);
+    expect(test.disabled).toBe(false);
+    set("Password", "");
+    expect(save.disabled).toBe(true);
+    set("Password", "pw");
+    set("Username", "  ");
+    expect(save.disabled).toBe(true);
+  });
+
+  it("accepts a blank password when one is stored", () => {
+    const { save, set } = setUp(true);
+    set("Server URL", "https://m");
+    set("Username", "bb");
+    expect(save.disabled).toBe(false);
+  });
+
+  it("is lenient without strict (wizard behaviour)", () => {
+    render(<MusicForm initial={{ url: "m.local", username: "bb" }} passwordSet={false}
+      onTest={vi.fn()} onSave={vi.fn()} />);
+    expect((screen.getByRole("button", { name: /save/i }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
 describe("VideoServerForm", () => {
   it("requires an http(s) base for remote mode", () => {
     render(<VideoServerForm initial={{ mode: "remote", base: "ftp://x" }} keySet
