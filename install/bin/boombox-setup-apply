@@ -422,7 +422,8 @@ def action_streaming(body: dict) -> dict:
         return {"ok": False, "error": "Spotify Connect is not installed"}
     airplay_name = (validate_receiver_name(body["airplay_name"])
                     if "airplay_name" in body else None)
-    clear_pw = bool(body.get("airplay_password_clear"))
+    # Only a literal JSON true clears; "false", 1, [0] etc. must not.
+    clear_pw = body.get("airplay_password_clear") is True
     airplay_pw = (validate_receiver_password(body["airplay_password"])
                   if "airplay_password" in body and not clear_pw else None)
     spotify_name = (validate_receiver_name(body["spotify_name"])

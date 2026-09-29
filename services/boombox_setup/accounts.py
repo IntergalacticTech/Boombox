@@ -349,8 +349,15 @@ async def _streaming_put(req: web.Request) -> web.Response:
     b = await _json_body(req)
     if b is None:
         return _bad_body()
+    clear = b.get("airplay_password_clear")
+    if clear is not None and not isinstance(clear, bool):
+        return _err("airplay_password_clear must be true or false", 400)
     # Only whitelisted fields reach the root helper, which does the validation.
-    payload = {"action": "streaming", **{k: b[k] for k in _STREAMING_FIELDS if k in b}}
+    # The clear flag is forwarded only when it is exactly true.
+    payload = {"action": "streaming", **{k: b[k] for k in _STREAMING_FIELDS
+                                         if k in b and k != "airplay_password_clear"}}
+    if clear is True:
+        payload["airplay_password_clear"] = True
     r = await ctx.apply(payload)
     if not isinstance(r, dict) or not r.get("ok"):
         return _err(_helper_error(r, "save failed"), 400)

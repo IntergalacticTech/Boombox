@@ -442,3 +442,21 @@ async def test_streaming_get_helper_failure_is_502(client, ctx):
     ctx.apply_results["streaming-status"] = {"ok": False, "error": "helper unavailable"}
     r = await client.get("/api/accounts/streaming", headers=LAN)
     assert r.status == 502 and "unavailable" in (await r.json())["error"]
+
+
+async def test_streaming_clear_must_be_bool(client, ctx):
+    r = await client.put("/api/accounts/streaming", headers=LAN,
+                         json={"airplay_password_clear": "false"})
+    assert r.status == 400 and "airplay_password_clear" in (await r.json())["error"]
+    assert not ctx.applied
+
+
+async def test_streaming_clear_false_dropped_true_forwarded(client, ctx):
+    r = await client.put("/api/accounts/streaming", headers=LAN,
+                         json={"airplay_name": "Den", "airplay_password_clear": False})
+    assert r.status == 200
+    assert ctx.applied[-1] == {"action": "streaming", "airplay_name": "Den"}
+    r = await client.put("/api/accounts/streaming", headers=LAN,
+                         json={"airplay_password_clear": True})
+    assert r.status == 200
+    assert ctx.applied[-1] == {"action": "streaming", "airplay_password_clear": True}

@@ -142,3 +142,24 @@ def test_streaming_preflight_bad_spotify_name_leaves_airplay_untouched(tmp_path,
         helper.action_streaming({"airplay_name": "Den", "spotify_name": 'bad"name'})
     assert conf.read_text() == DIETPI_CONF
     assert rasp.read_text() == 'LIBRESPOT_NAME="Old"\n'
+
+
+@pytest.mark.parametrize("truthy", ["false", "no", 1, [0]])
+def test_streaming_clear_requires_exactly_true(tmp_path, monkeypatch, truthy):
+    conf = tmp_path / "shairport-sync.conf"
+    conf.write_text(helper.shairport_set(DIETPI_CONF, "password", "keepme12"))
+    monkeypatch.setattr(helper, "SHAIRPORT_CONF_CANDIDATES", [str(conf)])
+    monkeypatch.setattr(helper, "RASPOTIFY_CONF", str(tmp_path / "missing"))
+    monkeypatch.setattr(helper, "_restart_system_units", lambda units: None)
+    helper.action_streaming({"airplay_password_clear": truthy})
+    assert helper.shairport_get(conf.read_text(), "password") == "keepme12"
+
+
+def test_streaming_clear_true_clears(tmp_path, monkeypatch):
+    conf = tmp_path / "shairport-sync.conf"
+    conf.write_text(helper.shairport_set(DIETPI_CONF, "password", "keepme12"))
+    monkeypatch.setattr(helper, "SHAIRPORT_CONF_CANDIDATES", [str(conf)])
+    monkeypatch.setattr(helper, "RASPOTIFY_CONF", str(tmp_path / "missing"))
+    monkeypatch.setattr(helper, "_restart_system_units", lambda units: None)
+    assert helper.action_streaming({"airplay_password_clear": True})["ok"]
+    assert helper.shairport_get(conf.read_text(), "password") is None
