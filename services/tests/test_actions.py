@@ -266,3 +266,23 @@ async def test_state_client_without_power_support_is_treated_as_awake():
     d = _make_dispatcher(state=LegacyState(), mopidy=StubMopidy())
     await d.dispatch("next", "short_press")
     assert m_calls == ["core.playback.next"]
+
+
+@pytest.mark.asyncio
+async def test_movies_opens_jellyfin_web_root_not_a_hardcoded_route(monkeypatch):
+    """WATCH must open `<base>/web/` and let jellyfin-web route itself.
+    jellyfin-web 10.10 has no `#/home` route (it is `#/home.html`), so
+    `/web/index.html#/home` left the kiosk on an endless spinner, never
+    signed in — no remote-controllable session, so "Play on the boombox"
+    from the LAN app timed out with 504."""
+    monkeypatch.setattr(actions, "jellyfin_base", lambda: "https://video.example.com")
+    urls: list[str] = []
+
+    class FakeKiosk:
+        async def navigate(self, url):
+            urls.append(url)
+
+    d = _make_dispatcher(kiosk=FakeKiosk())
+    result = await actions.fire(d, "movies")
+    assert result == {"ok": True}
+    assert urls == ["https://video.example.com/web/"]

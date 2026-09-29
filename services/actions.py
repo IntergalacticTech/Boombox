@@ -303,8 +303,11 @@ async def _h_movies(d: Dispatcher):
         await d.mopidy.call("core.playback.pause")
     if d.kiosk:
         # Navigate the kiosk to the configured Jellyfin — on-device by default,
-        # or a home-server / VPS when BOOMBOX_JELLYFIN_BASE is set.
-        await d.kiosk.navigate(f"{jellyfin_base()}/web/index.html#/home")
+        # or a home-server / VPS when BOOMBOX_JELLYFIN_BASE is set. Open the
+        # web root and let jellyfin-web pick its own start route: 10.10 has
+        # no `#/home` route (it's `#/home.html`), and an unknown route hangs
+        # on the loading spinner without ever signing in.
+        await d.kiosk.navigate(f"{jellyfin_base()}/web/")
 
 
 @_handler("web", "short_press")
