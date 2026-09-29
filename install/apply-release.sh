@@ -37,16 +37,32 @@ fail() { printf '\033[1;31m[apply]\033[0m %s\n' "$*" >&2; exit 1; }
 # helper: it renders the LAN port from the root-owned web-auth.env, installs
 # both files together, runs `nginx -t` and restores the previous pair if that
 # fails. Never install the snippet alone — the kiosk's `location /` lives in
-# the site file. A helper too old to know the action changes nothing (and
-# verify's LAN-app probe then fails, so the release is rolled back).
+# the site file.
+#
+# `nginx_sync strict` (swap) FAILS when the helper is too old to know the
+# action, so a device whose root helper was never refreshed stops before
+# restart/verify instead of restarting everything and failing the LAN-app
+# probe. `revert` calls it non-strict: putting the old release back must
+# never be blocked by the helper.
+HELPER_TOO_OLD="the root helper /usr/local/sbin/boombox-setup-apply predates nginx-sync — reinstall the root helper — re-run install.sh on this device, then retry the update"
+SETUP_APPLY_BIN="${BOOMBOX_SETUP_APPLY_BIN:-/usr/local/sbin/boombox-setup-apply}"
 nginx_sync() {
-  local out
+  local strict="${1:-}" out
   out="$(printf '{"action":"nginx-sync"}' | sudo -n /usr/local/sbin/boombox-setup-apply 2>&1)" || true
   if [[ "$out" == *'"ok": true'* ]]; then
     log "nginx site + snippet in sync with $(readlink "$CURRENT")"
+  elif [[ "$strict" == strict && "$out" == *'unknown action: nginx-sync'* ]]; then
+    fail "nginx config not synced: $HELPER_TOO_OLD"
   else
     warn "nginx config not synced: ${out:-no output} — reinstall /usr/local/sbin/boombox-setup-apply (install.sh) to enable per-deploy nginx sync"
   fi
+}
+
+# Read-only capability probe for preflight: does the installed root helper
+# know the nginx-sync action at all? (0755 root-owned, so readable.) Lets an
+# un-prepped device abort cleanly — no symlink moved, nothing restarted.
+require_helper_nginx_sync() {
+  grep -qF '"nginx-sync"' "$SETUP_APPLY_BIN" 2>/dev/null || fail "$HELPER_TOO_OLD"
 }
 
 # A ref names a release directory under $RELEASES and is interpolated into
@@ -141,6 +157,7 @@ case "$cmd" in
     ref="${1:?ref required}"
     require_valid_ref "$ref"
     log "preflight $ref"
+    require_helper_nginx_sync
     [[ -f "$RELEASES/$ref/ui/dist/index.html" ]] || fail "ui/dist/index.html missing"
     [[ -f "$RELEASES/$ref/remote-ui/dist/index.html" ]] || fail "remote-ui/dist/index.html missing"
     if [[ -f "$RELEASES/$ref/setup-ui/package.json" ]]; then
@@ -176,8 +193,9 @@ for mod in ('boombox_updater', 'boombox_buttons'):
       "$HOME/.config/systemd/user/"
     systemctl --user daemon-reload
     # Site file + snippet move together (see nginx_sync). The reload happens
-    # in the `restart` step; this only stages the files.
-    nginx_sync
+    # in the `restart` step; this only stages the files. Strict: an old
+    # helper fails the swap here, before restart/verify.
+    nginx_sync strict
     # Root-executed helpers live as root-owned copies outside the release
     # tree precisely so this (unprivileged) deploy can NOT rewrite them —
     # granting sudo to copy them from here would reopen that hole. So they
