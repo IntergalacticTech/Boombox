@@ -26,7 +26,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from sqlite3 import Connection
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
 log = logging.getLogger("boombox-library.cache_drive")
 
@@ -176,23 +176,14 @@ def mark_rows_missing(conn: Connection, lost_mount: Optional[Path]) -> int:
     drive attached) each present row is checked for its file instead.
     Returns the number of rows flipped.
     """
-    rows = list(conn.execute(
-        "SELECT track_id, local_path FROM cache_state WHERE status='present'"
-    ))
-    gone: list[str] = []
-    for r in rows:
-        path = r["local_path"]
-        if lost_mount is not None:
-            if path and _is_under(path, lost_mount):
-                gone.append(r["track_id"])
-        elif not path or not os.path.exists(path):
-            gone.append(r["track_id"])
-    if gone:
-        conn.executemany(
-            "UPDATE cache_state SET status=? WHERE track_id=? AND status='present'",
-            ((STATUS_MISSING, tid) for tid in gone),
-        )
-    return len(gone)
+    rows = present_rows(conn)
+    gone: list[tuple[str, Optional[str]]]
+    if lost_mount is not None:
+        gone = [(tid, path) for tid, path in rows
+                if path and _is_under(path, lost_mount)]
+    else:
+        gone = find_gone_rows(rows)
+    return apply_rows_missing(conn, gone)
 
 
 def restore_missing_rows(conn: Connection, mount: Path) -> int:
@@ -202,28 +193,82 @@ def restore_missing_rows(conn: Connection, mount: Path) -> int:
     `mount/audio/<basename>` (same drive, remounted elsewhere). Rows whose
     file isn't found stay 'missing'. Returns the number restored.
     """
-    rows = list(conn.execute(
+    return apply_rows_restored(
+        conn, find_restorable_rows(missing_rows(conn), mount))
+
+
+# The reconcile above in three phases, so an asyncio caller can run the
+# filesystem half (a stat per row — slow on a big or sleepy USB drive)
+# in a worker thread while every SQLite read/write stays on its own
+# thread: read the rows, check the files off-thread, apply the result.
+
+def present_rows(conn: Connection) -> list[tuple[str, Optional[str]]]:
+    """(track_id, local_path) of every 'present' cache_state row."""
+    return [(r["track_id"], r["local_path"]) for r in conn.execute(
+        "SELECT track_id, local_path FROM cache_state WHERE status='present'"
+    )]
+
+
+def missing_rows(conn: Connection) -> list[tuple[str, Optional[str]]]:
+    """(track_id, local_path) of every 'missing' cache_state row."""
+    return [(r["track_id"], r["local_path"]) for r in conn.execute(
         "SELECT track_id, local_path FROM cache_state WHERE status=?",
         (STATUS_MISSING,),
-    ))
-    restored = 0
-    for r in rows:
-        path = r["local_path"]
+    )]
+
+
+def find_gone_rows(
+    rows: Iterable[tuple[str, Optional[str]]],
+) -> list[tuple[str, Optional[str]]]:
+    """Filesystem-only: the (track_id, local_path) rows whose local_path
+    is empty or absent."""
+    return [(tid, path) for tid, path in rows
+            if not path or not os.path.exists(path)]
+
+
+def find_restorable_rows(
+    rows: Iterable[tuple[str, Optional[str]]], mount: Path,
+) -> list[tuple[str, str, int]]:
+    """Filesystem-only: (track_id, found_path, size) for each row whose
+    file exists on `mount` — at its recorded path, else audio/<basename>."""
+    found: list[tuple[str, str, int]] = []
+    for tid, path in rows:
         if not path:
             continue
-        candidates = [Path(path), mount / "audio" / Path(path).name]
-        for c in candidates:
+        for c in (Path(path), mount / "audio" / Path(path).name):
             if not _is_under(str(c), mount):
                 continue
             try:
                 size = c.stat().st_size
             except OSError:
                 continue
-            conn.execute(
-                "UPDATE cache_state SET status='present', local_path=?, "
-                "size_bytes=? WHERE track_id=? AND status=?",
-                (str(c), size, r["track_id"], STATUS_MISSING),
-            )
-            restored += 1
+            found.append((tid, str(c), size))
             break
-    return restored
+    return found
+
+
+def apply_rows_missing(conn: Connection,
+                       rows: Sequence[tuple[str, Optional[str]]]) -> int:
+    """Flip these (track_id, local_path) rows 'present' -> 'missing'. A
+    row whose status or path changed since it was read (e.g. re-downloaded
+    to a new file meanwhile) is left alone. Returns len(rows)."""
+    if rows:
+        conn.executemany(
+            "UPDATE cache_state SET status=? WHERE track_id=? "
+            "AND status='present' AND local_path IS ?",
+            ((STATUS_MISSING, tid, path) for tid, path in rows),
+        )
+    return len(rows)
+
+
+def apply_rows_restored(conn: Connection,
+                        found: list[tuple[str, str, int]]) -> int:
+    """Flip these rows 'missing' -> 'present' at the found path/size.
+    Rows that changed status since they were read are left alone."""
+    for tid, path, size in found:
+        conn.execute(
+            "UPDATE cache_state SET status='present', local_path=?, "
+            "size_bytes=? WHERE track_id=? AND status=?",
+            (path, size, tid, STATUS_MISSING),
+        )
+    return len(found)

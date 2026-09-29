@@ -209,6 +209,29 @@ for mod in ('boombox_updater', 'boombox_buttons'):
     for u in "${units[@]}"; do
       systemctl --user restart "$u.service" || true
     done
+    # Self-heal a release that ships setup-ui but whose build step predates
+    # building it (the build ran from the OLD release's script, which didn't
+    # know about setup-ui) — otherwise /setup/ 404s until the next update.
+    # Best-effort: a failed build is caught by verify's /setup/ probe.
+    if [[ -f "$CURRENT/setup-ui/package.json" && ! -f "$CURRENT/setup-ui/dist/index.html" ]]; then
+      log "setup-ui/dist missing — building it"
+      # Chained with && — errexit is suspended inside an `if` condition,
+      # so a failed `npm ci` would otherwise fall through to the build.
+      if (
+        cd "$CURRENT/setup-ui" && {
+          if [[ -f package-lock.json ]]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
+        } && npm run build
+      ); then
+        chmod -R a+rX "$CURRENT/setup-ui/dist"
+        chmod o+x "$CURRENT/setup-ui"
+      else
+        warn "setup-ui build failed; verify will fail the /setup/ probe"
+      fi
+    fi
     sudo /usr/bin/systemctl reload nginx
     # Best-effort: reload the kiosk Chromium tab so the freshly-built SPA
     # is picked up without restarting the long-running browser process.
@@ -277,6 +300,13 @@ PYRELOAD
     # a release that breaks the core music path now fails verify → auto-rollback.
     probe http://localhost/api/library/health "/api/library/health"
     probe http://localhost/api/rfid/status    "/api/rfid/status"
+    # The first-run wizard SPA — only for releases that ship it. A release
+    # missing setup-ui/dist makes nginx's try_files fallback loop (500), so
+    # the probe fails and the updater rolls back instead of leaving /setup/
+    # broken.
+    if [[ -f "$CURRENT/setup-ui/package.json" ]]; then
+      probe http://localhost/setup/           "/setup/"
+    fi
     ;;
 
   revert)

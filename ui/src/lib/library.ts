@@ -84,21 +84,81 @@ const HEAD_ATTEMPTS = 3;
 const TAIL_CHUNK = 10;
 
 // Bumped by every playUris call. A background tail append stops as soon as
-// a newer request has replaced the queue, so two quick taps never merge.
+// a newer request from this tab has replaced the queue, so two quick taps
+// never merge. Replacements from elsewhere (RFID tap, boombox-resume, the
+// phone remote, another tab) are caught by the tlid anchor in appendTail.
 let playGeneration = 0;
+
+type AddResult = {
+  /** False only when Mopidy answered with an empty list (nothing added). */
+  ok: boolean;
+  /** tlids of the added TlTracks, in order (empty for a stubbed reply). */
+  tlids: number[];
+};
+
+const isHttpUri = (u: string) => /^https?:\/\//i.test(u);
+
+function tlidsOf(added: unknown): number[] {
+  if (!Array.isArray(added)) return [];
+  return added
+    .map(t => (t && typeof t === "object" ? (t as { tlid?: unknown }).tlid : undefined))
+    .filter((t): t is number => typeof t === "number");
+}
 
 /** core.tracklist.add returns the added TlTracks; an empty list means Mopidy
  * couldn't look the URI up (evicted cache file, missing local: track…).
- * Anything else (a stubbed null) counts as success. */
-async function addUris(uris: string[]): Promise<boolean> {
-  const added = await rpc<unknown>("core.tracklist.add", { uris });
-  return !(Array.isArray(added) && added.length === 0);
+ * Anything else (a stubbed null) counts as success.
+ *
+ * Mirrors the RFID client's _add: Mopidy 3.4.2 + recent GStreamer can drop
+ * http(s) URIs at scan time and return []. Those are retried as Track
+ * objects, which skip the scan since we supply the metadata ourselves. */
+async function addUris(uris: string[], atPosition?: number): Promise<AddResult> {
+  const withPos = (p: Record<string, unknown>) =>
+    atPosition === undefined ? p : { ...p, at_position: atPosition };
+  let added = await rpc<unknown>("core.tracklist.add", withPos({ uris }));
+  if (Array.isArray(added) && added.length === 0) {
+    const http = uris.filter(isHttpUri);
+    if (http.length > 0) {
+      const tracks = http.map(uri => ({ __model__: "Track", uri, name: "Streaming" }));
+      added = await rpc<unknown>("core.tracklist.add", withPos({ tracks }));
+    }
+  }
+  return { ok: !(Array.isArray(added) && added.length === 0), tlids: tlidsOf(added) };
 }
 
-async function appendTail(uris: string[], generation: number): Promise<void> {
+/** Position of a tlid in the current tracklist, or null once it's gone. */
+async function tlidIndex(tlid: number): Promise<number | null> {
+  const idx = await rpc<unknown>("core.tracklist.index", { tlid });
+  return typeof idx === "number" ? idx : null;
+}
+
+/** Queue `uris` in chunks, each placed right after the last track we added
+ * (starting from the head's tlid) — the same contract as the RFID client's
+ * append_tail and boombox-resume's append_restore_tail. If the anchor has
+ * left the tracklist, somebody else replaced the queue and the rest of this
+ * list belongs nowhere, so we stop; a chunk that was in flight when that
+ * happened landed in the foreign queue and is removed again. With no anchor
+ * (Mopidy returned no tlids) chunks are simply appended. */
+async function appendTail(
+  uris: string[], generation: number, headTlid: number | null,
+): Promise<void> {
+  let anchor = headTlid;
   for (let i = 0; i < uris.length; i += TAIL_CHUNK) {
     if (generation !== playGeneration) return;
-    await rpc("core.tracklist.add", { uris: uris.slice(i, i + TAIL_CHUNK) });
+    let at: number | undefined;
+    if (anchor !== null) {
+      const idx = await tlidIndex(anchor);
+      if (idx === null) return;
+      at = idx + 1;
+    }
+    const { tlids } = await addUris(uris.slice(i, i + TAIL_CHUNK), at);
+    if (tlids.length === 0) continue;
+    if (anchor !== null && (await tlidIndex(anchor)) === null) {
+      // Replaced while this chunk was in flight: take it back out.
+      await rpc("core.tracklist.remove", { criteria: { tlid: tlids } });
+      return;
+    }
+    anchor = tlids[tlids.length - 1];
   }
 }
 
@@ -119,14 +179,17 @@ export async function playUris(uris: string[]): Promise<void> {
   await rpc("core.tracklist.clear");
   let next = 0;
   let started = false;
+  let headTlid: number | null = null;
   while (next < playable.length && next < HEAD_ATTEMPTS && !started) {
-    started = await addUris(playable.slice(next, next + 1));
+    const head = await addUris(playable.slice(next, next + 1));
+    started = head.ok;
+    headTlid = head.tlids[0] ?? null;
     next += 1;
   }
   if (!started) {
     // Every head we tried failed — add the remainder in one go and let
     // Mopidy start whichever of them did add.
-    if (next >= playable.length || !(await addUris(playable.slice(next)))) {
+    if (next >= playable.length || !(await addUris(playable.slice(next))).ok) {
       throw new PlaybackUnavailableError("Couldn't queue any of those tracks.");
     }
     next = playable.length;
@@ -136,7 +199,7 @@ export async function playUris(uris: string[]): Promise<void> {
   await rpc("core.playback.play");
   const tail = playable.slice(next);
   if (tail.length > 0) {
-    void appendTail(tail, generation).catch(e => {
+    void appendTail(tail, generation, headTlid).catch(e => {
       console.warn("[library] failed to queue the rest of the tracks:", e);
     });
   }
@@ -146,7 +209,7 @@ export async function playUris(uris: string[]): Promise<void> {
 export async function queueUris(uris: string[]): Promise<void> {
   if (uris.length === 0) return;
   const playable = await resolvePlayableUris(uris);
-  await rpc("core.tracklist.add", { uris: playable });
+  await addUris(playable);
 }
 
 export type TlTrack = { tlid: number; track: MopidyTrack };

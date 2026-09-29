@@ -312,3 +312,84 @@ async def test_startup_without_drive_marks_dead_rows_missing(ctx, tmp_path, monk
     await _poll_once(ctx, monkeypatch)
     assert not ctx.cache_state.present
     assert _status(ctx.conn, "t1") == "missing"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_checks_files_off_loop_and_restores(ctx, tmp_path, monkeypatch):
+    """The stat-per-row checks run via asyncio.to_thread; SQLite writes
+    still land (on the loop thread) with the right transitions."""
+    drive = tmp_path / "media" / "usb0"
+    (drive / "audio").mkdir(parents=True)
+    alive = drive / "audio" / "alive.mp3"
+    alive.write_bytes(b"x")
+    back = drive / "audio" / "back.mp3"
+    back.write_bytes(b"yy")
+    ctx.conn.executemany(
+        "INSERT INTO cache_state(track_id, status, local_path) VALUES (?,?,?)",
+        [("alive", "present", str(alive)),
+         ("dead", "present", str(drive / "audio" / "dead.mp3")),
+         # recorded under an old mountpoint; found again as audio/<name>
+         ("back", "missing", "/media/old/audio/back.mp3"),
+         ("gone", "missing", "/media/old/audio/gone.mp3")],
+    )
+    offloaded: list[str] = []
+    real_to_thread = asyncio.to_thread
+
+    async def spy(fn, *args, **kwargs):
+        offloaded.append(fn.__name__)
+        return await real_to_thread(fn, *args, **kwargs)
+    monkeypatch.setattr(svc.asyncio, "to_thread", spy)
+
+    await ctx._reconcile_cache_rows(drive)
+    assert offloaded == ["find_gone_rows", "find_restorable_rows"]
+    assert _status(ctx.conn, "alive") == "present"
+    assert _status(ctx.conn, "dead") == "missing"
+    assert _status(ctx.conn, "gone") == "missing"
+    row = ctx.conn.execute("SELECT status, local_path, size_bytes FROM cache_state "
+                           "WHERE track_id='back'").fetchone()
+    assert (row["status"], row["local_path"], row["size_bytes"]) == \
+        ("present", str(back), 2)
+
+
+
+def test_reconcile_apply_skips_rows_rewritten_meanwhile(ctx, tmp_path):
+    """A row re-downloaded to a new file while the off-loop stat ran must
+    not be flipped to 'missing' on the strength of its old path."""
+    from boombox_library.cache_drive import apply_rows_missing, find_gone_rows, present_rows
+    old = tmp_path / "old.mp3"
+    ctx.conn.execute("INSERT INTO cache_state(track_id, status, local_path) "
+                     "VALUES ('t1','present',?)", (str(old),))
+    gone = find_gone_rows(present_rows(ctx.conn))
+    assert gone == [("t1", str(old))]
+    new = tmp_path / "new.mp3"
+    new.write_bytes(b"x")
+    ctx.conn.execute("UPDATE cache_state SET local_path=? WHERE track_id='t1'",
+                     (str(new),))
+    apply_rows_missing(ctx.conn, gone)
+    assert _status(ctx.conn, "t1") == "present"
+
+
+# ---- save_config / Mopidy restart ----
+
+def test_save_config_restarts_mopidy_only_when_block_removed(ctx, tmp_path, monkeypatch):
+    conf = tmp_path / "mopidy.conf"
+    monkeypatch.setattr(svc, "MOPIDY_CONF", conf)
+    monkeypatch.setattr(svc, "save_config", lambda cfg: None)
+    restarts: list[bool] = []
+
+    def fake_reload() -> bool:
+        restarts.append(True)
+        return True
+    monkeypatch.setattr(svc, "reload_mopidy", fake_reload)
+
+    conf.write_text("[core]\ncache_dir = /x\n\n[subsonic]\nurl = http://n\n")
+    ctx.save_config(ctx.cfg)
+    assert restarts == [True]
+    assert "[subsonic]" not in conf.read_text()
+
+    ctx.save_config(ctx.cfg)  # nothing left to strip: no restart
+    assert restarts == [True]
+
+    conf.unlink()  # no mopidy.conf at all: no restart
+    ctx.save_config(ctx.cfg)
+    assert restarts == [True]

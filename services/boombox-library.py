@@ -26,11 +26,16 @@ from boombox_library.cache_drive import (
     DEFAULT_SYMLINK,
     CacheDriveState,
     adopt_drive,
+    apply_rows_missing,
+    apply_rows_restored,
     detect_cache_drive,
+    find_gone_rows,
+    find_restorable_rows,
     list_candidate_drives,
     mark_rows_missing,
+    missing_rows,
+    present_rows,
     remove_symlink,
-    restore_missing_rows,
     update_symlink,
 )
 from boombox_library.catalog import sync_full
@@ -41,7 +46,7 @@ from boombox_library.config import (
 )
 from boombox_library.db import connect, migrate
 from boombox_library.downloader import DownloadQueue
-from boombox_library.mopidy_config import reload_mopidy, write_subsonic_block
+from boombox_library.mopidy_config import reload_mopidy, remove_subsonic_block
 from boombox_library.pins import (
     all_pinned_track_ids,
     load_sidecar,
@@ -127,9 +132,12 @@ class ServiceContext:
     def save_config(self, cfg: LibraryConfig) -> None:
         self.cfg = cfg
         save_config(cfg)
-        write_subsonic_block(MOPIDY_CONF, cfg.source.url,
-                             cfg.source.username, cfg.source.password)
-        reload_mopidy()
+        # Mopidy no longer carries the Subsonic credentials; only a
+        # leftover [subsonic] section from an old install is stripped.
+        # Restart Mopidy just when that actually changed mopidy.conf —
+        # restarting on every source save would cut playback for nothing.
+        if remove_subsonic_block(MOPIDY_CONF):
+            reload_mopidy()
 
     async def test_source(self, url: str, username: str, password: str) -> tuple[bool, str]:
         try:
@@ -337,7 +345,7 @@ class ServiceContext:
                     if new_state.present and new_state.mount_path:
                         log.info("cache drive present at %s", new_state.mount_path)
                         update_symlink(DEFAULT_SYMLINK, new_state.mount_path)
-                        self._reconcile_cache_rows(new_state.mount_path)
+                        await self._reconcile_cache_rows(new_state.mount_path)
                         self._init_download_queue(new_state.mount_path)
                         self._load_sidecar_if_present()
                     else:
@@ -353,7 +361,7 @@ class ServiceContext:
                 elif not new_state.present and not self._cache_rows_checked:
                     # Started without a drive: rows from the last run may
                     # still say 'present' with paths on the absent drive.
-                    self._reconcile_cache_rows(None)
+                    await self._reconcile_cache_rows(None)
                 self._cache_rows_checked = True
                 self.cache_state = new_state
             except asyncio.CancelledError:
@@ -363,12 +371,24 @@ class ServiceContext:
             await asyncio.sleep(CACHE_POLL_SECONDS)
 
     # ----- internals -----
-    def _reconcile_cache_rows(self, mount: Path | None) -> None:
+    async def _reconcile_cache_rows(self, mount: Path | None) -> None:
         """Bring cache_state in line with the drive actually mounted (see
         cache_drive's module docstring): 'present' rows whose file is gone
-        become 'missing'; with a drive, 'missing' rows found on it return."""
-        gone = mark_rows_missing(self.conn, None)
-        back = restore_missing_rows(self.conn, mount) if mount else 0
+        become 'missing'; with a drive, 'missing' rows found on it return.
+
+        Every row costs a stat, so the file checks run in a worker thread
+        — this loop also relays live audio (stream_proxy) and must not
+        stall on a big or slow USB drive. SQLite reads/writes stay on the
+        loop thread; the apply step's status guards skip any row that
+        changed while the checks ran."""
+        gone_rows = await asyncio.to_thread(
+            find_gone_rows, present_rows(self.conn))
+        gone = apply_rows_missing(self.conn, gone_rows)
+        back = 0
+        if mount:
+            found = await asyncio.to_thread(
+                find_restorable_rows, missing_rows(self.conn), mount)
+            back = apply_rows_restored(self.conn, found)
         if gone or back:
             log.info("cache_state reconciled: %d missing, %d restored",
                      gone, back)

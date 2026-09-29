@@ -2,9 +2,11 @@
 Description=Boombox auto-resume (Mopidy snapshot + restore)
 # Snapshots of streamed Home Library tracks hold boombox-library's local
 # proxy URLs (127.0.0.1:6687); order after it so a boot-time restore
-# doesn't race it (boombox-resume.py also waits for the port).
+# doesn't race it (boombox-resume.py also waits up to 60s for the port
+# and restores anyway). Ordering only, no Wants=: a user who disabled
+# boombox-library must not have it pulled back in by resume.
 After=network-online.target boombox-library.service
-Wants=network-online.target boombox-library.service
+Wants=network-online.target
 
 [Service]
 Type=simple

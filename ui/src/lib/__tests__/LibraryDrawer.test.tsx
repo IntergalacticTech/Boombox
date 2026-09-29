@@ -48,9 +48,10 @@ beforeEach(() => {
       rpcMethods.push({ method: body.method, params: body.params });
       // tracklist.add answers with the added TlTracks; an empty list would
       // tell playUris the head failed to add.
+      // The head sits at index 0, so the tail's anchor is always present.
       const result = body.method === "core.tracklist.add"
         ? (body.params.uris as string[]).map((uri, i) => ({ tlid: i + 1, track: { uri } }))
-        : [];
+        : body.method === "core.tracklist.index" ? 0 : [];
       return json({ jsonrpc: "2.0", id: body.id, result });
     }
     const key = `${method} ${input}`;
@@ -106,7 +107,7 @@ describe("LibraryDrawer · Home Library", () => {
     await waitFor(() => expect(adds()).toHaveLength(2));
     expect(adds()).toEqual([
       { uris: ["http://127.0.0.1:6687/api/library/stream/t1"] },
-      { uris: ["http://127.0.0.1:6687/api/library/stream/t2"] },
+      { uris: ["http://127.0.0.1:6687/api/library/stream/t2"], at_position: 1 },
     ]);
     expect(libCalls.filter(k => k === "POST /api/library/resolve")).toHaveLength(1);
   });

@@ -190,18 +190,43 @@ async def _browse(req: web.Request) -> web.Response:
     return web.json_response({"items": [dict(r) for r in rows]})
 
 
+def _fts_prefix_query(q: str) -> str | None:
+    """Turn free text into a safe FTS5 prefix query over title/body.
+
+    Each whitespace token becomes a double-quoted string (embedded quotes
+    doubled, so FTS5 operators/punctuation in it are just text) with a
+    trailing * — "beat" matches "Beat It" while typing. Tokens are ANDed.
+    The {title body} filter keeps the indexed content_type column
+    ('track', 'album', ...) from matching every row of that kind. Tokens
+    with no letters/digits tokenize to nothing and are dropped; None
+    means nothing searchable is left.
+    """
+    terms = [
+        '"' + tok.replace('"', '""') + '"*'
+        for tok in q.split()
+        if any(ch.isalnum() for ch in tok)
+    ]
+    if not terms:
+        return None
+    return "{title body}: (" + " ".join(terms) + ")"
+
+
 async def _search(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
-    q = req.query.get("q", "").strip()
-    if not q:
+    match = _fts_prefix_query(req.query.get("q", ""))
+    if match is None:
         return web.json_response({"results": []})
-    # FTS5 MATCH; escape double-quote inside q
-    safe = q.replace('"', '""')
-    rows = list(ctx.conn.execute(
-        "SELECT content_type, id, title FROM search_index "
-        "WHERE search_index MATCH ? LIMIT 200",
-        (f'"{safe}"',),
-    ))
+    try:
+        rows = list(ctx.conn.execute(
+            "SELECT content_type, id, title FROM search_index "
+            "WHERE search_index MATCH ? ORDER BY rank LIMIT 200",
+            (match,),
+        ))
+    except sqlite3.OperationalError:
+        # Defensive: the quoting above should make every query valid, but
+        # a malformed MATCH must never surface as a 500 while typing.
+        log.warning("search query rejected by FTS5: %r", match)
+        rows = []
     return web.json_response({"results": [dict(r) for r in rows]})
 
 

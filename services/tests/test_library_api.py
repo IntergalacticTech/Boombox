@@ -141,6 +141,66 @@ async def test_search_uses_fts5(client):
     assert any(i["id"] == "al1" for i in body["results"])
 
 
+def _seed_search(conn):
+    conn.executemany(
+        "INSERT INTO search_index(content_type,id,title,body) VALUES(?,?,?,?)",
+        [("track", "t1", "Beat It", "Michael Jackson Thriller"),
+         ("track", "t2", "Billie Jean", "Michael Jackson Thriller"),
+         ("album", "al1", "Back in Black", "AC/DC rock 1980"),
+         ("track", "t3", "Café del Mar", "Energy 52")],
+    )
+
+
+async def _search_ids(c, q):
+    r = await c.get("/api/library/search", params={"q": q})
+    assert r.status == 200
+    return [i["id"] for i in (await r.json())["results"]]
+
+
+@pytest.mark.asyncio
+async def test_search_matches_word_prefixes(client):
+    c, _, conn = client
+    _seed_search(conn)
+    assert await _search_ids(c, "beat") == ["t1"]
+    assert await _search_ids(c, "bea") == ["t1"]
+    assert set(await _search_ids(c, "mich thri")) == {"t1", "t2"}
+    assert await _search_ids(c, "michael jean") == ["t2"]  # tokens ANDed
+    assert await _search_ids(c, "caf") == ["t3"]           # unicode title
+
+
+@pytest.mark.asyncio
+async def test_search_ignores_content_type_column(client):
+    c, _, conn = client
+    _seed_search(conn)
+    assert await _search_ids(c, "track") == []
+    assert await _search_ids(c, "album") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("q", [
+    '"', '""', 'beat"', '"beat', '*', 'beat*', '-', '-beat', 'beat -it',
+    ':', 'title:beat', '{title}', '(', ')', '(beat', 'beat)', 'AND', 'OR',
+    'NOT', 'NEAR(beat it)', '^beat', 'ac/dc', "it's", '+', 'café', '日本',
+    '\u00e9\u0301', '🎵', 'a"b*c-d:e(f)g', '   ',
+])
+async def test_search_special_characters_never_500(client, q):
+    c, _, conn = client
+    _seed_search(conn)
+    r = await c.get("/api/library/search", params={"q": q})
+    assert r.status == 200
+    assert isinstance((await r.json())["results"], list)
+
+
+@pytest.mark.asyncio
+async def test_search_punctuation_is_literal_text(client):
+    c, _, conn = client
+    _seed_search(conn)
+    assert await _search_ids(c, "ac/dc") == ["al1"]
+    assert await _search_ids(c, '"beat') == ["t1"]
+    assert await _search_ids(c, "NOT") == []    # not an operator
+    assert await _search_ids(c, "-") == []      # nothing searchable
+
+
 @pytest.mark.asyncio
 async def test_browse_albums(client):
     """Smoke-test the albums browse query (different columns than artists)."""
