@@ -288,3 +288,80 @@ async def test_queue_appends_at_end(fake_mopidy):
     await player.queue(["file:///m/a.flac"])
     tail = fake_mopidy.instances[0].appended[0]
     assert tail.uris == ["file:///m/a.flac"] and tail.after_tlid is None
+
+
+class OrderedMopidy:
+    """Records Mopidy side effects in order; appends land only after `gate`
+    opens (a cancelled append never lands). play_uris yields mid-call so
+    unlocked concurrent plays would interleave."""
+    events: list[tuple] = []
+    gate: asyncio.Event
+
+    def __init__(self, url: str) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return None
+
+    async def play_uris(self, uris):
+        OrderedMopidy.events.append(("play-start", uris[0]))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        OrderedMopidy.events.append(("play-end", uris[0]))
+        return PendingTail(uris=list(uris[1:]), after_tlid=1) if len(uris) > 5 else None
+
+    async def append_tail(self, tail):
+        await OrderedMopidy.gate.wait()
+        OrderedMopidy.events.append(("append", tail.uris[0]))
+        return len(tail.uris)
+
+
+@pytest.fixture
+def ordered_mopidy():
+    OrderedMopidy.events = []
+    OrderedMopidy.gate = asyncio.Event()
+    return OrderedMopidy
+
+
+async def _drain() -> None:
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+async def test_play_cancels_a_long_queue_all_so_it_never_lands(ordered_mopidy):
+    import remote_home
+    player = remote_home.HomePlayer(rpc_url="http://mopidy", client_factory=ordered_mopidy)
+    album_a = [f"file:///m/a{i}.flac" for i in range(200)]
+    await player.queue(album_a)                       # long → background append
+    await _drain()
+    assert len(player._queue_tasks) == 1
+    queued = next(iter(player._queue_tasks))
+    await player.play(["file:///m/b0.flac", "file:///m/b1.flac"])
+    assert queued.cancelled()
+    assert not player._queue_tasks
+    ordered_mopidy.gate.set()
+    await _drain()
+    assert ("append", "file:///m/a0.flac") not in ordered_mopidy.events
+    assert ordered_mopidy.events == [("play-start", "file:///m/b0.flac"),
+                                     ("play-end", "file:///m/b0.flac")]
+
+
+async def test_concurrent_plays_serialise_and_only_latest_tail_runs(ordered_mopidy):
+    import queue_intent
+    import remote_home
+    player = remote_home.HomePlayer(rpc_url="http://mopidy", client_factory=ordered_mopidy)
+    first = [f"file:///m/x{i}.flac" for i in range(20)]
+    second = [f"file:///m/y{i}.flac" for i in range(20)]
+    await asyncio.gather(player.play(first), player.play(second))
+    ev = ordered_mopidy.events
+    # Not interleaved: each play_uris finishes before the next starts.
+    assert ev[:4] == [("play-start", first[0]), ("play-end", first[0]),
+                      ("play-start", second[0]), ("play-end", second[0])]
+    ordered_mopidy.gate.set()
+    await _drain()
+    appends = [e for e in ev if e[0] == "append"]
+    assert appends == [("append", second[1])]         # only the latest tail
+    assert queue_intent.read_intent() is None         # tail done → intent cleared

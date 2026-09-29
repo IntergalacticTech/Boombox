@@ -44,44 +44,55 @@ def _fail(status: int, error: str) -> web.Response:
 
 
 class HomePlayer:
-    """Plays or appends resolved URIs. One background tail at a time for
-    plays: a new play cancels the previous play's tail, as a new RFID tap
-    does. Long queue-appends run in the background too (kept referenced)."""
+    """Plays or appends resolved URIs, one operation at a time (a lock), so a
+    double-tapped Play can't interleave two play_uris calls. A new play
+    supersedes EVERYTHING still running in the background — the previous
+    play's tail AND any long "Queue all" appends — and waits for them to
+    stop before replacing the queue, so an old append can never land inside
+    the new play's queue (as a new RFID tap does)."""
 
     def __init__(self, rpc_url: str = MOPIDY_RPC,
                  client_factory: Callable[[str], Any] = MopidyClient) -> None:
         self._rpc = rpc_url
         self._factory = client_factory
+        self._lock = asyncio.Lock()
         self._tail_task: asyncio.Task | None = None
         self._queue_tasks: set[asyncio.Task] = set()
 
-    def _cancel_tail(self) -> None:
-        if self._tail_task and not self._tail_task.done():
-            self._tail_task.cancel()
+    async def _cancel_background(self) -> None:
+        tasks = [t for t in (self._tail_task, *self._queue_tasks)
+                 if t is not None and not t.done()]
         self._tail_task = None
+        self._queue_tasks.clear()
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def play(self, uris: list[str]) -> None:
-        self._cancel_tail()
-        clear_intent()
-        async with self._factory(self._rpc) as m:
-            tail = await m.play_uris(uris)
-        if tail:
-            token: str | None = None
-            try:
-                token = write_intent(uris)
-            except OSError as e:
-                log.warning("could not record queue intent: %s", e)
-            self._tail_task = asyncio.create_task(self._append(tail, token))
+        async with self._lock:
+            await self._cancel_background()
+            clear_intent()
+            async with self._factory(self._rpc) as m:
+                tail = await m.play_uris(uris)
+            if tail:
+                token: str | None = None
+                try:
+                    token = write_intent(uris)
+                except OSError as e:
+                    log.warning("could not record queue intent: %s", e)
+                self._tail_task = asyncio.create_task(self._append(tail, token))
 
     async def queue(self, uris: list[str]) -> None:
-        tail = PendingTail(uris=list(uris), after_tlid=None)
-        if len(uris) <= SYNC_QUEUE_MAX:
-            async with self._factory(self._rpc) as m:
-                await m.append_tail(tail)
-            return
-        task = asyncio.create_task(self._append(tail, None))
-        self._queue_tasks.add(task)
-        task.add_done_callback(self._queue_tasks.discard)
+        async with self._lock:
+            tail = PendingTail(uris=list(uris), after_tlid=None)
+            if len(uris) <= SYNC_QUEUE_MAX:
+                async with self._factory(self._rpc) as m:
+                    await m.append_tail(tail)
+                return
+            task = asyncio.create_task(self._append(tail, None))
+            self._queue_tasks.add(task)
+            task.add_done_callback(self._queue_tasks.discard)
 
     async def _append(self, tail: PendingTail, token: str | None) -> None:
         try:
