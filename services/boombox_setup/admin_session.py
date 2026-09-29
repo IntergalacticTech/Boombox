@@ -25,15 +25,22 @@ LOCKOUT_S = 5 * 60
 
 
 def _digest(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+    # surrogatepass: aiohttp decodes non-UTF-8 header bytes with
+    # surrogateescape; such a token must hash (to nothing live), not raise.
+    return hashlib.sha256(token.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def password_matches(supplied: object, expected: str) -> bool:
     """Constant-time compare of UTF-8 bytes (compare_digest on str raises for
-    non-ASCII). An empty stored password never matches anything."""
+    non-ASCII). An empty stored password never matches anything, nor does a
+    string that isn't valid UTF-8."""
     if not isinstance(supplied, str) or not expected:
         return False
-    return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+    try:
+        got, want = supplied.encode("utf-8"), expected.encode("utf-8")
+    except UnicodeEncodeError:        # lone surrogate (e.g. JSON "\udcff")
+        return False
+    return hmac.compare_digest(got, want)
 
 
 def read_web_password(path: Path) -> str | None:

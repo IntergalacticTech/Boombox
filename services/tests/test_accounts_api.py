@@ -1,6 +1,7 @@
 """/api/accounts/* — admin-session gate and card endpoints."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import aiohttp
@@ -669,5 +670,41 @@ async def test_every_accounts_route_requires_admin_token(ctx):
         for method, path in routes:
             r = await c.request(method, path, json={}, headers=LAN_NO_TOKEN)
             assert r.status == 401, (method, path)
+    finally:
+        await c.close()
+
+
+async def _raw_request(c, method: str, path: str, extra: bytes) -> int:
+    """Send raw bytes so a header can carry non-UTF-8 octets."""
+    reader, writer = await asyncio.open_connection(c.host, c.port)
+    try:
+        head = (f"{method} {path} HTTP/1.1\r\nHost: {c.host}\r\n"
+                "X-Real-IP: 192.168.1.50\r\nX-Boombox-Host: 192.168.1.81:8090\r\n"
+                "Content-Type: application/json\r\nContent-Length: 2\r\n"
+                "Connection: close\r\n").encode()
+        writer.write(head + extra + b"\r\n{}")
+        await writer.drain()
+        status_line = await reader.readline()
+        return int(status_line.split()[1])
+    finally:
+        writer.close()
+
+
+async def test_non_utf8_bearer_is_401_not_500(client):
+    bad = b"Authorization: Bearer \xff\xfe\r\n"
+    assert await _raw_request(client, "GET", "/api/accounts/summary", bad) == 401
+    assert await _raw_request(client, "DELETE", "/api/accounts/session", bad) == 200
+    assert (await client.get("/api/accounts/summary", headers=LAN)).status == 200
+
+
+async def test_lone_surrogate_password_is_401_and_counts_toward_lockout(ctx):
+    clock = [1_000_000.0]
+    _app, c = await _client_with_clock(ctx, clock)
+    try:
+        for _ in range(5):
+            r = await _login(c, "\udcff")     # json.dumps → "\\udcff" → lone surrogate
+            assert r.status == 401
+            assert (await r.json())["error"] == "wrong password"
+        assert (await _login(c, WEB_PASSWORD)).status == 429
     finally:
         await c.close()

@@ -88,3 +88,16 @@ def test_read_web_password(tmp_path):
     assert a.read_web_password(env) == "s3cret=with=equals"
     env.write_text("BOOMBOX_WEB_PASSWORD=\n")
     assert a.read_web_password(env) is None
+
+
+def test_unencodable_token_is_just_invalid():
+    # aiohttp decodes non-UTF-8 header bytes with surrogateescape.
+    s = AdminSessions(clock=Clock())
+    s.issue()
+    assert not s.verify("\udcff\udcfe")
+    s.revoke("\udcff\udcfe")          # no-op, no error
+
+
+def test_unencodable_password_is_a_non_match():
+    assert a.password_matches("\udcff", "secret") is False
+    assert a.password_matches("\udcff", "\udcff") is False  # unencodable never matches
