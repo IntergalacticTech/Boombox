@@ -12,8 +12,14 @@ const ERRORS: Record<string, string> = {
 /** Address + PIN entry. Resolves a host into the LAN origin
  *  `http://<host>:8090`, redeems the PIN, persists the pairing, and hands
  *  it up via onPaired. */
+/** Served by a boombox, prefill its own address so pairing is PIN-only.
+ *  (Empty in `vite dev`, where the page isn't on the boombox.) */
+export function defaultHost(dev: boolean = import.meta.env.DEV): string {
+  return dev ? "" : window.location.host;
+}
+
 export function Pairing({ onPaired }: { onPaired: (p: PairingData) => void }) {
-  const [host, setHost] = useState("");
+  const [host, setHost] = useState(() => defaultHost());
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
