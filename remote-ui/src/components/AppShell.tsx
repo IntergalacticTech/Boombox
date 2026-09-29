@@ -12,6 +12,7 @@ import { Playlists } from "../screens/Playlists";
 import { Search } from "../screens/Search";
 import { Files } from "../screens/Files";
 import { More } from "../screens/More";
+import { Video } from "../screens/Video";
 
 export interface SectionProps { params: string[]; navigate: Navigate; desktop: boolean }
 
@@ -21,8 +22,7 @@ export function renderSection(route: Route, p: SectionProps, onOpenSettings: () 
   switch (route) {
     case "now": return <NowPlaying onOpenLibrary={() => p.navigate("music")} />;
     case "music": return <Music params={p.params} navigate={p.navigate} />;
-    case "video":
-      return <SectionMessage title="Video" message="Video isn't available in this version yet." />;
+    case "video": return <Video params={p.params} navigate={p.navigate} />;
     case "search": return <Search autoFocus={p.desktop} />;
     case "playlists": return <Playlists />;
     case "files": return <Files />;
