@@ -398,3 +398,47 @@ async def test_signout_reports_errors(client, monkeypatch):
     body = await r.json()
     assert r.status == 200 and body["ok"] is False
     assert "reach" in body["error"] and "kiosk" in body["error"]
+
+
+async def test_streaming_get_passthrough(client, ctx):
+    ctx.apply_results["streaming-status"] = {
+        "ok": True, "airplay": {"installed": True, "active": True, "name": "MarkII",
+                                "password_set": False},
+        "spotify": {"installed": False, "active": False, "name": ""}}
+    body = await (await client.get("/api/accounts/streaming", headers=LAN)).json()
+    assert body["airplay"]["name"] == "MarkII" and "ok" not in body
+
+
+async def test_streaming_put_only_forwards_known_fields(client, ctx):
+    r = await client.put("/api/accounts/streaming", headers=LAN,
+                         json={"airplay_name": "Den", "evil": "x"})
+    assert r.status == 200
+    assert ctx.applied[-1] == {"action": "streaming", "airplay_name": "Den"}
+
+
+async def test_streaming_put_helper_error_is_400(client, ctx):
+    ctx.apply_results["streaming"] = {"ok": False, "error": "Spotify Connect is not installed"}
+    r = await client.put("/api/accounts/streaming", headers=LAN, json={"spotify_name": "Den"})
+    assert r.status == 400 and "not installed" in (await r.json())["error"]
+
+
+async def test_web_login_forwards_and_never_echoes(client, ctx):
+    ctx.apply_results["web-password"] = {"ok": False, "error": "current password is incorrect"}
+    r = await client.put("/api/accounts/web-login", headers=LAN,
+                         json={"current_password": "old", "new_password": "correct horse battery"})
+    body = await r.json()
+    assert r.status == 400 and "correct horse" not in str(body)
+    assert ctx.applied[-1]["action"] == "web-password"
+
+
+async def test_streaming_and_web_login_bad_body_400(client, ctx):
+    for path in ("/api/accounts/streaming", "/api/accounts/web-login"):
+        r = await client.put(path, headers=LAN, json=[1])
+        assert r.status == 400
+    assert not ctx.applied
+
+
+async def test_streaming_get_helper_failure_is_502(client, ctx):
+    ctx.apply_results["streaming-status"] = {"ok": False, "error": "helper unavailable"}
+    r = await client.get("/api/accounts/streaming", headers=LAN)
+    assert r.status == 502 and "unavailable" in (await r.json())["error"]

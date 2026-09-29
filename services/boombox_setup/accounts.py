@@ -326,6 +326,55 @@ async def _kiosk_signout(req: web.Request) -> web.Response:
     return web.json_response({"ok": not errors, "error": "; ".join(errors)})
 
 
+_STREAMING_FIELDS = ("airplay_name", "airplay_password", "airplay_password_clear",
+                     "spotify_name")
+
+
+def _helper_error(r: Any, default: str) -> str:
+    err = r.get("error") if isinstance(r, dict) else None
+    return err if isinstance(err, str) and err else default
+
+
+async def _streaming_get(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    r = await ctx.apply({"action": "streaming-status"})
+    if not isinstance(r, dict) or not r.get("ok"):
+        return web.json_response({"error": _helper_error(r, "status unavailable")},
+                                 status=502)
+    return web.json_response({k: v for k, v in r.items() if k != "ok"})
+
+
+async def _streaming_put(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    b = await _json_body(req)
+    if b is None:
+        return _bad_body()
+    # Only whitelisted fields reach the root helper, which does the validation.
+    payload = {"action": "streaming", **{k: b[k] for k in _STREAMING_FIELDS if k in b}}
+    r = await ctx.apply(payload)
+    if not isinstance(r, dict) or not r.get("ok"):
+        return _err(_helper_error(r, "save failed"), 400)
+    return web.json_response({"ok": True, "changed": r.get("changed", [])})
+
+
+async def _web_login_put(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    b = await _json_body(req)
+    if b is None:
+        return _bad_body()
+    cur = str(b.get("current_password", ""))
+    new = str(b.get("new_password", ""))
+    r = await ctx.apply({"action": "web-password",
+                         "current_password": cur, "new_password": new})
+    if not isinstance(r, dict) or not r.get("ok"):
+        err = _helper_error(r, "not changed")
+        for secret in (cur, new):
+            if secret:
+                err = err.replace(secret, "***")
+        return _err(err, 400)
+    return web.json_response({"ok": True, "updated": r.get("updated", [])})
+
+
 def add_routes(app: web.Application) -> None:
     r = app.router
     r.add_get("/api/accounts/summary", _summary)
@@ -338,3 +387,6 @@ def add_routes(app: web.Application) -> None:
     r.add_get("/api/accounts/video/users", _video_users)
     r.add_post("/api/accounts/video/kiosk-signin", _kiosk_signin)
     r.add_post("/api/accounts/video/kiosk-signout", _kiosk_signout)
+    r.add_get("/api/accounts/streaming", _streaming_get)
+    r.add_put("/api/accounts/streaming", _streaming_put)
+    r.add_put("/api/accounts/web-login", _web_login_put)
