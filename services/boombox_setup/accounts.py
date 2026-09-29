@@ -1,10 +1,11 @@
 """/api/accounts/* — the LAN Accounts page backend.
 
 Auth is NOT the wizard's token/code: nginx Basic auth on the LAN port is the
-admin gate. nginx forwards `X-Boombox-User: $remote_user` (empty on the
-loopback kiosk server, which has no auth) and `X-Real-IP`; we require a user
-AND a non-loopback client, so a page open in the kiosk can never change
-accounts. Mutations also need JSON and, when the browser sends Origin, a
+admin gate. nginx forwards `X-Boombox-User: $remote_user` and `X-Real-IP`;
+we require a user AND a non-loopback client. The loopback `X-Real-IP` check is
+what refuses the kiosk: `$remote_user` is not a reliable gate there, since any
+client that sends Basic credentials (including a page open in the kiosk, on the
+unauthenticated loopback server) populates it. Mutations also need JSON and, when the browser sends Origin, a
 same-origin match against `X-Boombox-Host` ($http_host). Secrets are
 write-only: no response ever carries a password, API key or token.
 """
