@@ -11,7 +11,9 @@ write-only: no response ever carries a password, API key or token.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import time
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -25,6 +27,7 @@ PREFIX = "/api/accounts/"
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _BASE_RE = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+(/[A-Za-z0-9._~%/+-]*)?$")
+CDP_BASE = os.environ.get("BOOMBOX_KIOSK_CDP", "http://127.0.0.1:9222")
 _VIDEO_UNITS = ["boombox-remote.service", "boombox-kiosk-guard.service",
                 "boombox-buttons.service"]
 
@@ -250,6 +253,79 @@ async def _video_users(req: web.Request) -> web.Response:
     return web.json_response({"users": users})
 
 
+def _err(msg: str, status: int) -> web.Response:
+    return web.json_response({"ok": False, "error": msg}, status=status)
+
+
+async def _kiosk_signin(req: web.Request) -> web.Response:
+    """Sign the kiosk's Chromium into Jellyfin as the chosen user: server-side
+    Quick Connect for DeviceId <id>-kiosk, inject the session over CDP, then pin
+    that DeviceId in the Jellyfin env. A failed injection revokes the device so
+    no orphaned token is left behind."""
+    ctx: Any = req.app["ctx"]
+    b = await _json_body(req)
+    if b is None:
+        return _bad_body()
+    user_id = str(b.get("user_id", ""))
+    base, key = _jf(ctx)
+    if not key:
+        return _err("Save an API key first", 400)
+    s = await ctx.http()
+    try:
+        users = {u["id"]: u for u in await jf.list_users(s, base, key)}
+    except jf.JellyfinError as e:
+        return _err(str(e), 502)
+    if user_id not in users:
+        return _err("unknown Jellyfin user", 400)
+    ident = ctx.read_identity()
+    dev = kiosk_device_id(ctx)
+    try:
+        pub = await jf.public_info(s, base)
+        token = await jf.quick_connect_token(
+            s, base, key, user_id, dev, f"{ident['name']} kiosk", "boombox")
+    except jf.JellyfinError as e:
+        return _err(str(e), 502)
+    creds = jf.credentials_blob(base, str(pub.get("Id", "")),
+                                str(pub.get("ServerName", "")),
+                                user_id, token, int(time.time() * 1000))
+    try:
+        await jf.inject_kiosk(CDP_BASE, base, dev, creds)
+    except jf.JellyfinError as e:
+        try:
+            await jf.revoke_device(s, base, key, dev)
+        except jf.JellyfinError:
+            log.warning("could not revoke kiosk device after failed injection")
+        return _err(str(e), 502)
+    env = ctx.jellyfin_env()
+    mode = "remote" if env.get("BOOMBOX_JELLYFIN_BASE") else "builtin"
+    pin: dict[str, Any] = {"action": "jellyfin", "mode": mode, "device_id": dev}
+    if mode == "remote":
+        pin["base"] = base
+    r = await ctx.apply(pin)
+    if not isinstance(r, dict) or not r.get("ok"):
+        err = r.get("error") if isinstance(r, dict) else None
+        return _err(err or "could not save the kiosk device id", 400)
+    await ctx.restart_units(["boombox-remote.service"])
+    return web.json_response({"ok": True, "user": users[user_id]["name"]})
+
+
+async def _kiosk_signout(req: web.Request) -> web.Response:
+    ctx: Any = req.app["ctx"]
+    base, key = _jf(ctx)
+    dev = kiosk_device_id(ctx)
+    errors: list[str] = []
+    if key:
+        try:
+            await jf.revoke_device(await ctx.http(), base, key, dev)
+        except jf.JellyfinError as e:
+            errors.append(str(e))
+    try:
+        await jf.inject_kiosk(CDP_BASE, base, dev, None)
+    except jf.JellyfinError as e:
+        errors.append(str(e))
+    return web.json_response({"ok": not errors, "error": "; ".join(errors)})
+
+
 def add_routes(app: web.Application) -> None:
     r = app.router
     r.add_get("/api/accounts/summary", _summary)
@@ -260,3 +336,5 @@ def add_routes(app: web.Application) -> None:
     r.add_post("/api/accounts/video/test", _video_test)
     r.add_put("/api/accounts/video", _video_put)
     r.add_get("/api/accounts/video/users", _video_users)
+    r.add_post("/api/accounts/video/kiosk-signin", _kiosk_signin)
+    r.add_post("/api/accounts/video/kiosk-signout", _kiosk_signout)

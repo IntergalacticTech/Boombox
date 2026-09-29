@@ -9,9 +9,12 @@ Jellyfin password is ever typed or stored.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from typing import Any
 
 import aiohttp
+import websockets
 
 TIMEOUT = aiohttp.ClientTimeout(total=15)
 QC_TIMEOUT = aiohttp.ClientTimeout(total=30)
@@ -21,11 +24,21 @@ class JellyfinError(Exception):
     """A user-presentable reason a Jellyfin call failed."""
 
 
+_HDR_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _hdr(v: str) -> str:
+    """Make a value safe inside a quoted MediaBrowser header field: a quote would
+    break the field, and CR/LF (e.g. from the user-editable boombox name) would
+    make aiohttp refuse the header outright."""
+    return _HDR_CTRL.sub(" ", v).replace('"', "'")
+
+
 def mb_auth(device_id: str, device_name: str, version: str, token: str = "") -> str:
-    parts = ['Client="Jellyfin Web"', f'Device="{device_name}"',
-             f'DeviceId="{device_id}"', f'Version="{version}"']
+    parts = ['Client="Jellyfin Web"', f'Device="{_hdr(device_name)}"',
+             f'DeviceId="{_hdr(device_id)}"', f'Version="{_hdr(version)}"']
     if token:
-        parts.append(f'Token="{token}"')
+        parts.append(f'Token="{_hdr(token)}"')
     return "MediaBrowser " + ", ".join(parts)
 
 
@@ -114,3 +127,88 @@ async def device_user(s: aiohttp.ClientSession, base: str, key: str,
     except JellyfinError:
         return None
     return _obj(d).get("LastUserName") or None
+
+
+# ---------------------------------------------------------------------------
+# Kiosk session injection over the Chrome DevTools Protocol
+
+_KIOSK_DOWN = "kiosk not reachable — is the screen on?"
+
+
+def credentials_blob(base: str, server_id: str, server_name: str, user_id: str,
+                     token: str, now_ms: int) -> str:
+    """jellyfin-web's `localStorage.jellyfin_credentials` for one signed-in server."""
+    return json.dumps({"Servers": [{
+        "ManualAddress": base, "manualAddressOnly": True, "Id": server_id,
+        "Name": server_name, "UserId": user_id, "AccessToken": token,
+        "DateLastAccessed": now_ms, "LastConnectionMode": 2,
+    }]})
+
+
+def _eval_value(r: dict) -> Any:
+    # Real Chrome nests Runtime.evaluate's value as result.result.value; accept
+    # a flat {"value": ...} too.
+    if "value" in r:
+        return r.get("value")
+    return _obj(r.get("result")).get("value")
+
+
+async def inject_kiosk(cdp_base: str, jf_base: str, device_id: str,
+                       creds_json: str | None,
+                       return_url: str = "http://localhost/") -> None:
+    """Point the kiosk tab at Jellyfin, write (or, with creds_json=None, clear)
+    its stored session and device id, then send it home. Needs the kiosk's CDP
+    port (127.0.0.1:9222)."""
+    try:
+        async with aiohttp.ClientSession(timeout=TIMEOUT) as s:
+            async with s.get(f"{cdp_base}/json") as r:
+                pages = await r.json(content_type=None)
+        if not isinstance(pages, list):
+            raise ValueError("unexpected /json answer")
+        page = next(p for p in pages if isinstance(p, dict)
+                    and p.get("type") == "page" and p.get("webSocketDebuggerUrl"))
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError, StopIteration,
+            ValueError) as e:
+        raise JellyfinError(_KIOSK_DOWN) from e
+
+    if creds_json is None:
+        js = ("localStorage.removeItem('jellyfin_credentials');"
+              "localStorage.removeItem('_deviceId2');'ok'")
+    else:
+        js = (f"localStorage.setItem('_deviceId2', {json.dumps(device_id)});"
+              f"localStorage.setItem('jellyfin_credentials', {json.dumps(creds_json)});'ok'")
+    # Only report "complete" once the tab is on the Jellyfin page, so the
+    # storage write can't land in the previous page's origin.
+    ready = (f"location.href.startsWith({json.dumps(jf_base + '/')}) "
+             "? document.readyState : 'loading'")
+    msg_id = 0
+
+    async def call(ws: Any, method: str, params: dict) -> dict:
+        nonlocal msg_id
+        msg_id += 1
+        await ws.send(json.dumps({"id": msg_id, "method": method, "params": params}))
+        while True:
+            m = json.loads(await asyncio.wait_for(ws.recv(), 15))
+            if isinstance(m, dict) and m.get("id") == msg_id:
+                return _obj(m.get("result"))
+
+    try:
+        # No Origin header: Chromium's --remote-allow-origins only lists the
+        # CDP address itself, and websockets sends none by default.
+        async with websockets.connect(page["webSocketDebuggerUrl"],
+                                      max_size=2**22, open_timeout=5) as ws:
+            await call(ws, "Page.navigate", {"url": f"{jf_base}/web/"})
+            for _ in range(30):  # wait for the Jellyfin origin to load
+                r = await call(ws, "Runtime.evaluate",
+                               {"expression": ready, "returnByValue": True})
+                if _eval_value(r) == "complete":
+                    break
+                await asyncio.sleep(0.5)
+            else:
+                await call(ws, "Page.navigate", {"url": return_url})
+                raise JellyfinError("the kiosk couldn't open the Jellyfin page")
+            await call(ws, "Runtime.evaluate", {"expression": js, "returnByValue": True})
+            await call(ws, "Page.navigate", {"url": return_url})
+    except (OSError, asyncio.TimeoutError, ValueError,
+            websockets.WebSocketException) as e:
+        raise JellyfinError(_KIOSK_DOWN) from e

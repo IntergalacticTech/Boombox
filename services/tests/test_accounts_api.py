@@ -317,3 +317,84 @@ async def test_video_users(client, ctx, monkeypatch):
     ctx.jf_env = {}
     body = await (await client.get("/api/accounts/video/users", headers=LAN)).json()
     assert body["users"] == [] and body["error"]
+
+
+async def test_signin_revokes_device_when_kiosk_unreachable(client, ctx, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    revoked = []
+
+    async def fake_token(*a, **k): return "tok"
+    async def fake_pub(*a, **k): return {"Id": "srv1", "ServerName": "5CVideo"}
+    async def fake_users(*a, **k): return [{"id": "u1", "name": "jwc", "admin": True}]
+    async def fake_inject(*a, **k): raise jf.JellyfinError("kiosk not reachable — is the screen on?")
+    async def fake_revoke(s, base, key, dev): revoked.append(dev)
+
+    monkeypatch.setattr(jf, "quick_connect_token", fake_token)
+    monkeypatch.setattr(jf, "public_info", fake_pub)
+    monkeypatch.setattr(jf, "list_users", fake_users)
+    monkeypatch.setattr(jf, "inject_kiosk", fake_inject)
+    monkeypatch.setattr(jf, "revoke_device", fake_revoke)
+    r = await client.post("/api/accounts/video/kiosk-signin", headers=LAN, json={"user_id": "u1"})
+    body = await r.json()
+    assert r.status == 502 and "kiosk" in body["error"]
+    assert revoked == ["boombox-markii-kiosk"]
+    assert not any(p.get("device_id") for p in ctx.applied)
+
+
+async def test_signin_success_pins_device(client, ctx, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    async def fake_token(*a, **k): return "tok"
+    async def fake_pub(*a, **k): return {"Id": "srv1", "ServerName": "5CVideo"}
+    async def fake_users(*a, **k): return [{"id": "u1", "name": "jwc", "admin": True}]
+    async def fake_inject(*a, **k): return None
+    monkeypatch.setattr(jf, "quick_connect_token", fake_token)
+    monkeypatch.setattr(jf, "public_info", fake_pub)
+    monkeypatch.setattr(jf, "list_users", fake_users)
+    monkeypatch.setattr(jf, "inject_kiosk", fake_inject)
+    r = await client.post("/api/accounts/video/kiosk-signin", headers=LAN, json={"user_id": "u1"})
+    assert r.status == 200 and (await r.json())["user"] == "jwc"
+    pin = [p for p in ctx.applied if p["action"] == "jellyfin"][-1]
+    assert pin["device_id"] == "boombox-markii-kiosk" and pin["mode"] == "remote"
+
+
+async def test_signin_unknown_user_400(client, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    async def fake_users(*a, **k): return []
+    monkeypatch.setattr(jf, "list_users", fake_users)
+    r = await client.post("/api/accounts/video/kiosk-signin", headers=LAN, json={"user_id": "zz"})
+    assert r.status == 400
+
+
+async def test_signin_bad_body_and_no_key(client, ctx):
+    r = await client.post("/api/accounts/video/kiosk-signin", headers=LAN, json=[1])
+    assert r.status == 400
+    ctx.jf_env = {"BOOMBOX_JELLYFIN_BASE": "https://v.example"}
+    r = await client.post("/api/accounts/video/kiosk-signin", headers=LAN, json={"user_id": "u1"})
+    assert r.status == 400 and "API key" in (await r.json())["error"]
+
+
+async def test_signout_revokes_and_clears_kiosk(client, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+    calls: list = []
+
+    async def fake_revoke(s, base, key, dev): calls.append(("revoke", dev))
+    async def fake_inject(cdp, base, dev, creds, *a, **k): calls.append(("inject", dev, creds))
+    monkeypatch.setattr(jf, "revoke_device", fake_revoke)
+    monkeypatch.setattr(jf, "inject_kiosk", fake_inject)
+    r = await client.post("/api/accounts/video/kiosk-signout", headers=LAN, json={})
+    assert r.status == 200 and (await r.json())["ok"] is True
+    assert calls == [("revoke", "boombox-markii-kiosk"),
+                     ("inject", "boombox-markii-kiosk", None)]
+
+
+async def test_signout_reports_errors(client, monkeypatch):
+    from boombox_setup import jellyfin_signin as jf
+
+    async def fake_revoke(*a, **k): raise jf.JellyfinError("Couldn't reach the Jellyfin server")
+    async def fake_inject(*a, **k): raise jf.JellyfinError("kiosk not reachable")
+    monkeypatch.setattr(jf, "revoke_device", fake_revoke)
+    monkeypatch.setattr(jf, "inject_kiosk", fake_inject)
+    r = await client.post("/api/accounts/video/kiosk-signout", headers=LAN, json={})
+    body = await r.json()
+    assert r.status == 200 and body["ok"] is False
+    assert "reach" in body["error"] and "kiosk" in body["error"]
