@@ -1,11 +1,16 @@
-"""Writes the [subsonic] block into mopidy.conf.
+"""Keeps /etc/mopidy/mopidy.conf free of a [subsonic] section.
 
-Historical: was used to configure Mopidy-Subsonic. That plugin turned
-out to be Python-2 bit-rotten and unusable on Py3.13, so streaming now
-goes through Mopidy's built-in stream backend with direct
-/rest/stream.view URLs from boombox_library.resolver. This file is kept
-for back-compat with installs that still have Mopidy-Subsonic on disk
-(harmless when the plugin's disabled).
+Historical: this module used to write a [subsonic] block (Navidrome
+hostname/username and the PLAINTEXT password) for Mopidy-Subsonic. That
+plugin is Python-2 bit-rotten and is not installed, so the block did
+nothing except leave a credential lying in mopidy.conf. Streaming now goes
+through Mopidy's built-in stream backend against boombox-library's local
+stream proxy (stream_proxy.py), which adds auth server-side — Mopidy needs
+no source config at all.
+
+Saving the library source now REMOVES any existing [subsonic] section
+(scrubbing the password from installs that were configured before this
+change) and never writes one.
 """
 from __future__ import annotations
 
@@ -17,66 +22,54 @@ from pathlib import Path
 
 log = logging.getLogger("boombox-library.mopidy_config")
 
+# A [subsonic] header at line start plus every following line up to (not
+# including) the next line-start [section] header. Values containing '['
+# and comments mentioning "[subsonic]" don't match the header anchor.
 _SUBSONIC_BLOCK_RE = re.compile(
     r"^\[subsonic\][^\n]*\n(?:(?!^\[).*\n?)*",
     re.MULTILINE,
 )
-_BLOCK = """\
-[subsonic]
-hostname = {hostname}
-port = {port}
-username = {username}
-password = {password}
-ssl = {ssl}
-context = rest
-"""
 
 
-def _split_url(url: str) -> tuple[str, int, bool]:
-    """Parse a base URL into (hostname, port, ssl). Defaults port to 4533
-    (Navidrome) for plain HTTP if absent, 443 for HTTPS."""
-    from urllib.parse import urlparse
-    p = urlparse(url)
-    ssl = p.scheme == "https"
-    host = p.hostname or ""
-    port = p.port or (443 if ssl else 4533)
-    return host, port, ssl
+def remove_subsonic_block(path: Path) -> bool:
+    """Idempotently strip every [subsonic] section from mopidy.conf,
+    preserving all other sections and comments. Atomic via .tmp + fsync +
+    rename; the tmp file is created 0o600 like the original install.
+
+    Returns True when the file was rewritten, False when there was nothing
+    to remove (including when the file doesn't exist — never creates it).
+    """
+    if not path.exists():
+        return False
+    current = path.read_text()
+    stripped, n = _SUBSONIC_BLOCK_RE.subn("", current)
+    if n == 0:
+        return False
+    # Drop the blank-line run the removal can leave behind (and any
+    # trailing whitespace if [subsonic] was the last section).
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped).rstrip() + "\n"
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(stripped)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+    log.info("removed %d stale [subsonic] section(s) from %s", n, path)
+    return True
 
 
 def write_subsonic_block(
     path: Path,
-    url: str,
-    username: str,
-    password: str,
+    url: str = "",
+    username: str = "",
+    password: str = "",
 ) -> None:
-    """Idempotently write the [subsonic] block in mopidy.conf. Preserves
-    all other sections and any comments. Atomic via .tmp + rename + fsync.
-    Sets 0o600 on the tmp file before rename so a fresh-create doesn't
-    leak the plaintext Subsonic password to world-readable mode."""
-    host, port, ssl = _split_url(url)
-    new_block = _BLOCK.format(
-        hostname=host, port=port, username=username,
-        password=password, ssl="true" if ssl else "false",
-    )
-
-    if path.exists():
-        current = path.read_text()
-        replaced, n = _SUBSONIC_BLOCK_RE.subn(new_block + "\n", current, count=1)
-        if n == 0:
-            # Append; ensure exactly one trailing newline between sections.
-            replaced = current.rstrip() + "\n\n" + new_block
-    else:
-        replaced = new_block
-
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    # Open with explicit 0o600 so a fresh-create doesn't expose the
-    # plaintext Subsonic password to a world-readable umask default.
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(replaced)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
+    """Back-compat shim for callers that still "write" the Subsonic block
+    on save: the credentials are deliberately ignored and any existing
+    [subsonic] section is removed instead. Prefer remove_subsonic_block."""
+    remove_subsonic_block(path)
 
 
 def reload_mopidy() -> bool:

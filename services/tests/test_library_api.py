@@ -227,8 +227,11 @@ async def test_sync_run_triggers(client):
 
 
 @pytest.mark.asyncio
-async def test_resolver_endpoint_returns_cache_uri(client):
+async def test_resolver_endpoint_returns_cache_uri(client, tmp_path):
     c, ctx, conn = client
+    cached = tmp_path / "x" / "audio" / "t1.mp3"
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b"ID3")
     conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) "
                  "VALUES('ar','X','x',1,0)")
     conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,"
@@ -238,7 +241,7 @@ async def test_resolver_endpoint_returns_cache_uri(client):
                  "size_bytes,content_type,navidrome_starred,updated_at) "
                  "VALUES('t1','al','T',30,'mp3',1000,'audio/mpeg',0,0)")
     conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,"
-                 "downloaded_at) VALUES('t1','present','/x/audio/t1.mp3',1000,0)")
+                 "downloaded_at) VALUES('t1','present',?,1000,0)", (str(cached),))
     r = await c.get("/api/library/track/t1/playback")
     assert r.status == 200
     body = await r.json()
@@ -246,7 +249,7 @@ async def test_resolver_endpoint_returns_cache_uri(client):
     # Note: Task 12's fix changed the resolver URI format from `local:track:`
     # to `file://<urllib.parse.quote(path)>` so Mopidy's stream backend can
     # play directly without depending on Mopidy-Local's index.
-    assert body["uri"] == "file:///x/audio/t1.mp3"
+    assert body["uri"] == f"file://{cached}"
 
 
 @pytest.mark.asyncio

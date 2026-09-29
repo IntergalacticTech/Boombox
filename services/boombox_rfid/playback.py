@@ -2,7 +2,10 @@
 
 Reuses Phase 1's playback resolver: for each track in the bound target we
 ask the boombox-library `resolver.resolve_playback` for the right URI form
-(file:// when cached, direct stream.view URL when streaming).
+(file:// when cached, boombox-library's local stream-proxy URL —
+http://127.0.0.1:6687/api/library/stream/<id>, credential-free — when
+streaming). The source credentials passed in only gate whether streaming
+is possible; they never end up in a URI.
 
 Skips tracks the resolver marks 'offline_miss' (not cached + not online).
 """

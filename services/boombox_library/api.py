@@ -17,13 +17,13 @@ from typing import Protocol
 
 from aiohttp import web
 
-from . import __version__
+from . import __version__, stream_proxy
 from .art import fetch_art
 from .config import LibraryConfig, SourceConfig
 from .models import PinKind, PinSource
 from .pins import pin as _pin_fn
 from .pins import unpin as _unpin_fn
-from .resolver import resolve_playback
+from .resolver import PlaybackResolution, resolve_playback
 from .snapshots import compute_etag, snapshot_path
 from .subsonic import make_auth_params
 
@@ -67,12 +67,17 @@ def build_app(ctx: Context) -> web.Application:
     app.router.add_post("/api/library/pin", _pin)
     app.router.add_post("/api/library/sync/run", _sync_run)
     app.router.add_get("/api/library/track/{track_id}/playback", _resolver)
+    app.router.add_post("/api/library/resolve", _resolve_batch)
+    app.router.add_get("/api/library/artist/{artist_id}", _artist_detail)
+    app.router.add_get("/api/library/album/{album_id}", _album_detail)
+    app.router.add_get("/api/library/playlist/{playlist_id}", _playlist_detail)
     app.router.add_get("/api/library/cache/stats", _cache_stats)
     app.router.add_post("/api/library/cache/adopt", _cache_adopt)
     app.router.add_post("/api/library/cache/streamed", _cache_streamed)
     app.router.add_post("/api/library/cache/clear", _cache_clear)
     app.router.add_get("/api/library/cache/candidates", _cache_candidates)
     app.router.add_get("/api/library/art/{art_id}", _art)
+    stream_proxy.setup(app)  # GET/HEAD /api/library/stream/{track_id}
     return app
 
 
@@ -231,19 +236,149 @@ async def _sync_run(req: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
-async def _resolver(req: web.Request) -> web.Response:
-    ctx: Context = req.app["ctx"]
-    track_id = req.match_info["track_id"]
-    online = await ctx.is_online()
+def _resolve_one(ctx: Context, track_id: str, online: bool) -> PlaybackResolution:
     src = ctx.cfg.source
-    r = resolve_playback(
+    return resolve_playback(
         ctx.conn, track_id, online,
         source_url=src.url, source_username=src.username, source_password=src.password,
     )
+
+
+async def _resolver(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    track_id = req.match_info["track_id"]
+    r = _resolve_one(ctx, track_id, await ctx.is_online())
     return web.json_response({
         "source": r.source.value,
         "uri": r.uri,
         "cache_status": r.cache_status,
+    })
+
+
+RESOLVE_BATCH_MAX = 1000
+
+
+async def _resolve_batch(req: web.Request) -> web.Response:
+    """POST {"ids": [...]} → {"items": [{id, source, uri, cache_status}]}
+    in request order. One reachability check for the whole batch, so
+    queueing an album is one round-trip instead of one per track."""
+    ctx: Context = req.app["ctx"]
+    try:
+        body = await req.json()
+    except ValueError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    ids = body.get("ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        return web.json_response({"error": "ids must be a list of strings"}, status=400)
+    if len(ids) > RESOLVE_BATCH_MAX:
+        return web.json_response(
+            {"error": f"too many ids (max {RESOLVE_BATCH_MAX})"}, status=400)
+    online = await ctx.is_online()
+    items = []
+    for tid in ids:
+        r = _resolve_one(ctx, tid, online)
+        items.append({
+            "id": tid,
+            "source": r.source.value,
+            "uri": r.uri,
+            "cache_status": r.cache_status,
+        })
+    return web.json_response({"items": items})
+
+
+# ----- detail endpoints (touch UI drill-down) -----
+#
+# Tracks have no artist column of their own; a track's artist is its
+# album's artist (compilations therefore show the album artist). If a
+# later schema adds tracks.artist, it wins when non-empty.
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(r[1] == column for r in conn.execute(f"PRAGMA table_info({table})"))
+
+
+def _track_columns(conn: sqlite3.Connection) -> str:
+    """SELECT list for the shared track shape; expects aliases t (tracks),
+    ar (album artist) and cs (cache_state)."""
+    artist = ("COALESCE(NULLIF(t.artist, ''), ar.name)"
+              if _has_column(conn, "tracks", "artist") else "ar.name")
+    return (
+        f"t.id, t.title, {artist} AS artist, t.album_id, "
+        "t.disc_no AS disc, t.track_no AS track, t.duration_s AS duration, "
+        "COALESCE(cs.status, 'absent') AS cache_status"
+    )
+
+
+_TRACK_JOINS = (
+    "JOIN albums al ON al.id = t.album_id "
+    "LEFT JOIN artists ar ON ar.id = al.artist_id "
+    "LEFT JOIN cache_state cs ON cs.track_id = t.id "
+)
+
+
+def _not_found(what: str) -> web.Response:
+    return web.json_response({"error": f"{what} not found"}, status=404)
+
+
+async def _artist_detail(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    artist_id = req.match_info["artist_id"]
+    row = ctx.conn.execute(
+        "SELECT id, name, art_id FROM artists WHERE id=?", (artist_id,),
+    ).fetchone()
+    if row is None:
+        return _not_found("artist")
+    # Year ascending with undated albums last, then by sort name.
+    albums = ctx.conn.execute(
+        "SELECT id, name, year, art_id, song_count AS track_count FROM albums "
+        "WHERE artist_id=? ORDER BY year IS NULL, year, sort_name",
+        (artist_id,),
+    )
+    return web.json_response({
+        "artist": dict(row),
+        "albums": [dict(a) for a in albums],
+    })
+
+
+async def _album_detail(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    album_id = req.match_info["album_id"]
+    row = ctx.conn.execute(
+        "SELECT al.id, al.name, ar.name AS artist, al.artist_id, al.year, al.art_id "
+        "FROM albums al LEFT JOIN artists ar ON ar.id = al.artist_id "
+        "WHERE al.id=?", (album_id,),
+    ).fetchone()
+    if row is None:
+        return _not_found("album")
+    tracks = ctx.conn.execute(
+        f"SELECT {_track_columns(ctx.conn)} FROM tracks t {_TRACK_JOINS}"
+        "WHERE t.album_id=? ORDER BY t.disc_no, t.track_no, t.title",
+        (album_id,),
+    )
+    return web.json_response({
+        "album": dict(row),
+        "tracks": [dict(t) for t in tracks],
+    })
+
+
+async def _playlist_detail(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    playlist_id = req.match_info["playlist_id"]
+    row = ctx.conn.execute(
+        "SELECT id, name FROM playlists WHERE id=?", (playlist_id,),
+    ).fetchone()
+    if row is None:
+        return _not_found("playlist")
+    # Entries pointing at tracks the catalog doesn't know (not yet synced,
+    # or deleted upstream) are dropped — there's nothing to show or play.
+    tracks = ctx.conn.execute(
+        f"SELECT {_track_columns(ctx.conn)} FROM playlist_tracks pt "
+        f"JOIN tracks t ON t.id = pt.track_id {_TRACK_JOINS}"
+        "WHERE pt.playlist_id=? ORDER BY pt.position",
+        (playlist_id,),
+    )
+    return web.json_response({
+        "playlist": dict(row),
+        "tracks": [dict(t) for t in tracks],
     })
 
 

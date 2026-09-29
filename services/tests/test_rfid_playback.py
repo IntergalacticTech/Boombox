@@ -45,31 +45,37 @@ def test_expand_track_returns_self(tmp_path: Path):
     assert ids == ["t1"]
 
 
-def test_resolve_uris_streams_when_online(tmp_path: Path):
+def test_resolve_uris_streams_when_online(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("BOOMBOX_LIBRARY_STREAM_BASE", raising=False)
     conn = lib_connect(tmp_path / "lib.db"); lib_migrate(conn); rfid_migrate(conn)
     _seed(conn)
     uris = resolve_uris(
         conn, ["t1", "t2"], online=True,
         source_url="http://nav:4533", source_username="u", source_password="p",
     )
-    assert len(uris) == 2
-    for u in uris:
-        assert u.startswith("http://nav:4533/rest/stream.view?")
-    assert "id=t1" in uris[0]
-    assert "id=t2" in uris[1]
+    # Local stream-proxy URLs — no Navidrome host or auth params leak into
+    # the tracklist.
+    assert uris == [
+        "http://127.0.0.1:6687/api/library/stream/t1",
+        "http://127.0.0.1:6687/api/library/stream/t2",
+    ]
 
 
-def test_resolve_uris_returns_file_when_cached(tmp_path: Path):
+def test_resolve_uris_returns_file_when_cached(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("BOOMBOX_LIBRARY_STREAM_BASE", raising=False)
     conn = lib_connect(tmp_path / "lib.db"); lib_migrate(conn); rfid_migrate(conn)
     _seed(conn)
+    cached = tmp_path / "audio" / "t1.mp3"
+    cached.parent.mkdir()
+    cached.write_bytes(b"ID3")
     conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,"
-                 "downloaded_at) VALUES('t1','present','/x/audio/t1.mp3',1000,0)")
+                 "downloaded_at) VALUES('t1','present',?,1000,0)", (str(cached),))
     uris = resolve_uris(
         conn, ["t1", "t2"], online=True,
         source_url="http://nav:4533", source_username="u", source_password="p",
     )
-    assert uris[0] == "file:///x/audio/t1.mp3"
-    assert uris[1].startswith("http://nav:4533/rest/stream.view?")
+    assert uris[0] == f"file://{cached}"
+    assert uris[1] == "http://127.0.0.1:6687/api/library/stream/t2"
 
 
 def test_resolve_uris_skips_offline_miss(tmp_path: Path):
