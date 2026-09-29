@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { accountsApi } from "./api";
 import type { OkResult } from "./types";
-import { ErrorText, Field, PrimaryButton, inputStyle } from "../components/ui";
+import { ErrorText, Field, PrimaryButton, inputStyle } from "../ui";
 
 const MIN = 10;
 const MAX = 128;
@@ -24,8 +24,8 @@ export function WebLoginCard() {
       const r = await accountsApi.put<OkResult>("web-login",
         { current_password: current, new_password: next });
       if (r.ok) {
+        // The admin session survives a password change; no reload needed.
         setDone(true);
-        setTimeout(() => window.location.reload(), 2000);
       } else {
         setError(r.error ?? "Couldn't change the password.");
       }
@@ -37,12 +37,12 @@ export function WebLoginCard() {
   };
 
   if (done) return <p style={{ margin: 0 }}>
-    Password changed — your browser will ask you to sign in again.</p>;
+    Password changed — use the new one next time you unlock Admin or open the music share.</p>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <p style={{ margin: 0, fontSize: 13, color: "var(--ink2)" }}>
-        The password for this web UI (user <code>boombox</code>) and the music file share.</p>
+        The boombox web password (user <code>boombox</code>): it unlocks Admin here and the music file share.</p>
       <Field label="Current password">
         <input type="password" value={current} autoComplete="current-password"
           onChange={(e) => setCurrent(e.target.value)} style={inputStyle} />

@@ -5,7 +5,6 @@ import { TabBar, tabForRoute } from "./TabBar";
 import { Sidebar } from "./Sidebar";
 import { NowPanel } from "./NowPanel";
 import { MiniPlayer } from "./MiniPlayer";
-import { SectionMessage } from "./SectionMessage";
 import { NowPlaying } from "../screens/NowPlaying";
 import { Music } from "../screens/Music";
 import { Playlists } from "../screens/Playlists";
@@ -13,6 +12,8 @@ import { Search } from "../screens/Search";
 import { Files } from "../screens/Files";
 import { More } from "../screens/More";
 import { Video } from "../screens/Video";
+import { AccountsSection } from "../admin/AccountsSection";
+import { useAdminSession } from "../admin/session";
 
 export interface SectionProps { params: string[]; navigate: Navigate; desktop: boolean }
 
@@ -26,8 +27,7 @@ export function renderSection(route: Route, p: SectionProps, onOpenSettings: () 
     case "search": return <Search autoFocus={p.desktop} />;
     case "playlists": return <Playlists />;
     case "files": return <Files />;
-    case "accounts":
-      return <SectionMessage title="Accounts" message="Admin isn't available in this version yet." />;
+    case "accounts": return <AccountsSection desktop={p.desktop} />;
     case "more":
       return <More navigate={p.navigate} onOpenSettings={onOpenSettings} adminLocked={adminLocked} />;
   }
@@ -38,7 +38,8 @@ export function renderSection(route: Route, p: SectionProps, onOpenSettings: () 
 export function AppShell({ onOpenSettings }: { onOpenSettings: () => void }) {
   const desktop = useIsDesktop();
   const { route, params, navigate } = useHashRoute();
-  const adminLocked = true;
+  const { unlocked } = useAdminSession();
+  const adminLocked = !unlocked;
   const content = renderSection(route, { params, navigate, desktop }, onOpenSettings, adminLocked);
 
   if (desktop) {

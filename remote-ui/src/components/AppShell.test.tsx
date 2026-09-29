@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { AppShell } from "./AppShell";
 import { ApiProvider, type RemoteApi } from "../lib/api";
 import { RemoteContextHarness } from "../state/store";
 import { setViewport } from "../test/viewport";
 import type { RemoteState } from "../transport/types";
+import { adminSession } from "../admin/session";
 
 const state: RemoteState = {
   boombox: { id: "b", name: "Kitchen", version: 1 },
@@ -104,5 +105,23 @@ describe("AppShell", () => {
     const sidebar = screen.getByRole("navigation", { name: "Sections" });
     fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
     expect(onOpenSettings).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("AppShell admin", () => {
+  it("Accounts is locked by default and the sidebar lock follows the session", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
+    adminSession.clear("logout");
+    setViewport(1440, 900);
+    window.location.hash = "#/accounts";
+    renderShell();
+    expect(await screen.findByLabelText("Web password")).toBeTruthy();
+    const sidebar = screen.getByRole("navigation", { name: "Sections" });
+    const accounts = within(sidebar).getByRole("button", { name: "Accounts" });
+    expect(accounts.textContent).toContain("🔒");
+    act(() => adminSession.set("t"));
+    expect(accounts.textContent).toContain("🔓");
+    act(() => adminSession.clear("logout"));
+    vi.unstubAllGlobals();
   });
 });
