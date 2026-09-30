@@ -162,7 +162,7 @@ describe("HomeLibrary play cap", () => {
     fireEvent.click(screen.getByRole("button", { name: "Queue all" }));
     await waitFor(() => expect(post).toHaveBeenCalledTimes(4));
     expect((post.mock.calls[3][1] as { ids: string[] }).ids).toHaveLength(500);
-  });
+  }, 20_000); // renders 1200 rows — slower CI runners need more than the 5 s default
 
   it("caps an artist's Play all at 500 and says so", async () => {
     const album = (n: string) => ({ album: { id: n, name: n },
