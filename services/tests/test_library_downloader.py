@@ -724,3 +724,29 @@ async def test_make_fetch_and_default_fetch_use_the_idle_timeouts(tmp_path, monk
         with pytest.raises(RuntimeError):
             await fetch("http://x/", {}, tmp_path / "z.part")
     assert seen == [dl.FETCH_TIMEOUT, dl.FETCH_TIMEOUT]
+
+
+async def test_aclose_waits_for_cancel_cleanup_and_refuses_new_work(tmp_path):
+    conn = _db(tmp_path, n=1)
+    root = _cache(tmp_path)
+    started = asyncio.Event()
+
+    async def blocked(url, params, dest):
+        dest.write_bytes(b"partial")
+        started.set()
+        await asyncio.Event().wait()
+    q = DownloadQueue(conn, FakeStreamingClient(b""), root, 2, blocked)
+    assert q.enqueue("t0")
+    await asyncio.wait_for(started.wait(), 2)
+    task = q._in_flight["t0"]
+    await q.aclose()
+    assert task.done() and not (root / "tmp" / "t0.part").exists()
+    assert _status(conn, "t0") == "absent"
+    assert q.enqueue("t0") is False and q._runner.done()
+
+
+def test_set_client_swaps_the_client(tmp_path):
+    q = DownloadQueue(_db(tmp_path), FakeStreamingClient(b""), _cache(tmp_path))
+    new = FakeStreamingClient(b"x")
+    q.set_client(new)
+    assert q.client is new

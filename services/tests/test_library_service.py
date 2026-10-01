@@ -414,6 +414,12 @@ class FakeQueue:
     def stop(self):
         self.stopped = True
 
+    async def aclose(self):
+        self.stop()
+
+    def set_client(self, client):
+        self.client = client
+
 
 def _seed_pinned_album(conn):
     conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) VALUES('ar','X','x',1,0)")
@@ -473,9 +479,14 @@ async def test_drive_swap_stops_the_old_queue_before_building_the_new_one(
     events: list[str] = []
 
     class OldQueue(FakeQueue):
-        def stop(self):
+        async def aclose(self):
+            # still unwinding for a loop turn: the build must wait for it
+            # (asyncio.sleep is patched by _poll_once, so yield by hand)
+            fut = asyncio.get_running_loop().create_future()
+            asyncio.get_running_loop().call_soon(fut.set_result, None)
+            await fut
             events.append("stop old")
-            super().stop()
+            self.stop()
 
     old = OldQueue()
     ctx._download_queue = old
@@ -500,18 +511,17 @@ async def test_drive_swap_stops_the_old_queue_before_building_the_new_one(
     assert ctx._download_queue.cache_root == second
 
 
-def test_credentials_change_rebuilds_the_queue(ctx, tmp_path):
+def test_credentials_change_updates_the_client_in_place(ctx, tmp_path):
     ctx.cache_state = svc.CacheDriveState(present=True, mount_path=tmp_path / "m",
                                           free_bytes=None, total_bytes=None)
     (tmp_path / "m").mkdir()
     first = ctx.download_queue()
     assert first is not None and ctx.download_queue() is first
-    stopped: list[bool] = []
-    first.stop = lambda: stopped.append(True)
+    old_client = first.client
     ctx.cfg = replace(ctx.cfg, source=SourceConfig(url="https://music.example",
                                                    username="u", password="new"))
-    second = ctx.download_queue()
-    assert second is not None and second is not first and stopped == [True]
+    assert ctx.download_queue() is first and first.client is not old_client
+    assert ctx._queue_key == (str(tmp_path / "m"), "https://music.example", "u", "new")
 
 
 @pytest.mark.asyncio
@@ -525,6 +535,9 @@ async def test_close_stops_the_queue_and_the_probe(ctx):
     ctx._stream_probe.close = close
     await ctx.close()
     assert fake.stopped and ctx._download_queue is None and closed == [True]
+    ctx.cache_state = svc.CacheDriveState(present=True, mount_path=Path("/nonexistent"),
+                                          free_bytes=None, total_bytes=None)
+    assert ctx.download_queue() is None          # never rebuilt after close
 
 
 def test_failed_downloads_are_retried_on_the_hourly_cadence_only(ctx):
@@ -540,3 +553,157 @@ def test_failed_downloads_are_retried_on_the_hourly_cadence_only(ctx):
     fake.enqueued.clear()
     ctx._enqueue_pinned_downloads(now=10_000.0 + 3600)       # an hour later
     assert sorted(fake.enqueued) == ["t1", "t2"]
+
+
+def test_admin_retry_bypasses_the_hourly_gate(ctx):
+    _seed_pinned_album(ctx.conn)
+    ctx.conn.execute("INSERT INTO cache_state(track_id,status,error_message) VALUES('t1','error','boom')")
+    fake = FakeQueue()
+    ctx._ensure_download_queue = lambda: fake
+    ctx._enqueue_pinned_downloads(now=10_000.0)
+    fake.enqueued.clear()
+    ctx._enqueue_pinned_downloads(now=10_000.0 + 60, force_failed=True)
+    assert sorted(fake.enqueued) == ["t1", "t2"]
+    fake.enqueued.clear()
+    ctx._enqueue_pinned_downloads(now=10_000.0 + 120)       # gate restarts from the forced retry
+    assert fake.enqueued == ["t2"]
+    ctx.reset_failed_retry()
+    fake.enqueued.clear()
+    ctx._enqueue_pinned_downloads(now=10_000.0 + 180)
+    assert sorted(fake.enqueued) == ["t1", "t2"]
+
+
+def test_failed_retry_gate_defaults_to_the_monotonic_clock(ctx, monkeypatch):
+    _seed_pinned_album(ctx.conn)
+    ctx.conn.execute("INSERT INTO cache_state(track_id,status,error_message) VALUES('t1','error','boom')")
+    fake = FakeQueue()
+    ctx._ensure_download_queue = lambda: fake
+    monkeypatch.setattr(svc.time, "monotonic", lambda: 5.0)   # small: early boot
+    monkeypatch.setattr(svc.time, "time", lambda: 0.0)        # a wall clock that is no help
+    ctx._enqueue_pinned_downloads()
+    assert sorted(fake.enqueued) == ["t1", "t2"]               # first sync still retries
+    assert ctx._last_failed_retry == 5.0
+
+
+# ---- real DownloadQueue: teardown is awaited, creds change keeps downloads ----
+
+class _BlockedFetch:
+    """fetch that writes a partial, records which password it was handed,
+    then blocks until released."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.passwords: list[str] = []
+        self.unwound: list[str] = []
+
+    async def __call__(self, url, params, dest):
+        self.passwords.append(params["p"])
+        dest.write_bytes(b"partial")
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.unwound.append(dest.name)
+            raise
+        dest.write_bytes(b"whole track")
+
+
+class _PwClient:
+    def __init__(self, url, user, password) -> None:
+        self.password = password
+
+    def download_url(self, track_id):
+        return ("http://x/rest/download.view", {"id": track_id, "p": self.password})
+
+
+def _real_queue_setup(ctx, monkeypatch, fetch):
+    ctx.cfg = replace(ctx.cfg, cache=replace(ctx.cfg.cache, reserve_bytes=0))
+    ctx._online = True
+
+    async def not_streaming():
+        return False
+    ctx._stream_probe.is_streaming = not_streaming
+    monkeypatch.setattr(svc, "SubsonicClient", _PwClient)
+    real = svc.DownloadQueue
+    built: list = []
+
+    def build(*args, **kwargs):
+        q = real(*args, fetch=fetch, **kwargs)
+        built.append(q)
+        return q
+    monkeypatch.setattr(svc, "DownloadQueue", build)
+    return built
+
+
+def _drive(path: Path) -> Path:
+    for d in ("audio", "tmp"):
+        (path / d).mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@pytest.mark.asyncio
+async def test_credentials_change_keeps_the_in_flight_download(ctx, tmp_path, monkeypatch):
+    _seed_pinned_album(ctx.conn)
+    fetch = _BlockedFetch()
+    built = _real_queue_setup(ctx, monkeypatch, fetch)
+    root = _drive(tmp_path / "m")
+    ctx.cache_state = svc.CacheDriveState(present=True, mount_path=root,
+                                          free_bytes=None, total_bytes=None)
+    q = ctx.download_queue()
+    assert q is not None and q.enqueue("t1")
+    await asyncio.wait_for(fetch.started.wait(), 2)
+    part = root / "tmp" / "t1.part"
+    assert part.exists()
+
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig(url="https://music.example",
+                                                   username="u", password="new"))
+    assert ctx.download_queue() is q and len(built) == 1     # no rebuild, no sweep
+    await asyncio.sleep(0)
+    assert part.exists() and _status(ctx.conn, "t1") == "downloading"
+
+    fetch.release.set()
+    await asyncio.wait_for(q.drain(), 2)
+    assert _status(ctx.conn, "t1") == "present"
+    assert (root / "audio" / "t1.mp3").read_bytes() == b"whole track"
+
+    assert ctx.download_queue().enqueue("t2")
+    await asyncio.wait_for(q.drain(), 2)
+    assert fetch.passwords == ["p", "new"]                    # next download, new client
+    assert _status(ctx.conn, "t2") == "present"
+
+
+@pytest.mark.asyncio
+async def test_drive_swap_waits_for_the_old_download_to_unwind(ctx, tmp_path, monkeypatch):
+    _seed_pinned_album(ctx.conn)
+    fetch = _BlockedFetch()
+    built = _real_queue_setup(ctx, monkeypatch, fetch)
+    first = _drive(tmp_path / "media" / "usb0")
+    (first / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    old = ctx.download_queue()
+    assert old is not None and old.enqueue("t1")
+    await asyncio.wait_for(fetch.started.wait(), 2)
+    old_task = old._in_flight["t1"]
+    assert (first / "tmp" / "t1.part").exists()
+
+    seen: list = []
+    building = svc.DownloadQueue
+
+    def build(*args, **kwargs):
+        seen.append((old_task.done(), list(fetch.unwound),
+                     (first / "tmp" / "t1.part").exists(), _status(ctx.conn, "t1")))
+        return building(*args, **kwargs)
+    monkeypatch.setattr(svc, "DownloadQueue", build)
+
+    (first / ".boombox-cache").unlink()
+    second = _drive(tmp_path / "media" / "usb1")
+    (second / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+
+    assert ctx.cache_state.mount_path == second
+    # When the new queue was constructed, the old download had already run
+    # its cancel cleanup: task finished, .part removed, row reset.
+    assert seen == [(True, ["t1.part"], False, "absent")]
+    assert ctx._download_queue is built[-1] and built[-1].cache_root == second
+    assert old_task.cancelled()

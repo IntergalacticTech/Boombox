@@ -322,6 +322,7 @@ class DownloadQueue:
         self._link_failures: dict[str, int] = {}     # consecutive, per track
         self._cancelled: set[str] = set()            # cancel()ed while in flight
         self.paused: Optional[str] = None
+        self._closed = False                         # stop()/aclose() called
         # A new queue owns this drive: whatever an earlier run left half
         # done (power cut) is not downloading any more.
         sweep_partials(cache_root)
@@ -330,7 +331,9 @@ class DownloadQueue:
 
     def enqueue(self, track_id: str) -> bool:
         """Schedule a download. False when it is already queued, in flight
-        or present."""
+        or present, or when the queue has been stopped."""
+        if self._closed:
+            return False
         self._cancelled.discard(track_id)   # wanted again after all
         if track_id in self._pending or track_id in self._in_flight:
             return False
@@ -449,13 +452,35 @@ class DownloadQueue:
         while self._pending or self._in_flight:
             await asyncio.sleep(0.005)
 
+    def set_client(self, client: StreamingClient) -> None:
+        """Use a new client (credentials changed) for downloads started
+        from now on; in-flight ones finish with the URL they already have."""
+        self.client = client
+
     def stop(self) -> None:
-        """Cancel the scheduler and every in-flight download (drive lost,
-        shutdown). Their .part files are removed by download_track."""
+        """Cancel the scheduler and every in-flight download without waiting
+        for them to unwind. Callers that drop or replace the queue use
+        aclose(), which also waits."""
+        self._cancel_all()
+
+    def _cancel_all(self) -> list[asyncio.Task]:
+        self._closed = True
+        tasks: list[asyncio.Task] = list(self._in_flight.values())
         if self._runner is not None:
-            self._runner.cancel()
-        for task in self._in_flight.values():
+            tasks.append(self._runner)
+        for task in tasks:
             task.cancel()
         self._pending.clear()
         self._link_failures.clear()
         self._cancelled.clear()
+        return tasks
+
+    async def aclose(self) -> None:
+        """Cancel the scheduler and every in-flight download (drive lost,
+        drive swap, shutdown) and wait until they have unwound: each one's
+        cancel handler (download_track) has removed its tmp/<id>.part and
+        reset its row before this returns, so a queue built afterwards on
+        the same root can never have its own .part or row clobbered."""
+        tasks = self._cancel_all()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)

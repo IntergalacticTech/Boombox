@@ -114,11 +114,17 @@ class ServiceContext:
         self._download_queue: DownloadQueue | None = None
         # (drive, source) the current queue was built for; see _ensure_download_queue
         self._queue_key: tuple[str, str, str, str] | None = None
+        # Teardowns (DownloadQueue.aclose) of dropped queues still unwinding:
+        # no queue is built until they are done (see _drop_download_queue).
+        self._retiring: set[asyncio.Future] = set()
+        self._closed = False
         # Mopidy "is a stream-proxy URI playing?" — a download gate.
         self._stream_probe = MopidyStreamProbe()
         # Last time pinned tracks in 'error' / 'no_space' were re-enqueued:
-        # failed downloads are retried on the hourly cadence only.
-        self._last_failed_retry = 0.0
+        # failed downloads are retried on the hourly cadence only. Monotonic
+        # (wall-clock jumps from NTP at boot must not skip or force a retry);
+        # -inf so the first sync always retries.
+        self._last_failed_retry = float("-inf")
         # Phase 2: surfaced through /api/library/health for the UI's SyncIndicator
         self.last_sync_ts: float = 0.0
         self.syncing: bool = False
@@ -233,7 +239,8 @@ class ServiceContext:
         return self._ensure_download_queue()
 
     async def close(self) -> None:
-        self._stop_download_queue()
+        self._closed = True
+        await self._retire_download_queue()
         await self._stream_probe.close()
 
     # ----- background loops -----
@@ -369,13 +376,18 @@ class ServiceContext:
                         log.info("cache drive present at %s", new_state.mount_path)
                         update_symlink(DEFAULT_SYMLINK, new_state.mount_path)
                         await self._reconcile_cache_rows(new_state.mount_path)
+                        # Drive swap: the old queue's downloads must have
+                        # finished their cancel cleanup before a new queue
+                        # (whose constructor sweeps tmp/ and resets rows)
+                        # exists.
+                        await self._retire_download_queue()
                         self._init_download_queue(new_state.mount_path)
                         self._load_sidecar_if_present()
                     else:
                         lost = self.cache_state.mount_path
                         log.warning("cache drive lost")
                         remove_symlink(DEFAULT_SYMLINK)
-                        self._stop_download_queue()
+                        await self._retire_download_queue()
                         if lost is not None:
                             n = mark_rows_missing(self.conn, lost)
                             if n:
@@ -417,7 +429,15 @@ class ServiceContext:
                      gone, back)
 
     def _init_download_queue(self, mount: Path) -> None:
-        self._stop_download_queue()
+        """Build the queue for mount. Callers drop the previous queue first
+        and, on async paths, await its teardown (_retire_download_queue);
+        while any teardown is still unwinding nothing is built — the next
+        sync or request builds it lazily (_ensure_download_queue)."""
+        if self._closed or self._download_queue is not None:
+            return
+        if self._teardown_pending():
+            log.info("previous download queue still stopping; rebuild deferred")
+            return
         src = self.cfg.source
         if not src.url:
             return
@@ -437,27 +457,77 @@ class ServiceContext:
         )
         self._queue_key = (str(mount), src.url, src.username, src.password)
 
-    def _stop_download_queue(self) -> None:
-        if self._download_queue is not None:
-            self._download_queue.stop()
+    def _teardown_pending(self) -> bool:
+        return any(not f.done() for f in self._retiring)
+
+    def _drop_download_queue(self) -> None:
+        """Detach the current queue and start its teardown (aclose) in the
+        background; _retiring tracks it so no new queue is built on top of
+        downloads still unwinding. For sync callers; async paths await
+        _retire_download_queue instead."""
+        queue = self._download_queue
         self._download_queue = None
         self._queue_key = None
+        if queue is None:
+            return
+        # Its pending (not yet started) tracks are dropped here; their rows
+        # go back to 'absent' and the next sync re-enqueues them.
+        try:
+            fut = asyncio.ensure_future(queue.aclose())
+        except RuntimeError:          # no running loop: nothing to wait for
+            queue.stop()
+            return
+        self._retiring.add(fut)
+        fut.add_done_callback(self._retiring.discard)
+
+    async def _retire_download_queue(self) -> None:
+        """Drop the current queue and wait until it (and any earlier queue
+        still stopping) has fully torn down."""
+        self._drop_download_queue()
+        if self._retiring:
+            await asyncio.gather(*list(self._retiring), return_exceptions=True)
 
     def _ensure_download_queue(self) -> DownloadQueue | None:
         """The queue for the current drive + source: built on first need
         (a source saved after the drive was adopted — the internal drive
-        never "changes"), rebuilt when the drive or the credentials change."""
+        never "changes"). A credentials-only change updates the live
+        queue's client in place (no rebuild, in-flight downloads keep
+        going); a drive change is cache_poll's job, which awaits the old
+        queue's teardown before building the new one."""
+        if self._closed:
+            return None
         mount = self.cache_state.mount_path if self.cache_state.present else None
         src = self.cfg.source
         if mount is None or not src.url:
-            self._stop_download_queue()
+            self._drop_download_queue()
             return None
-        if self._download_queue is None or self._queue_key != (
-                str(mount), src.url, src.username, src.password):
+        key = (str(mount), src.url, src.username, src.password)
+        queue = self._download_queue
+        if queue is not None and self._queue_key != key:
+            if self._queue_key is not None and self._queue_key[0] == str(mount):
+                queue.set_client(SubsonicClient(src.url, src.username, src.password))
+                self._queue_key = key
+            else:
+                # Drive changed under a sync caller (cache_poll normally gets
+                # there first): tear down in the background; built once done.
+                self._drop_download_queue()
+        if self._download_queue is None:
             self._init_download_queue(mount)
         return self._download_queue
 
-    def _enqueue_pinned_downloads(self, now: float | None = None) -> None:
+    def reset_failed_retry(self) -> None:
+        """Let the next _enqueue_pinned_downloads re-enqueue 'error' /
+        'no_space' tracks regardless of the hourly gate (admin "Retry
+        failed")."""
+        self._last_failed_retry = float("-inf")
+
+    def _enqueue_pinned_downloads(self, now: float | None = None, *,
+                                  force_failed: bool = False) -> None:
+        """Enqueue every pinned track not yet on disk. Tracks that failed
+        ('error' / 'no_space') are included only once per sync interval
+        (hourly), or when force_failed (admin "Retry failed")."""
+        if force_failed:
+            self.reset_failed_retry()
         queue = self._ensure_download_queue()
         if queue is None:
             log.info("no music storage or no source; pinned downloads deferred")
@@ -465,7 +535,7 @@ class ServiceContext:
         pinned = all_pinned_track_ids(self.conn)
         if not pinned:
             return
-        now = time.time() if now is None else now
+        now = time.monotonic() if now is None else now
         retry_failed = now - self._last_failed_retry >= self.cfg.sync.interval_seconds
         skip = ("present",) if retry_failed else ("present", "error", "no_space")
         marks = ",".join("?" * len(skip))
@@ -513,8 +583,9 @@ async def amain() -> None:
 
     sync_task.cancel()
     cache_task.cancel()
-    await ctx.close()
+    # Stop serving first so no request can rebuild the queue mid-close.
     await runner.cleanup()
+    await ctx.close()
     await close_shared_session()
 
 
