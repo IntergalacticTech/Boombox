@@ -10,6 +10,9 @@ export interface RemoteApi {
   get<T = unknown>(path: string): Promise<T>;
   /** POST <base><path> with JSON body + bearer token. JSON response. */
   post<T = unknown>(path: string, body?: unknown): Promise<T>;
+  /** DELETE <base><path> with a JSON body + bearer token. JSON response.
+   *  Optional so test doubles needn't implement it. */
+  del?<T = unknown>(path: string, body?: unknown): Promise<T>;
   /** POST multipart upload under field "file". Parsed JSON response. */
   uploadFiles<T = unknown>(path: string, files: File[]): Promise<T>;
   /** GET binary (posters, cover art) with the bearer token — <img src> can't
@@ -51,6 +54,15 @@ class HttpApi implements RemoteApi {
   async post<T>(path: string, body?: unknown): Promise<T> {
     const r = await this.check(await fetch(this.url(path), {
       method: "POST",
+      headers: { ...this.authHeader(), "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }));
+    return r.json() as Promise<T>;
+  }
+
+  async del<T>(path: string, body?: unknown): Promise<T> {
+    const r = await this.check(await fetch(this.url(path), {
+      method: "DELETE",
       headers: { ...this.authHeader(), "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     }));

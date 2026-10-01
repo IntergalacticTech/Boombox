@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { HomeLibrary } from "./HomeLibrary";
 import { Music } from "./Music";
 import { ApiProvider, ApiError, type RemoteApi } from "../lib/api";
@@ -196,5 +196,118 @@ describe("Music", () => {
     expect(await screen.findByText("Blue")).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "On this boombox" }));
     expect(navigate).toHaveBeenCalledWith("music", ["boombox"]);
+  });
+});
+
+const ALBUM_OFFLINE = { ...ALBUM, keep: { state: "kept", tracks_total: 3, tracks_present: 2 },
+  tracks: [{ ...ALBUM.tracks[0], offline: true }, { ...ALBUM.tracks[1], offline: false },
+           { ...ALBUM.tracks[2], offline: true }] };
+
+function offlineApi(overrides: Partial<RemoteApi> = {}): RemoteApi {
+  return mockApi({
+    get: vi.fn().mockImplementation(async (p: string) => {
+      if (p === "api/remote/home/status") return { online: false, internal_storage: true };
+      if (p === "api/remote/home/offline") return { album_ids: ["al1"], artist_ids: ["ar1"], playlist_ids: [] };
+      if (p === "api/remote/home/browse?type=albums") return ALBUMS;
+      if (p === "api/remote/home/album/al1") return ALBUM_OFFLINE;
+      if (p === "api/remote/home/album/al2") return { ...ALBUM2, tracks: [{ id: "t9", title: "Help Me", offline: false }] };
+      throw new Error(`unmocked ${p}`);
+    }),
+    ...overrides,
+  });
+}
+
+function albumApi(keep: object, extra: Partial<RemoteApi> = {}): RemoteApi {
+  return mockApi({
+    get: vi.fn().mockImplementation(async (p: string) => {
+      if (p === "api/remote/home/album/al1") return { ...ALBUM, keep };
+      throw new Error(`unmocked ${p}`);
+    }),
+    ...extra,
+  });
+}
+
+describe("HomeLibrary offline + keep", () => {
+  it("offline: banner, dimmed un-kept rows, Play all sends only kept tracks", async () => {
+    const api = offlineApi();
+    wrap(api, ["album", "al1"]);
+    expect(await screen.findByText("Offline — showing kept music")).toBeTruthy();
+    const row = (await screen.findByText("My Old Man")).closest("li")!;
+    expect(row.textContent).toContain("not offline");
+    expect((within(row).getByRole("button", { name: "Play from My Old Man" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Play all" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith(
+      "api/remote/home/play", { ids: ["t1", "t3"], mode: "play" }));
+  });
+
+  it("offline: album tiles that aren't kept are dimmed", async () => {
+    wrap(offlineApi(), []);
+    await screen.findByText("Offline — showing kept music");
+    await waitFor(() => expect(screen.getByRole("button", { name: /Court and Spark/ }).textContent)
+      .toContain("not offline"));
+    expect(screen.getByRole("button", { name: /^Blue/ }).textContent).not.toContain("not offline");
+  });
+
+  it("offline with nothing kept: says so without calling play", async () => {
+    const api = offlineApi();
+    wrap(api, ["album", "al2"]);
+    await screen.findByText("Offline — showing kept music");
+    await screen.findByText("Help Me");
+    fireEvent.click(screen.getByRole("button", { name: "Play all" }));
+    expect(await screen.findByText("None of these tracks are on the boombox.")).toBeTruthy();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("Keep offline pins the album and shows progress", async () => {
+    const api = albumApi({ state: "none", tracks_total: 3, tracks_present: 0 }, {
+      post: vi.fn().mockImplementation(async (p: string) => p === "api/remote/home/keep"
+        ? { ok: true, queued: 3, keep: { state: "kept", tracks_total: 3, tracks_present: 0 } }
+        : { ok: true, count: 3, skipped: 0 }),
+    });
+    wrap(api, ["album", "al1"]);
+    const sw = await screen.findByRole("switch", { name: "Keep offline" });
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(sw);
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("api/remote/home/keep", { kind: "album", id: "al1" }));
+    expect(await screen.findByText("0 / 3 on the boombox")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Keep offline" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("a kept album can be removed with DELETE", async () => {
+    const del = vi.fn().mockResolvedValue({ ok: true, cancelled: 0,
+      keep: { state: "none", tracks_total: 3, tracks_present: 3 } });
+    const api = albumApi({ state: "kept", tracks_total: 3, tracks_present: 3 }, { del });
+    wrap(api, ["album", "al1"]);
+    expect(await screen.findByText("All 3 on the boombox")).toBeTruthy();
+    fireEvent.click(screen.getByRole("switch", { name: "Keep offline" }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith("api/remote/home/keep", { kind: "album", id: "al1" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Keep offline" })
+      .getAttribute("aria-checked")).toBe("false"));
+  });
+
+  it("a starred album says so and has no switch", async () => {
+    wrap(albumApi({ state: "starred", tracks_total: 3, tracks_present: 2 }), ["album", "al1"]);
+    expect(await screen.findByText(/Starred in Navidrome/)).toBeTruthy();
+    expect(screen.getByText("2 / 3 on the boombox")).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+  });
+
+  it("progress refreshes while a kept album downloads", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    const api = mockApi({
+      get: vi.fn().mockImplementation(async (p: string) => {
+        if (p === "api/remote/home/album/al1") {
+          calls += 1;
+          return { ...ALBUM, keep: { state: "kept", tracks_total: 3, tracks_present: calls === 1 ? 1 : 3 } };
+        }
+        throw new Error(`unmocked ${p}`);
+      }),
+    });
+    wrap(api, ["album", "al1"]);
+    expect(await screen.findByText("1 / 3 on the boombox")).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(await screen.findByText("All 3 on the boombox")).toBeTruthy();
+    vi.useRealTimers();
   });
 });

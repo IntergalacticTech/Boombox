@@ -11,20 +11,34 @@ export interface HomeItem {
 }
 export interface HomeTrack {
   id: string; title: string; artist?: string | null; duration?: number | null;
-  cache_status?: string;
+  cache_status?: string; offline?: boolean;
 }
 export interface HomeAlbumDetail {
   album: { id: string; name: string; artist?: string | null; year?: number | null;
            art_id?: string | null };
   tracks: HomeTrack[];
+  keep?: KeepState;
 }
 export interface HomeArtistDetail {
   artist: { id: string; name: string; art_id?: string | null };
-  albums: { id: string; name: string; year?: number | null; art_id?: string | null }[];
+  albums: { id: string; name: string; year?: number | null; art_id?: string | null;
+            offline?: boolean }[];
+  keep?: KeepState;
 }
-export interface HomePlaylistDetail { playlist: { id: string; name: string }; tracks: HomeTrack[] }
-export interface HomeSearchResult { content_type: string; id: string; title: string }
+export interface HomePlaylistDetail {
+  playlist: { id: string; name: string }; tracks: HomeTrack[]; keep?: KeepState;
+}
+export interface HomeSearchResult { content_type: string; id: string; title: string; offline?: boolean }
 export interface PlayResult { ok: boolean; count: number; skipped: number }
+export interface KeepState { state: "none" | "kept" | "starred"; tracks_total: number; tracks_present: number }
+export interface HomeStatus { online: boolean; internal_storage: boolean }
+export interface OfflineIds { album_ids: string[]; artist_ids: string[]; playlist_ids: string[] }
+export interface KeepResult { ok: boolean; keep: KeepState; queued?: number; cancelled?: number }
+
+/** How often the Music section re-checks Home Library reachability. */
+export const STATUS_POLL_MS = 30_000;
+/** How often a kept-but-incomplete detail page refreshes its progress. */
+export const KEEP_POLL_MS = 5_000;
 
 /** Cap for one "play artist", as on the kiosk. */
 export const MAX_EXPANDED_TRACKS = 500;
@@ -63,16 +77,37 @@ export function playHome(api: RemoteApi, ids: string[], mode: "play" | "queue"):
 /** Every track of an artist, album by album in the order the library lists
  *  them. Stops fetching albums once MAX_EXPANDED_TRACKS is reached but
  *  returns the whole last album, so a caller can tell the list was cut
- *  (the play helper caps to MAX_EXPANDED_TRACKS and says so). */
-export async function artistTrackIds(api: RemoteApi, artistId: string): Promise<string[]> {
+ *  (the play helper caps to MAX_EXPANDED_TRACKS and says so). With
+ *  onlyOffline, only tracks on the boombox (albums marked not offline are
+ *  skipped without fetching). */
+export async function artistTrackIds(api: RemoteApi, artistId: string,
+                                     onlyOffline = false): Promise<string[]> {
   const a = await homeDetail<HomeArtistDetail>(api, "artist", artistId);
   const ids: string[] = [];
   for (const al of a.albums) {
     if (ids.length >= MAX_EXPANDED_TRACKS) break;
+    if (onlyOffline && al.offline === false) continue;
     const d = await homeDetail<HomeAlbumDetail>(api, "album", al.id);
-    ids.push(...d.tracks.map((t) => t.id));
+    ids.push(...d.tracks.filter((t) => !onlyOffline || t.offline === true).map((t) => t.id));
   }
   return ids;
+}
+
+export function homeStatus(api: RemoteApi): Promise<HomeStatus> {
+  return api.get<HomeStatus>("api/remote/home/status");
+}
+
+export function offlineIds(api: RemoteApi): Promise<OfflineIds> {
+  return api.get<OfflineIds>("api/remote/home/offline");
+}
+
+export function keepHome(api: RemoteApi, kind: HomeKind, id: string): Promise<KeepResult> {
+  return api.post<KeepResult>("api/remote/home/keep", { kind, id });
+}
+
+export async function unkeepHome(api: RemoteApi, kind: HomeKind, id: string): Promise<KeepResult> {
+  if (!api.del) throw new Error("This app can't remove kept music.");
+  return api.del<KeepResult>("api/remote/home/keep", { kind, id });
 }
 
 export function artPath(artId: string | null | undefined, size = 320): string | null {
