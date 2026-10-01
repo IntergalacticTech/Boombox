@@ -117,6 +117,8 @@ def unkeep(conn: Connection, queue: Optional[QueueLike], kind: PinKind,
     cancelled = 0
     if queue is not None:
         protected = all_pinned_track_ids(conn)
+        # This also cancels queued streamed-cache downloads of the target's
+        # unprotected tracks (the queue doesn't tell the two apart).
         cancelled = queue.cancel(
             [t for t in track_ids(conn, kind, target_id) if t not in protected])
     return {"ok": True, "cancelled": cancelled, "keep": keep_state(conn, kind, target_id)}
