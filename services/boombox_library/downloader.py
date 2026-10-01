@@ -9,7 +9,8 @@ reserve mid-transfer.
 DownloadQueue schedules downloads (spec 2A, "never starve the Pi"): at most
 `max_concurrent` at a time, and before EACH start it checks, in order —
   offline    Navidrome unreachable, or a download just lost the link: idle,
-             re-check every OFFLINE_RECHECK_S (no retry storm);
+             re-check every OFFLINE_RECHECK_S (no retry storm). A track
+             that drops MAX_LINK_RETRIES times in a row goes to 'error';
   low_space  free space below the reserve: hard stop until there is room;
   hot        SoC >= THERMAL_LIMIT_C: wait THERMAL_RECHECK_S, re-check;
   streaming  Mopidy is playing a stream-proxy URI: leave it the link.
@@ -41,6 +42,12 @@ THERMAL_RECHECK_S = 60.0
 OFFLINE_RECHECK_S = 60.0
 PAUSE_RECHECK_S = 15.0
 SPACE_CHECK_EVERY = 16 * 1024 * 1024
+# Idle timeouts, no total cap: a big file over a slow tunnel that keeps
+# making progress completes; a stalled connection fails within a minute.
+FETCH_TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=60)
+# A track whose transfer drops the link this many times in a row is marked
+# 'error' (the hourly sync retries it) so it cannot block the queue forever.
+MAX_LINK_RETRIES = 3
 _RECHECK_S = {"offline": OFFLINE_RECHECK_S, "low_space": PAUSE_RECHECK_S,
               "hot": THERMAL_RECHECK_S, "streaming": PAUSE_RECHECK_S}
 # What a CDN / tunnel answers when the homelab behind it is down: the link
@@ -94,8 +101,7 @@ def is_link_failure(e: BaseException) -> bool:
 
 async def default_fetch(url: str, params: dict, dest: Path) -> None:
     """Plain aiohttp streaming fetch (no space guard). Raises on non-2xx."""
-    timeout = aiohttp.ClientTimeout(total=600)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    async with aiohttp.ClientSession(timeout=FETCH_TIMEOUT) as session:
         async with session.get(url, params=params) as resp:
             resp.raise_for_status()
             with dest.open("wb") as f:
@@ -108,8 +114,7 @@ def make_fetch(cache_root: Path, reserve_bytes: int) -> Fetcher:
     every SPACE_CHECK_EVERY bytes, abort with OutOfSpace when free space on
     cache_root has fallen below the reserve."""
     async def fetch(url: str, params: dict, dest: Path) -> None:
-        timeout = aiohttp.ClientTimeout(total=600)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=FETCH_TIMEOUT) as session:
             async with session.get(url, params=params) as resp:
                 resp.raise_for_status()
                 since_check = 0
@@ -314,6 +319,8 @@ class DownloadQueue:
         self._wake = asyncio.Event()
         self._runner: Optional[asyncio.Task] = None
         self._offline_until = 0.0
+        self._link_failures: dict[str, int] = {}     # consecutive, per track
+        self._cancelled: set[str] = set()            # cancel()ed while in flight
         self.paused: Optional[str] = None
         # A new queue owns this drive: whatever an earlier run left half
         # done (power cut) is not downloading any more.
@@ -324,6 +331,7 @@ class DownloadQueue:
     def enqueue(self, track_id: str) -> bool:
         """Schedule a download. False when it is already queued, in flight
         or present."""
+        self._cancelled.discard(track_id)   # wanted again after all
         if track_id in self._pending or track_id in self._in_flight:
             return False
         row = self.conn.execute(
@@ -351,6 +359,8 @@ class DownloadQueue:
                 self.conn.execute(
                     "DELETE FROM cache_state WHERE track_id=? AND status='queued'", (tid,))
                 n += 1
+            elif tid in self._in_flight:
+                self._cancelled.add(tid)   # let it finish; never requeue it
         return n
 
     def snapshot(self) -> dict:
@@ -397,17 +407,40 @@ class DownloadQueue:
             result = await download_track(
                 self.conn, self.client, track_id, self.cache_root, self._fetch,
                 reserve_bytes=self.reserve_bytes)
-            if result is DownloadResult.OFFLINE:
-                # Back at the head of the line; idle before the next try.
-                self._pending = {track_id: None, **self._pending}
-                self._offline_until = self._clock() + OFFLINE_RECHECK_S
+            if result is DownloadResult.OK:
+                # The link works: earlier drops were outages, not the tracks.
+                self._link_failures.clear()
+            elif result is DownloadResult.OFFLINE:
+                self._on_link_failure(track_id)
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("download of %s crashed", track_id)
         finally:
             self._in_flight.pop(track_id, None)
+            self._cancelled.discard(track_id)
             self._wake.set()
+
+    def _on_link_failure(self, track_id: str) -> None:
+        """A download lost the link: idle before the next start, and put the
+        track back at the head of the line — unless it was cancelled while
+        in flight, or it has now dropped MAX_LINK_RETRIES times in a row
+        (then it is a track problem: 'error', retried by the hourly sync)."""
+        self._offline_until = self._clock() + OFFLINE_RECHECK_S
+        if track_id in self._cancelled:
+            self._link_failures.pop(track_id, None)
+            self.conn.execute(
+                "DELETE FROM cache_state WHERE track_id=? AND status='queued'", (track_id,))
+            return
+        n = self._link_failures.get(track_id, 0) + 1
+        if n >= MAX_LINK_RETRIES:
+            self._link_failures.pop(track_id, None)
+            _mark(self.conn, track_id, "error",
+                  f"download kept dropping ({n} interrupted transfers in a row)")
+            log.warning("giving up on %s for now: %d interrupted transfers", track_id, n)
+            return
+        self._link_failures[track_id] = n
+        self._pending = {track_id: None, **self._pending}
 
     async def drain(self) -> None:
         """Wait until nothing is queued or in flight (tests)."""
@@ -422,3 +455,5 @@ class DownloadQueue:
         for task in self._in_flight.values():
             task.cancel()
         self._pending.clear()
+        self._link_failures.clear()
+        self._cancelled.clear()

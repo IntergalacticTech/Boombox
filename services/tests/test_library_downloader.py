@@ -604,3 +604,98 @@ async def test_queue_start_sweeps_partials_and_stale_rows(tmp_path):
     DownloadQueue(conn, FakeStreamingClient(b""), root)
     assert not (root / "tmp" / "t0.part").exists()
     assert _status(conn, "t0") == "absent" and _status(conn, "t1") == "absent"
+
+
+# ---- fix round 1: bounded link-failure retries, idle timeouts ----
+
+async def test_track_that_keeps_link_failing_ends_error_and_the_queue_moves_on(tmp_path):
+    conn = _db(tmp_path, n=2)
+    now = {"t": 1000.0}
+    calls: list = []
+
+    async def fetch(url, params, dest):
+        calls.append(url)
+        if url.endswith("t0"):
+            raise asyncio.TimeoutError()
+        dest.write_bytes(b"x")
+
+    def on_sleep(n):
+        now["t"] += 60.0
+
+    sleeps = Sleeps(on_sleep)
+    q = DownloadQueue(conn, FakeStreamingClient(b""), _cache(tmp_path), 1, fetch,
+                      sleep=sleeps, clock=lambda: now["t"])
+    q.enqueue("t0"); q.enqueue("t1")
+    await q.drain()
+    assert calls.count("http://nav/t0") == dl.MAX_LINK_RETRIES == 3
+    assert calls.count("http://nav/t1") == 1
+    row = conn.execute("SELECT status, error_message FROM cache_state WHERE track_id='t0'").fetchone()
+    assert row["status"] == "error" and "kept dropping" in row["error_message"]
+    assert _status(conn, "t1") == "present"
+    assert sleeps.calls == [60.0, 60.0, 60.0]
+
+
+async def test_link_failure_counter_resets_after_a_success(tmp_path):
+    conn = _db(tmp_path, n=2)
+    now = {"t": 1000.0}
+    fails = {"t0": 2}
+
+    async def fetch(url, params, dest):
+        tid = url.rsplit("/", 1)[1]
+        if fails.get(tid, 0) > 0:
+            fails[tid] -= 1
+            raise aiohttp.ClientConnectionError("refused")
+        dest.write_bytes(b"x")
+
+    sleeps = Sleeps(lambda n: now.__setitem__("t", now["t"] + 60.0))
+    q = DownloadQueue(conn, FakeStreamingClient(b""), _cache(tmp_path), 1, fetch,
+                      sleep=sleeps, clock=lambda: now["t"])
+    q.enqueue("t0")
+    await q.drain()
+    assert _status(conn, "t0") == "present" and q._link_failures == {}
+    fails["t1"] = 2
+    q.enqueue("t1")
+    await q.drain()
+    assert _status(conn, "t1") == "present"
+
+
+async def test_cancelled_in_flight_track_that_link_fails_is_not_requeued(tmp_path):
+    conn = _db(tmp_path)
+    started, release = asyncio.Event(), asyncio.Event()
+    calls: list = []
+
+    async def fetch(url, params, dest):
+        calls.append(url)
+        started.set()
+        await release.wait()
+        raise aiohttp.ClientConnectionError("refused")
+
+    sleeps = Sleeps()
+    q = DownloadQueue(conn, FakeStreamingClient(b""), _cache(tmp_path), 1, fetch, sleep=sleeps)
+    q.enqueue("t0")
+    await asyncio.wait_for(started.wait(), 1)
+    assert q.cancel(["t0"]) == 0          # in flight: not dropped, but remembered
+    release.set()
+    await q.drain()
+    assert calls == ["http://nav/t0"] and _status(conn, "t0") is None
+    assert q.snapshot() == {"queued": 0, "in_flight": [], "paused": None}
+
+
+def test_fetch_timeout_is_idle_based_without_a_total_cap():
+    t = dl.FETCH_TIMEOUT
+    assert t.total is None and t.sock_connect == 15 and t.sock_read == 60
+
+
+async def test_make_fetch_and_default_fetch_use_the_idle_timeouts(tmp_path, monkeypatch):
+    seen: list = []
+
+    class Spy:
+        def __init__(self, *a, timeout=None, **kw):
+            seen.append(timeout)
+            raise RuntimeError("stop")
+
+    monkeypatch.setattr(dl.aiohttp, "ClientSession", Spy)
+    for fetch in (make_fetch(tmp_path, 0), dl.default_fetch):
+        with pytest.raises(RuntimeError):
+            await fetch("http://x/", {}, tmp_path / "z.part")
+    assert seen == [dl.FETCH_TIMEOUT, dl.FETCH_TIMEOUT]
