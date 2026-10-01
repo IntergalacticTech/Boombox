@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 from sqlite3 import Connection
-from typing import Callable, Iterable, Iterator, Optional, Protocol
+from typing import Any, Callable, Iterable, Iterator, Optional, Protocol
 
 from .cache_drive import CacheDriveState
 from .models import PinKind, PinSource
@@ -229,7 +229,7 @@ def storage_overview(conn: Connection, drive: Optional[CacheDriveState],
             "SELECT track_id, status FROM cache_state WHERE status IN ('error', 'no_space')"):
         if r[0] in protected:
             failed[r[1]] += 1
-    snap = queue.snapshot() if queue is not None else {
+    snap: dict[str, Any] = queue.snapshot() if queue is not None else {
         "queued": 0, "in_flight": [], "paused": None}
     in_flight = [str(t) for t in snap["in_flight"]]
     titles: dict[str, str] = {}
