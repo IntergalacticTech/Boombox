@@ -4,11 +4,14 @@ import { LockScreen } from "./LockScreen";
 import { lock, useAdminSession } from "./session";
 import { UNREACHABLE, ACCOUNTS_DESKTOP_COLUMNS } from "./AccountsSection";
 import { adminFilesClient, storageApi } from "./storage/api";
-import type { KeptItem, PauseReason, StorageOverview } from "./storage/types";
+import type { Downloads, KeptItem, KeptSource, PauseReason, StorageOverview } from "./storage/types";
 import { SectionMessage } from "../components/SectionMessage";
 import { FileBrowser } from "../screens/Files";
 
+/** Overview poll while downloads run or wait; STORAGE_IDLE_POLL_MS otherwise
+ *  (the overview costs the library a query per kept item). */
 export const STORAGE_POLL_MS = 5000;
+export const STORAGE_IDLE_POLL_MS = 15000;
 export const PAUSED_TEXT: Record<PauseReason, string> = {
   streaming: "Paused while music streams from the Home Library.",
   hot: "Paused — the boombox is hot (70 °C or more); checking again every minute.",
@@ -16,8 +19,18 @@ export const PAUSED_TEXT: Record<PauseReason, string> = {
   low_space: "Stopped — free space is below the reserve.",
 };
 const KIND_LABEL: Record<KeptItem["kind"], string> = {
-  album: "Album", artist: "Artist", playlist: "Playlist", starred_tracks: "Songs",
+  album: "Album", artist: "Artist", playlist: "Playlist", starred_tracks: "Songs", card_tracks: "Songs",
 };
+const SOURCE_LABEL: Record<KeptSource, string> = { user: "you", starred: "starred", card: "card" };
+/** Why a non-user item has no Remove button. */
+const KEEP_HINT: Record<Exclude<KeptSource, "user">, string> = {
+  starred: "Unstar in Navidrome to remove",
+  card: "On an RFID card — unbind the card to remove",
+};
+
+function downloading(d: Downloads): boolean {
+  return d.in_flight.length > 0 || d.queued > 0;
+}
 
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -59,33 +72,49 @@ function Header() {
 function StoragePanel({ desktop, extra }: { desktop: boolean; extra?: ReactNode }) {
   const [data, setData] = useState<StorageOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
-  const inFlight = useRef(false);
+  // Every request gets a sequence number; an answer is applied only if no
+  // later request has already been answered, so a slow poll can't overwrite
+  // a newer overview (e.g. the refresh after Remove) and never blocks polls.
+  const sent = useRef(0);
+  const applied = useRef(0);
+  const sinceLast = useRef(0);
+  const active = useRef(true);
 
   const refresh = useCallback(async () => {
-    inFlight.current = true;
+    const seq = ++sent.current;
+    sinceLast.current = 0;
+    const apply = (fn: () => void) => {
+      if (seq < applied.current) return;
+      applied.current = seq;
+      fn();
+    };
     try {
       const r = await storageApi.overview();
-      if ("drive" in r) { setData(r); setError(null); }
-      else setError(r.error || UNREACHABLE);
+      if ("drive" in r) {
+        apply(() => { setData(r); setError(null); active.current = downloading(r.downloads); });
+      } else {
+        apply(() => setError(r.error || UNREACHABLE));
+      }
     } catch {
-      setError(UNREACHABLE);
-    } finally {
-      inFlight.current = false;
+      apply(() => setError(UNREACHABLE));
     }
   }, []);
 
   // Polls only while mounted, and this panel is mounted only while unlocked
   // (a 401 clears the session → StorageSection swaps in the lock screen →
-  // this effect's cleanup stops the timer). A tick is skipped while the
-  // previous request is still out or the tab is in the background.
+  // this effect's cleanup stops the timer). Every STORAGE_POLL_MS while
+  // downloads run or are queued, else every STORAGE_IDLE_POLL_MS; skipped
+  // while the tab is in the background.
   useEffect(() => {
     void refresh();
     const t = window.setInterval(() => {
-      if (inFlight.current || document.hidden) return;
+      sinceLast.current += STORAGE_POLL_MS;
+      if (document.hidden) return;
+      if (sinceLast.current < (active.current ? STORAGE_POLL_MS : STORAGE_IDLE_POLL_MS)) return;
       void refresh();
     }, STORAGE_POLL_MS);
     return () => window.clearInterval(t);
@@ -96,10 +125,10 @@ function StoragePanel({ desktop, extra }: { desktop: boolean; extra?: ReactNode 
     setBusy(true);
     try {
       const r = await storageApi.remove(item.kind, item.id);
-      setNotice(r.ok ? `Removed ${item.name} — ${fmtBytes(r.freed_bytes)} freed.`
-                     : (r.error || "Couldn't remove it."));
+      setNotice(r.ok ? { text: `Removed ${item.name} — ${fmtBytes(r.freed_bytes)} freed.`, error: false }
+                     : { text: r.error || "Couldn't remove it.", error: true });
     } catch {
-      setNotice(UNREACHABLE);
+      setNotice({ text: UNREACHABLE, error: true });
     }
     setBusy(false);
     void refresh();
@@ -109,94 +138,102 @@ function StoragePanel({ desktop, extra }: { desktop: boolean; extra?: ReactNode 
     setBusy(true);
     try {
       const r = await storageApi.retry();
-      setNotice(r.ok ? `Retrying ${r.retried} download${r.retried === 1 ? "" : "s"}.`
-                     : (r.error || "Couldn't retry."));
+      setNotice(r.ok ? { text: `Retrying ${r.retried} download${r.retried === 1 ? "" : "s"}.`, error: false }
+                     : { text: r.error || "Couldn't retry.", error: true });
     } catch {
-      setNotice(UNREACHABLE);
+      setNotice({ text: UNREACHABLE, error: true });
     }
     setBusy(false);
     void refresh();
   };
 
-  if (!data) {
-    return (
-      <div style={page}>
-        <Header />
-        {error
-          ? <SectionMessage message={error} onRetry={() => setAttempt((n) => n + 1)} />
-          : <p style={muted}>Loading…</p>}
-      </div>
-    );
-  }
-  const { drive, downloads, kept } = data;
-  const low = drive.present && drive.free_bytes != null && drive.free_bytes < drive.reserve_bytes;
+  // The grid is always there so the Uploads panel (extra) keeps its place —
+  // and any upload in progress — while the overview loads, fails or recovers;
+  // uploads don't need the library.
   return (
     <div style={page}>
       <Header />
-      {error && <ErrorText>{error}</ErrorText>}
-      {notice && <div role="status" style={noticeStyle}>{notice}</div>}
+      {!data && (error
+        ? <SectionMessage message={error} onRetry={() => setAttempt((n) => n + 1)} />
+        : <p style={muted}>Loading…</p>)}
+      {data && error && <ErrorText>{error}</ErrorText>}
+      {notice && (notice.error ? <ErrorText>{notice.text}</ErrorText>
+                               : <div role="status" style={noticeStyle}>{notice.text}</div>)}
       <div data-testid="storage-grid" style={{
         display: "grid", gap: 16, alignItems: "start",
         gridTemplateColumns: desktop ? ACCOUNTS_DESKTOP_COLUMNS : "minmax(0, 1fr)",
       }}>
-        <Panel title="Drive">
-          {!drive.present ? <p style={muted}>No music storage — downloads are off.</p> : (
-            <dl style={{ margin: 0 }}>
-              <Fact k="Where" v={drive.internal ? "Internal drive" : `USB drive at ${drive.mount_path ?? "?"}`} />
-              <Fact k="Size" v={fmtBytes(drive.total_bytes)} />
-              <Fact k="Free" v={fmtBytes(drive.free_bytes)} />
-              <Fact k="Always kept free" v={fmtBytes(drive.reserve_bytes)} />
-              <Fact k="Music on the boombox" v={`${fmtBytes(drive.music_bytes)} · ${drive.kept_tracks} tracks`} />
-            </dl>
-          )}
-          {low && <ErrorText>Low space — downloads stop until more than {fmtBytes(drive.reserve_bytes)} is free.</ErrorText>}
-        </Panel>
-        <Panel title="Downloads">
-          {!downloads.active ? (
-            <p style={muted}>Downloads aren't running — no music storage or no music server set up.</p>
-          ) : (
-            <>
-              <p style={muted}>{downloads.in_flight.length} downloading · {downloads.queued} queued</p>
-              {downloads.in_flight.length > 0 && (
-                <ul style={list}>{downloads.in_flight.map((t) => <li key={t.id}>⬇ {t.title}</li>)}</ul>
-              )}
-              {downloads.paused && <p role="note" style={pausedStyle}>{PAUSED_TEXT[downloads.paused]}</p>}
-            </>
-          )}
-          {downloads.no_space > 0 && <p style={muted}>{downloads.no_space} skipped — not enough space</p>}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={muted}>{downloads.failed} failed</span>
-            <SecondaryButton disabled={busy || downloads.failed + downloads.no_space === 0}
-                             onClick={() => void retry()} style={smallBtn}>Retry failed</SecondaryButton>
-          </div>
-        </Panel>
-        <Panel title="Kept offline" wide>
-          {kept.length === 0 ? (
-            <p style={muted}>Nothing kept yet — open an album in Music and tap Keep offline.</p>
-          ) : (
-            <ul style={list}>
-              {kept.map((it) => (
-                <li key={`${it.kind}:${it.id}`} style={keptRow}>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={ellipsis}>{it.name}</div>
-                    <div style={small}>
-                      {KIND_LABEL[it.kind]} · {it.source === "user" ? "you" : "starred"} · {it.tracks_present} / {it.tracks_total} · {fmtBytes(it.bytes)}
-                    </div>
-                  </div>
-                  {it.source === "user" ? (
-                    <SecondaryButton aria-label={`Remove ${it.name}`} disabled={busy}
-                                     onClick={() => void remove(it)} style={smallBtn}>Remove</SecondaryButton>
-                  ) : (
-                    <span style={unstarHint}>Unstar in Navidrome to remove</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
+        {data && <Overview data={data} busy={busy} onRemove={(it) => void remove(it)}
+                           onRetry={() => void retry()} />}
         {extra}
       </div>
     </div>
+  );
+}
+
+function Overview({ data, busy, onRemove, onRetry }: {
+  data: StorageOverview; busy: boolean; onRemove: (it: KeptItem) => void; onRetry: () => void;
+}) {
+  const { drive, downloads, kept } = data;
+  const low = drive.present && drive.free_bytes != null && drive.free_bytes < drive.reserve_bytes;
+  return (
+    <>
+      <Panel title="Drive">
+        {!drive.present ? <p style={muted}>No music storage — downloads are off.</p> : (
+          <dl style={{ margin: 0 }}>
+            <Fact k="Where" v={drive.internal ? "Internal drive" : `USB drive at ${drive.mount_path ?? "?"}`} />
+            <Fact k="Size" v={fmtBytes(drive.total_bytes)} />
+            <Fact k="Free" v={fmtBytes(drive.free_bytes)} />
+            <Fact k="Always kept free" v={fmtBytes(drive.reserve_bytes)} />
+            <Fact k="Music on the boombox" v={`${fmtBytes(drive.music_bytes)} · ${drive.kept_tracks} tracks`} />
+          </dl>
+        )}
+        {low && <ErrorText>Low space — downloads stop until more than {fmtBytes(drive.reserve_bytes)} is free.</ErrorText>}
+      </Panel>
+      <Panel title="Downloads">
+        {!downloads.active ? (
+          <p style={muted}>Downloads aren't running — no music storage or no music server set up.</p>
+        ) : (
+          <>
+            <p style={muted}>{downloads.in_flight.length} downloading · {downloads.queued} queued</p>
+            {downloads.in_flight.length > 0 && (
+              <ul style={list}>{downloads.in_flight.map((t) => <li key={t.id}>⬇ {t.title}</li>)}</ul>
+            )}
+            {downloads.paused && <p role="note" style={pausedStyle}>{PAUSED_TEXT[downloads.paused]}</p>}
+          </>
+        )}
+        {downloads.no_space > 0 && <p style={muted}>{downloads.no_space} skipped — not enough space</p>}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <span style={muted}>{downloads.failed} failed</span>
+          <SecondaryButton disabled={busy || downloads.failed + downloads.no_space === 0}
+                           onClick={onRetry} style={smallBtn}>Retry failed</SecondaryButton>
+        </div>
+      </Panel>
+      <Panel title="Kept offline" wide>
+        {kept.length === 0 ? (
+          <p style={muted}>Nothing kept yet — open an album in Music and tap Keep offline.</p>
+        ) : (
+          <ul style={list}>
+            {kept.map((it) => (
+              <li key={`${it.kind}:${it.id}`} style={keptRow}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={ellipsis}>{it.name}</div>
+                  <div style={small}>
+                    {KIND_LABEL[it.kind]} · {SOURCE_LABEL[it.source]} · {it.tracks_present} / {it.tracks_total} · {fmtBytes(it.bytes)}
+                  </div>
+                </div>
+                {it.source === "user" ? (
+                  <SecondaryButton aria-label={`Remove ${it.name}`} disabled={busy}
+                                   onClick={() => onRemove(it)} style={smallBtn}>Remove</SecondaryButton>
+                ) : (
+                  <span style={keepHint}>{KEEP_HINT[it.source]}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+    </>
   );
 }
 
@@ -219,7 +256,7 @@ const ellipsis: CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", 
 const keptRow: CSSProperties = {
   display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid var(--rule)",
 };
-const unstarHint: CSSProperties = { ...small, maxWidth: 130, textAlign: "right", flexShrink: 0 };
+const keepHint: CSSProperties = { ...small, maxWidth: 130, textAlign: "right", flexShrink: 0 };
 const smallBtn: CSSProperties = { width: "auto", minHeight: 40, padding: "8px 14px" };
 const pausedStyle: CSSProperties = { margin: "6px 0", color: "var(--ink)", fontSize: 14 };
 const noticeStyle: CSSProperties = {

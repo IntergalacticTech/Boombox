@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { StorageSection, PAUSED_TEXT, STORAGE_POLL_MS } from "./StorageSection";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
+import { StorageSection, PAUSED_TEXT, STORAGE_POLL_MS, STORAGE_IDLE_POLL_MS } from "./StorageSection";
 import { adminSession } from "./session";
 import type { PauseReason } from "./storage/types";
 
@@ -16,11 +16,26 @@ const OVERVIEW = {
                paused: null, failed: 2, no_space: 0 },
 };
 
+/** A route answer with its own HTTP status. */
+class Reply {
+  readonly status: number;
+  readonly body: unknown;
+  constructor(status: number, body: unknown) { this.status = status; this.body = body; }
+}
+/** A route answered by a function (e.g. a deferred promise). */
+type Handler = () => Promise<Response>;
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
 function mockFetch(routes: Record<string, unknown>, status = 200) {
   const fn = vi.fn(async (url: string, init?: RequestInit) => {
     const key = `${init?.method ?? "GET"} ${url}`;
-    const body = key in routes ? routes[key] : { ok: false, error: `unmocked ${key}` };
-    return new Response(JSON.stringify(body), { status });
+    const v = key in routes ? routes[key] : { ok: false, error: `unmocked ${key}` };
+    if (typeof v === "function") return (v as Handler)();
+    if (v instanceof Reply) return json(v.body, v.status);
+    return json(v, status);
   });
   vi.stubGlobal("fetch", fn);
   return fn;
@@ -94,8 +109,8 @@ describe("StorageSection", () => {
   it("library down: a message and Retry", async () => {
     mockFetch({ "GET /api/accounts/storage": { ok: false, error: "library service not answering" } }, 502);
     render(<StorageSection desktop={false} />);
-    expect(await screen.findByText("library service not answering")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    const msg = (await screen.findByText("library service not answering")).closest("[role=status]")!;
+    expect(within(msg as HTMLElement).getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("an expired admin session goes back to the lock screen", async () => {
@@ -140,5 +155,134 @@ describe("StorageSection", () => {
     expect(screen.getByRole("button", { name: "+ Upload" })).toBeTruthy();
     const call = fetchMock.mock.calls.find(([u]) => u === "/api/accounts/storage/files/browse?path=")!;
     expect((call[1] as RequestInit).headers).toEqual(expect.objectContaining({ Authorization: "Bearer tok" }));
+  });
+  it("card-bound items say to unbind the card and have no Remove", async () => {
+    mockFetch({ "GET /api/accounts/storage": { ...OVERVIEW, kept: [
+      { kind: "album", id: "al9", name: "Hejira", source: "card", tracks_total: 9, tracks_present: 9, bytes: 1024 },
+      { kind: "card_tracks", id: "", name: "Songs on cards", source: "card", tracks_total: 2, tracks_present: 1, bytes: 1024 },
+    ] } });
+    render(<StorageSection desktop={false} />);
+    for (const name of ["Hejira", "Songs on cards"]) {
+      const row = (await screen.findByText(name)).closest("li")!;
+      expect(row.textContent).toContain("On an RFID card — unbind the card to remove");
+      expect(row.textContent).toContain(" · card · ");
+      expect(row.querySelector("button")).toBeNull();
+    }
+    expect(screen.getByText("Songs on cards").closest("li")!.textContent).toContain("Songs · card");
+  });
+
+  it("polls every 15 s when idle and every 5 s while downloading", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const IDLE = { ...OVERVIEW, downloads: { ...OVERVIEW.downloads, in_flight: [], queued: 0 } };
+      const QUEUED_ONLY = { ...IDLE, downloads: { ...IDLE.downloads, queued: 3 } };
+      const answers = [OVERVIEW, IDLE, QUEUED_ONLY, QUEUED_ONLY];
+      let n = 0;
+      const fetchMock = mockFetch({ "GET /api/accounts/storage": async () => json(answers[Math.min(n++, 3)]) });
+      const polls = () => fetchMock.mock.calls.filter(([u]) => u === "/api/accounts/storage").length;
+      render(<StorageSection desktop={false} />);
+      await screen.findByText("Internal drive");
+      expect(polls()).toBe(1);
+      await vi.advanceTimersByTimeAsync(STORAGE_POLL_MS);   // downloading → 5 s
+      expect(polls()).toBe(2);
+      await vi.advanceTimersByTimeAsync(STORAGE_POLL_MS);   // idle → not yet
+      expect(polls()).toBe(2);
+      await vi.advanceTimersByTimeAsync(STORAGE_IDLE_POLL_MS - STORAGE_POLL_MS);
+      expect(polls()).toBe(3);
+      await vi.advanceTimersByTimeAsync(STORAGE_POLL_MS);   // queued > 0 → 5 s again
+      expect(polls()).toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a slow poll neither blocks the next one nor overwrites a newer answer", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let releaseSlow!: (r: Response) => void;
+      const NEWER = { ...OVERVIEW, downloads: { ...OVERVIEW.downloads, failed: 0 } };
+      let n = 0;
+      const fetchMock = mockFetch({ "GET /api/accounts/storage": () => {
+        n += 1;
+        if (n === 1) return Promise.resolve(json(OVERVIEW));
+        if (n === 2) return new Promise<Response>((res) => { releaseSlow = res; });
+        return Promise.resolve(json(NEWER));
+      } });
+      const polls = () => fetchMock.mock.calls.filter(([u]) => u === "/api/accounts/storage").length;
+      render(<StorageSection desktop={false} />);
+      expect(await screen.findByText("2 failed")).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(STORAGE_POLL_MS);   // #2 hangs
+      expect(polls()).toBe(2);
+      await vi.advanceTimersByTimeAsync(STORAGE_POLL_MS);   // not stuck behind it
+      expect(polls()).toBe(3);
+      expect(await screen.findByText("0 failed")).toBeTruthy();
+      await act(async () => { releaseSlow(json(OVERVIEW)); });
+      expect(screen.getByText("0 failed")).toBeTruthy();
+      expect(screen.queryByText("2 failed")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a refused Remove shows as an error", async () => {
+    mockFetch({
+      "GET /api/accounts/storage": OVERVIEW,
+      "POST /api/accounts/storage/remove": new Reply(409, { ok: false, error: "unstar in Navidrome to remove" }),
+    });
+    render(<StorageSection desktop={false} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Blue" }));
+    const msg = await screen.findByText("unstar in Navidrome to remove");
+    expect(msg.getAttribute("role")).toBe("alert");
+  });
+
+  it("a refused Retry shows as an error", async () => {
+    mockFetch({
+      "GET /api/accounts/storage": OVERVIEW,
+      "POST /api/accounts/storage/retry": new Reply(409, { ok: false, error: "downloads aren't running" }),
+    });
+    render(<StorageSection desktop={false} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry failed" }));
+    const msg = await screen.findByText("downloads aren't running");
+    expect(msg.getAttribute("role")).toBe("alert");
+  });
+
+  it.each([
+    ["the library is down", new Reply(502, { ok: false, error: "library service not answering" })],
+    ["the overview is loading", () => new Promise<Response>(() => {})],
+  ])("Uploads still work while %s", async (_why, answer) => {
+    mockFetch({
+      "GET /api/accounts/storage": answer,
+      "GET /api/accounts/storage/files/browse?path=": {
+        path: "", parent: null, entries: [{ name: "uploads", kind: "dir", tracks: 3 }] },
+    });
+    render(<StorageSection desktop={false} />);
+    expect(await screen.findByText("uploads")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "+ Upload" })).toBeTruthy();
+  });
+
+  async function uploadOne() {
+    await screen.findByText("uploads");
+    const input = screen.getByLabelText("Choose files to upload") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["x"], "a.mp3", { type: "audio/mpeg" })] } });
+  }
+  const BROWSE = { "GET /api/accounts/storage": OVERVIEW,
+    "GET /api/accounts/storage/files/browse?path=": {
+      path: "", parent: null, entries: [{ name: "uploads", kind: "dir", tracks: 3 }] } };
+
+  it("an upload answered 401 drops the admin session", async () => {
+    mockFetch({ ...BROWSE,
+      "POST /api/accounts/storage/files/upload": new Reply(401, { error: "admin session required" }) });
+    render(<StorageSection desktop={false} />);
+    await uploadOne();
+    expect(await screen.findByLabelText("Web password")).toBeTruthy();
+    expect(adminSession.token()).toBeNull();
+  });
+
+  it("an upload answered 507 shows the server's message", async () => {
+    mockFetch({ ...BROWSE,
+      "POST /api/accounts/storage/files/upload": new Reply(507, { error: "not enough space on the drive" }) });
+    render(<StorageSection desktop={false} />);
+    await uploadOne();
+    expect(await screen.findByText("not enough space on the drive")).toBeTruthy();
   });
 });
