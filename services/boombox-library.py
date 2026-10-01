@@ -131,6 +131,10 @@ class ServiceContext:
         # Teardowns (DownloadQueue.aclose) of dropped queues still unwinding:
         # no queue is built until they are done (see _drop_download_queue).
         self._retiring: set[asyncio.Future] = set()
+        # cache_poll is moving to another drive (or losing it): between
+        # retiring the old queue and setting cache_state, cache_state still
+        # names the old mount — no request may build a queue on it.
+        self._switching = False
         self._closed = False
         # Mopidy "is a stream-proxy URI playing?" — a download gate.
         self._stream_probe = MopidyStreamProbe()
@@ -460,28 +464,11 @@ class ServiceContext:
                     marker=self.cfg.cache.marker_filename,
                 )
                 if new_state.mount_path != self.cache_state.mount_path:
-                    # Adopted or detached
-                    if new_state.present and new_state.mount_path:
-                        log.info("cache drive present at %s", new_state.mount_path)
-                        update_symlink(DEFAULT_SYMLINK, new_state.mount_path)
-                        await self._reconcile_cache_rows(new_state.mount_path)
-                        # Drive swap: the old queue's downloads must have
-                        # finished their cancel cleanup before a new queue
-                        # (whose constructor sweeps tmp/ and resets rows)
-                        # exists.
-                        await self._retire_download_queue()
-                        self._init_download_queue(new_state.mount_path)
-                        self._load_sidecar_if_present()
-                    else:
-                        lost = self.cache_state.mount_path
-                        log.warning("cache drive lost")
-                        remove_symlink(DEFAULT_SYMLINK)
-                        await self._retire_download_queue()
-                        if lost is not None:
-                            n = mark_rows_missing(self.conn, lost)
-                            if n:
-                                log.info("marked %d cached tracks missing "
-                                         "(drive gone; kept for re-adopt)", n)
+                    self._switching = True
+                    try:
+                        await self._switch_cache_drive(new_state)
+                    finally:
+                        self._switching = False
                 elif not new_state.present and not self._cache_rows_checked:
                     # Started without a drive: rows from the last run may
                     # still say 'present' with paths on the absent drive.
@@ -493,6 +480,33 @@ class ServiceContext:
             except Exception:
                 log.exception("cache_poll iteration failed; will retry")
             await asyncio.sleep(CACHE_POLL_SECONDS)
+
+    async def _switch_cache_drive(self, new_state: CacheDriveState) -> None:
+        """cache_poll's drive change (adopted, swapped or lost); runs with
+        _switching set."""
+        if new_state.present and new_state.mount_path:
+            log.info("cache drive present at %s", new_state.mount_path)
+            update_symlink(DEFAULT_SYMLINK, new_state.mount_path)
+            await self._reconcile_cache_rows(new_state.mount_path)
+            # Drive swap: the old queue's downloads must have finished their
+            # cancel cleanup before a new queue (whose constructor sweeps
+            # tmp/ and resets rows) exists.
+            await self._retire_download_queue()
+            self.cache_state = new_state
+            self._switching = False
+            self._init_download_queue(new_state.mount_path)
+            self._load_sidecar_if_present()
+        else:
+            lost = self.cache_state.mount_path
+            log.warning("cache drive lost")
+            remove_symlink(DEFAULT_SYMLINK)
+            await self._retire_download_queue()
+            self.cache_state = new_state
+            if lost is not None:
+                n = mark_rows_missing(self.conn, lost)
+                if n:
+                    log.info("marked %d cached tracks missing "
+                             "(drive gone; kept for re-adopt)", n)
 
     # ----- internals -----
     async def _reconcile_cache_rows(self, mount: Path | None) -> None:
@@ -523,6 +537,9 @@ class ServiceContext:
         while any teardown is still unwinding nothing is built — the next
         sync or request builds it lazily (_ensure_download_queue)."""
         if self._closed or self._download_queue is not None:
+            return
+        if self._switching:
+            log.info("music storage changing; queue build deferred")
             return
         if self._teardown_pending():
             log.info("previous download queue still stopping; rebuild deferred")
@@ -575,7 +592,10 @@ class ServiceContext:
         still stopping) has fully torn down."""
         self._drop_download_queue()
         if self._retiring:
-            await asyncio.gather(*list(self._retiring), return_exceptions=True)
+            # Shielded: cancelling the waiter (cache_poll at shutdown) must
+            # not cancel the teardowns themselves mid-cleanup.
+            await asyncio.shield(
+                asyncio.gather(*list(self._retiring), return_exceptions=True))
 
     def _ensure_download_queue(self) -> DownloadQueue | None:
         """The queue for the current drive + source: built on first need

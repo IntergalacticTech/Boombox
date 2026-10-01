@@ -853,3 +853,63 @@ async def test_queue_gate_reports_link_failures(ctx, tmp_path):
     assert q is not None
     q._gates.report_offline()
     assert await ctx.is_online() is False
+
+
+# ---- drive change: no queue is built on the old mount mid-transition ----
+
+@pytest.mark.asyncio
+async def test_no_queue_is_built_on_the_old_mount_while_the_drive_changes(
+        ctx, tmp_path, monkeypatch):
+    first = _drive(tmp_path / "media" / "usb0")
+    (first / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    assert ctx.download_queue() is not None
+
+    seen: list = []
+    real_retire = ctx._retire_download_queue
+
+    async def retire_then_request():
+        await real_retire()
+        # a request lands after the old queue's teardown, before cache_state moves
+        seen.append(ctx.download_queue())
+    monkeypatch.setattr(ctx, "_retire_download_queue", retire_then_request)
+
+    (first / ".boombox-cache").unlink()
+    second = _drive(tmp_path / "media" / "usb1")
+    (second / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    assert seen == [None]
+    assert ctx._download_queue is not None
+    assert ctx._download_queue.cache_root == second
+
+
+def test_init_download_queue_refuses_while_switching(ctx, tmp_path):
+    ctx.cache_state = svc.CacheDriveState(present=True, mount_path=_drive(tmp_path / "m"),
+                                          free_bytes=None, total_bytes=None)
+    ctx._switching = True
+    assert ctx.download_queue() is None
+    ctx._switching = False
+    assert ctx.download_queue() is not None
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_retire_wait_does_not_cancel_the_teardown(ctx):
+    release = asyncio.Event()
+    finished: list[bool] = []
+
+    class SlowQueue(FakeQueue):
+        async def aclose(self):
+            await release.wait()
+            finished.append(True)
+
+    ctx._download_queue = SlowQueue()
+    waiter = asyncio.create_task(ctx._retire_download_queue())
+    await asyncio.sleep(0)
+    waiter.cancel()                       # e.g. cache_poll cancelled at shutdown
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    pending = list(ctx._retiring)
+    assert pending and not pending[0].cancelled()
+    release.set()
+    await asyncio.gather(*pending)
+    assert finished == [True]

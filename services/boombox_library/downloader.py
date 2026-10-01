@@ -494,4 +494,8 @@ class DownloadQueue:
         the same root can never have its own .part or row clobbered."""
         tasks = self._cancel_all()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, BaseException) and not isinstance(r, asyncio.CancelledError):
+                    log.error("download task failed while stopping: %s",
+                              r, exc_info=(type(r), r, r.__traceback__))

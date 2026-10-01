@@ -769,3 +769,21 @@ def test_set_client_swaps_the_client(tmp_path):
     new = FakeStreamingClient(b"x")
     q.set_client(new)
     assert q.client is new
+
+
+async def test_aclose_logs_exceptions_other_than_cancellation(tmp_path, caplog):
+    q = DownloadQueue(_db(tmp_path), FakeStreamingClient(b""), _cache(tmp_path))
+
+    async def stubborn():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError("cleanup blew up") from None
+    task = asyncio.create_task(stubborn())
+    await asyncio.sleep(0)
+    q._in_flight["t9"] = task
+    with caplog.at_level("ERROR", logger="boombox-library.downloader"):
+        await q.aclose()
+    assert task.done()
+    assert any("cleanup blew up" in r.getMessage() or (r.exc_info and "cleanup blew up" in str(r.exc_info[1]))
+               for r in caplog.records)
