@@ -127,7 +127,7 @@ export function Block95Audio({ track, state, elapsed, volume, shuffle, repeat, c
             display: "flex", flexDirection: "column", justifyContent: "space-between", border: `6px solid ${B95.black}`, minWidth: 0}}>
             <div>
               <div style={{fontFamily: B95.mono, fontSize: 13, fontWeight: 700, letterSpacing: "0.22em"}}>
-                NOW PLAYING — LOCAL
+                NOW PLAYING{chrome ? ` — ${chrome.sourceLabel}` : ""}
               </div>
               <div style={{
                 fontFamily: B95.font, fontSize: 78, lineHeight: 0.92, letterSpacing: "-0.04em", marginTop: 14,

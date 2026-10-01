@@ -150,7 +150,7 @@ export function SpectrumAudio({ track, state, elapsed, volume, shuffle, repeat, 
                     linear-gradient(180deg, #07091a 0%, #050714 100%)`}}/>
       <div style={{position: "absolute", top: 20, left: 28, right: 28, display: "flex", alignItems: "center", gap: 12, zIndex: 5}}>
         <div style={{padding: "12px 18px", background: SPC.glass, border: `1px solid ${SPC.rule}`, borderRadius: 999, backdropFilter: "blur(12px)", fontFamily: SPC.mono, fontSize: 12, letterSpacing: "0.22em", textTransform: "uppercase"}}>
-          <span style={{color: SPC.amber}}>●</span> {playing ? "Now Playing" : "Paused"} · Local
+          <span style={{color: SPC.amber}}>●</span> {playing ? "Now Playing" : "Paused"}{chrome ? ` · ${chrome.sourceLabel}` : ""}
         </div>
         <div style={{flex: 1}}></div>
         {chrome && (
