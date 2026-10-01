@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from boombox_library.config import DEFAULT_CONFIG, LibraryConfig, SourceConfig
+from boombox_library.config import DEFAULT_CONFIG, CacheConfig, LibraryConfig, SourceConfig
 from boombox_library.subsonic import (
     SubsonicAuthError,
     SubsonicError,
@@ -60,7 +61,7 @@ def ctx(tmp_path: Path, monkeypatch):
     cfg = LibraryConfig(
         source=SourceConfig(url="https://music.example", username="u", password="p"),
         sync=DEFAULT_CONFIG.sync,
-        cache=DEFAULT_CONFIG.cache.__class__(search_paths=(str(tmp_path / "media"),)),
+        cache=CacheConfig(search_paths=(str(tmp_path / "media"),), internal_path=""),
     )
     (tmp_path / "media").mkdir()
     monkeypatch.setattr(svc, "load_config", lambda: cfg)
@@ -393,3 +394,149 @@ def test_save_config_restarts_mopidy_only_when_block_removed(ctx, tmp_path, monk
     conf.unlink()  # no mopidy.conf at all: no restart
     ctx.save_config(ctx.cfg)
     assert restarts == [True]
+
+
+class FakeQueue:
+    def __init__(self) -> None:
+        self.enqueued: list[str] = []
+        self.stopped = False
+
+    def enqueue(self, tid):
+        self.enqueued.append(tid)
+        return True
+
+    def cancel(self, ids):
+        return 0
+
+    def snapshot(self):
+        return {"queued": 0, "in_flight": [], "paused": None}
+
+    def stop(self):
+        self.stopped = True
+
+
+def _seed_pinned_album(conn):
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) VALUES('ar','X','x',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,duration_s,"
+                 "is_compilation,navidrome_starred,updated_at) VALUES('al1','A','a','ar',2,60,0,0,0)")
+    for tid in ("t1", "t2"):
+        conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,size_bytes,content_type,"
+                     "navidrome_starred,updated_at) VALUES(?,'al1','T',30,'mp3',10,'audio/mpeg',0,0)", (tid,))
+    conn.execute("INSERT INTO pins(target_kind,target_id,source,added_at) VALUES('album','al1','user',0)")
+
+
+@pytest.mark.asyncio
+async def test_internal_storage_is_adopted_with_a_gated_queue(ctx, tmp_path, monkeypatch):
+    music = tmp_path / "storage" / "music"
+    ctx.cfg = replace(ctx.cfg, cache=replace(ctx.cfg.cache, internal_path=str(music)))
+    (tmp_path / "media" / "usb0").mkdir()          # unmarked, writable: would be a candidate
+    await _poll_once(ctx, monkeypatch)
+    assert ctx.cache_state.internal and ctx.cache_state.mount_path == music
+    assert (tmp_path / "cache-mount").resolve() == music.resolve()
+    q = ctx.download_queue()
+    assert q is not None
+    assert q.reserve_bytes == ctx.cfg.cache.reserve_bytes == 21474836480
+    assert q.max_concurrent == ctx.cfg.sync.max_concurrent_downloads == 2
+    assert ctx.cache_candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_queue_appears_once_a_source_is_configured(ctx, tmp_path, monkeypatch):
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig(),
+                      cache=replace(ctx.cfg.cache, internal_path=str(tmp_path / "music")))
+    await _poll_once(ctx, monkeypatch)
+    assert ctx.download_queue() is None
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig(url="https://music.example", username="u", password="p"))
+    assert ctx.download_queue() is not None
+
+
+@pytest.mark.asyncio
+async def test_losing_the_drive_stops_its_queue(ctx, tmp_path, monkeypatch):
+    drive = tmp_path / "media" / "usb0"
+    drive.mkdir()
+    (drive / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    fake = FakeQueue()
+    ctx._download_queue = fake
+    (drive / ".boombox-cache").unlink()
+    await _poll_once(ctx, monkeypatch)
+    assert fake.stopped and ctx._download_queue is None
+
+
+@pytest.mark.asyncio
+async def test_drive_swap_stops_the_old_queue_before_building_the_new_one(
+        ctx, tmp_path, monkeypatch):
+    first = tmp_path / "media" / "usb0"
+    first.mkdir()
+    (first / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    events: list[str] = []
+
+    class OldQueue(FakeQueue):
+        def stop(self):
+            events.append("stop old")
+            super().stop()
+
+    old = OldQueue()
+    ctx._download_queue = old
+    ctx._queue_key = (str(first), "https://music.example", "u", "p")
+
+    real_queue = svc.DownloadQueue
+
+    def building(*args, **kwargs):
+        events.append(f"build {kwargs['cache_root'].name}")
+        return real_queue(*args, **kwargs)
+    monkeypatch.setattr(svc, "DownloadQueue", building)
+
+    (first / ".boombox-cache").unlink()
+    second = tmp_path / "media" / "usb1"
+    second.mkdir()
+    (second / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    assert ctx.cache_state.mount_path == second
+    assert old.stopped
+    assert events[:2] == ["stop old", "build usb1"]
+    assert ctx._download_queue is not old and ctx._download_queue is not None
+    assert ctx._download_queue.cache_root == second
+
+
+def test_credentials_change_rebuilds_the_queue(ctx, tmp_path):
+    ctx.cache_state = svc.CacheDriveState(present=True, mount_path=tmp_path / "m",
+                                          free_bytes=None, total_bytes=None)
+    (tmp_path / "m").mkdir()
+    first = ctx.download_queue()
+    assert first is not None and ctx.download_queue() is first
+    stopped: list[bool] = []
+    first.stop = lambda: stopped.append(True)
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig(url="https://music.example",
+                                                   username="u", password="new"))
+    second = ctx.download_queue()
+    assert second is not None and second is not first and stopped == [True]
+
+
+@pytest.mark.asyncio
+async def test_close_stops_the_queue_and_the_probe(ctx):
+    fake = FakeQueue()
+    ctx._download_queue = fake
+    closed: list[bool] = []
+
+    async def close():
+        closed.append(True)
+    ctx._stream_probe.close = close
+    await ctx.close()
+    assert fake.stopped and ctx._download_queue is None and closed == [True]
+
+
+def test_failed_downloads_are_retried_on_the_hourly_cadence_only(ctx):
+    _seed_pinned_album(ctx.conn)
+    ctx.conn.execute("INSERT INTO cache_state(track_id,status,error_message) VALUES('t1','error','boom')")
+    fake = FakeQueue()
+    ctx._ensure_download_queue = lambda: fake
+    ctx._enqueue_pinned_downloads(now=10_000.0)              # first sync: retry failed
+    assert sorted(fake.enqueued) == ["t1", "t2"]
+    fake.enqueued.clear()
+    ctx._enqueue_pinned_downloads(now=10_000.0 + 120)        # backoff retry / "Sync now"
+    assert fake.enqueued == ["t2"]
+    fake.enqueued.clear()
+    ctx._enqueue_pinned_downloads(now=10_000.0 + 3600)       # an hour later
+    assert sorted(fake.enqueued) == ["t1", "t2"]

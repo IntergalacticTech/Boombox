@@ -28,7 +28,6 @@ from boombox_library.cache_drive import (
     adopt_drive,
     apply_rows_missing,
     apply_rows_restored,
-    detect_cache_drive,
     find_gone_rows,
     find_restorable_rows,
     list_candidate_drives,
@@ -36,6 +35,7 @@ from boombox_library.cache_drive import (
     missing_rows,
     present_rows,
     remove_symlink,
+    select_cache_drive,
     update_symlink,
 )
 from boombox_library.catalog import sync_full
@@ -45,7 +45,8 @@ from boombox_library.config import (
     save_config,
 )
 from boombox_library.db import connect, migrate
-from boombox_library.downloader import DownloadQueue
+from boombox_library.download_gates import MopidyStreamProbe, free_bytes, read_soc_temp_c
+from boombox_library.downloader import DownloadQueue, Gates
 from boombox_library.mopidy_config import reload_mopidy, remove_subsonic_block
 from boombox_library.pins import (
     all_pinned_track_ids,
@@ -111,6 +112,13 @@ class ServiceContext:
         self._online = False
         self._sync_task: asyncio.Task | None = None
         self._download_queue: DownloadQueue | None = None
+        # (drive, source) the current queue was built for; see _ensure_download_queue
+        self._queue_key: tuple[str, str, str, str] | None = None
+        # Mopidy "is a stream-proxy URI playing?" — a download gate.
+        self._stream_probe = MopidyStreamProbe()
+        # Last time pinned tracks in 'error' / 'no_space' were re-enqueued:
+        # failed downloads are retried on the hourly cadence only.
+        self._last_failed_retry = 0.0
         # Phase 2: surfaced through /api/library/health for the UI's SyncIndicator
         self.last_sync_ts: float = 0.0
         self.syncing: bool = False
@@ -173,11 +181,12 @@ class ServiceContext:
     def enqueue_streamed_download(self, track_id: str) -> None:
         """Queue an opportunistic streamed-cache download for a track the user
         is currently streaming. No-op if no cache drive is adopted."""
-        if self._download_queue is None:
+        queue = self._ensure_download_queue()
+        if queue is None:
             log.info("no cache drive; skipping streamed-cache enqueue of %s",
                      track_id)
             return
-        self._download_queue.enqueue(track_id)
+        queue.enqueue(track_id)
 
     async def clear_streamed_cache(self) -> int:
         """Delete every cache_state row whose track is NOT pin-protected, and
@@ -208,11 +217,24 @@ class ServiceContext:
         return cleared
 
     def cache_candidates(self) -> list[dict]:
-        """List drives that could be adopted as the cache (marker absent)."""
+        """List drives that could be adopted as the cache (marker absent).
+        Empty while the internal storage is the cache: a USB stick plugged
+        in then must not raise the kiosk's adopt prompt."""
+        if self.cache_state.internal:
+            return []
         return list_candidate_drives(
             [Path(p) for p in self.cfg.cache.search_paths],
             marker=self.cfg.cache.marker_filename,
         )
+
+    def download_queue(self) -> DownloadQueue | None:
+        """The live download queue (api.py keep / storage routes), or None
+        when there is no drive or no music server configured."""
+        return self._ensure_download_queue()
+
+    async def close(self) -> None:
+        self._stop_download_queue()
+        await self._stream_probe.close()
 
     # ----- background loops -----
     async def _sync_once(self) -> bool:
@@ -336,8 +358,9 @@ class ServiceContext:
     async def cache_poll(self) -> None:
         while True:
             try:
-                new_state = detect_cache_drive(
-                    search_paths=[Path(p) for p in self.cfg.cache.search_paths],
+                new_state = select_cache_drive(
+                    self.cfg.cache.internal_path,
+                    [Path(p) for p in self.cfg.cache.search_paths],
                     marker=self.cfg.cache.marker_filename,
                 )
                 if new_state.mount_path != self.cache_state.mount_path:
@@ -352,7 +375,7 @@ class ServiceContext:
                         lost = self.cache_state.mount_path
                         log.warning("cache drive lost")
                         remove_symlink(DEFAULT_SYMLINK)
-                        self._download_queue = None
+                        self._stop_download_queue()
                         if lost is not None:
                             n = mark_rows_missing(self.conn, lost)
                             if n:
@@ -394,32 +417,64 @@ class ServiceContext:
                      gone, back)
 
     def _init_download_queue(self, mount: Path) -> None:
-        if not self.cfg.source.url:
+        self._stop_download_queue()
+        src = self.cfg.source
+        if not src.url:
             return
-        # Note: client lifetime is per-download in default_fetch — this
-        # client is only used for download_url() construction.
-        client = SubsonicClient(self.cfg.source.url,
-                                self.cfg.source.username,
-                                self.cfg.source.password)
+        # Note: client lifetime is per-download in the fetch — this client
+        # is only used for download_url() construction.
+        client = SubsonicClient(src.url, src.username, src.password)
         self._download_queue = DownloadQueue(
             conn=self.conn, client=client, cache_root=mount,
             max_concurrent=self.cfg.sync.max_concurrent_downloads,
+            reserve_bytes=self.cfg.cache.reserve_bytes,
+            gates=Gates(
+                is_online=lambda: self._online,
+                is_streaming=self._stream_probe.is_streaming,
+                soc_temp_c=read_soc_temp_c,
+                free_bytes=lambda: free_bytes(mount),
+            ),
         )
+        self._queue_key = (str(mount), src.url, src.username, src.password)
 
-    def _enqueue_pinned_downloads(self) -> None:
-        if self._download_queue is None:
-            log.info("cache drive absent; pinned downloads deferred")
+    def _stop_download_queue(self) -> None:
+        if self._download_queue is not None:
+            self._download_queue.stop()
+        self._download_queue = None
+        self._queue_key = None
+
+    def _ensure_download_queue(self) -> DownloadQueue | None:
+        """The queue for the current drive + source: built on first need
+        (a source saved after the drive was adopted — the internal drive
+        never "changes"), rebuilt when the drive or the credentials change."""
+        mount = self.cache_state.mount_path if self.cache_state.present else None
+        src = self.cfg.source
+        if mount is None or not src.url:
+            self._stop_download_queue()
+            return None
+        if self._download_queue is None or self._queue_key != (
+                str(mount), src.url, src.username, src.password):
+            self._init_download_queue(mount)
+        return self._download_queue
+
+    def _enqueue_pinned_downloads(self, now: float | None = None) -> None:
+        queue = self._ensure_download_queue()
+        if queue is None:
+            log.info("no music storage or no source; pinned downloads deferred")
             return
         pinned = all_pinned_track_ids(self.conn)
         if not pinned:
             return
-        # Only enqueue tracks not already present
-        rows = self.conn.execute(
-            "SELECT track_id FROM cache_state WHERE status='present'"
-        )
-        present = {r[0] for r in rows}
-        for tid in pinned - present:
-            self._download_queue.enqueue(tid)
+        now = time.time() if now is None else now
+        retry_failed = now - self._last_failed_retry >= self.cfg.sync.interval_seconds
+        skip = ("present",) if retry_failed else ("present", "error", "no_space")
+        marks = ",".join("?" * len(skip))
+        have = {r[0] for r in self.conn.execute(
+            f"SELECT track_id FROM cache_state WHERE status IN ({marks})", skip)}
+        if retry_failed:
+            self._last_failed_retry = now
+        for tid in pinned - have:
+            queue.enqueue(tid)
 
     def _persist_pins_sidecar(self) -> None:
         if not self.cache_state.present or not self.cache_state.mount_path:
@@ -458,6 +513,7 @@ async def amain() -> None:
 
     sync_task.cancel()
     cache_task.cancel()
+    await ctx.close()
     await runner.cleanup()
     await close_shared_session()
 
