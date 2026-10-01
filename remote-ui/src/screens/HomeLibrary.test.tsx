@@ -35,7 +35,6 @@ function mockApi(overrides: Partial<RemoteApi> = {}): RemoteApi {
       throw new Error(`unmocked ${p}`);
     }),
     post: vi.fn().mockResolvedValue({ ok: true, count: 3, skipped: 0 }),
-    uploadFiles: vi.fn(),
     ...overrides,
   };
 }

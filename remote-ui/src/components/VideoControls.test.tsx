@@ -25,7 +25,6 @@ function setup(state: VideoState = ACTIVE) {
     base: "http://pi/",
     get: vi.fn().mockResolvedValue(state),
     post: vi.fn().mockResolvedValue({ ok: true }),
-    uploadFiles: vi.fn(),
   };
   const command = vi.fn().mockResolvedValue({ ok: true });
   render(
@@ -111,7 +110,7 @@ describe("VideoControls", () => {
     let release: (v: VideoState) => void = () => {};
     const get = vi.fn().mockImplementation(
       () => new Promise<VideoState>((r) => { release = r; }));
-    const api: RemoteApi = { base: "http://pi/", get, post: vi.fn(), uploadFiles: vi.fn() };
+    const api: RemoteApi = { base: "http://pi/", get, post: vi.fn() };
     const { unmount } = render(
       <ApiProvider api={api}>
         <RemoteContextHarness state={REMOTE} command={vi.fn()}>
@@ -137,7 +136,7 @@ describe("VideoControls", () => {
       ? Promise.resolve(first)
       : new Promise<VideoState>((r) => { pending.push(r); }));
     const post = vi.fn().mockResolvedValue({ ok: true });
-    const api: RemoteApi = { base: "http://pi/", get, post, uploadFiles: vi.fn() };
+    const api: RemoteApi = { base: "http://pi/", get, post };
     render(
       <ApiProvider api={api}>
         <RemoteContextHarness state={REMOTE} command={vi.fn()}>

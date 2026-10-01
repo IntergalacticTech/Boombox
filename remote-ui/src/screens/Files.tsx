@@ -40,6 +40,7 @@ export function FileBrowser({ client }: { client: FilesClient }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reload = (p = path) => {
@@ -60,7 +61,8 @@ export function FileBrowser({ client }: { client: FilesClient }) {
   };
 
   const onUpload = async (files: FileList | null) => {
-    if (!client.upload || !files || files.length === 0) return;
+    if (!client.upload || !files || files.length === 0 || uploading) return;
+    setUploading(true);
     setStatus(`Uploading ${files.length} file(s)…`);
     try {
       const res = await client.upload(Array.from(files));
@@ -68,6 +70,8 @@ export function FileBrowser({ client }: { client: FilesClient }) {
       reload();
     } catch (e: unknown) {
       setStatus(errorText(e, "Upload failed"));
+    } finally {
+      setUploading(false);
     }
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -108,7 +112,8 @@ export function FileBrowser({ client }: { client: FilesClient }) {
         )}
         {client.upload && (
           <>
-            <button type="button" onClick={() => fileInputRef.current?.click()} style={primaryBtn}>
+            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}
+                    style={{ ...primaryBtn, opacity: uploading ? 0.5 : 1 }}>
               + Upload</button>
             <input ref={fileInputRef} type="file" multiple style={{ display: "none" }}
                    aria-label="Choose files to upload" onChange={(e) => void onUpload(e.target.files)} />

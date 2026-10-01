@@ -17,7 +17,6 @@ function mockApi(overrides: Partial<RemoteApi> = {}): RemoteApi {
     base: "http://localhost/",
     get: vi.fn().mockResolvedValue(sample),
     post: vi.fn().mockResolvedValue({ ok: true }),
-    uploadFiles: vi.fn(),
     ...overrides,
   };
 }
@@ -65,6 +64,20 @@ describe("FileBrowser with the admin client", () => {
     fireEvent.change(input, { target: { files: [file] } });
     await waitFor(() => expect(c.upload).toHaveBeenCalledWith([file]));
     expect(await screen.findByText("Uploaded: 1 file(s)")).toBeTruthy();
+  });
+
+  it("+ Upload is disabled while an upload is in progress", async () => {
+    let finish!: (r: { saved: string[] }) => void;
+    const c = adminClient({ upload: vi.fn(() => new Promise<{ saved: string[] }>((res) => { finish = res; })) });
+    render(<FileBrowser client={c} />);
+    await screen.findByText("Albums");
+    const btn = screen.getByRole("button", { name: "+ Upload" }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText(/Choose files/i),
+                     { target: { files: [new File(["x"], "foo.mp3", { type: "audio/mpeg" })] } });
+    await waitFor(() => expect(btn.disabled).toBe(true));
+    finish({ saved: ["uploads/foo.mp3"] });
+    await waitFor(() => expect(btn.disabled).toBe(false));
   });
 
   it("deletes a file after confirming", async () => {

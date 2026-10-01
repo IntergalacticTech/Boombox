@@ -28,7 +28,6 @@ function stubApi(): RemoteApi {
       return { ok: true };
     }),
     post: vi.fn().mockResolvedValue({ ok: true }),
-    uploadFiles: vi.fn(),
   };
 }
 

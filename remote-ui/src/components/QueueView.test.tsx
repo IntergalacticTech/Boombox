@@ -18,7 +18,6 @@ function mockApi(overrides: Partial<RemoteApi> = {}): RemoteApi {
     base: "http://localhost/",
     get: vi.fn().mockResolvedValue(sample),
     post: vi.fn().mockResolvedValue({ ok: true }),
-    uploadFiles: vi.fn(),
     ...overrides,
   };
 }
