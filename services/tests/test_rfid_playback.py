@@ -144,3 +144,24 @@ async def test_library_online_follows_the_library_health(aiohttp_server):
 
 async def test_library_online_when_the_library_is_down_keeps_the_stream_path():
     assert await library_online("http://127.0.0.1:1/api/library/health", timeout=0.5) is True
+
+
+async def test_library_online_treats_any_unexpected_failure_as_online(monkeypatch):
+    import aiohttp
+
+    class Exploding:
+        def __init__(self, *a, **k):
+            raise RuntimeError("surprise")
+    monkeypatch.setattr(aiohttp, "ClientSession", Exploding)
+    assert await library_online("http://127.0.0.1:1/api/library/health") is True
+
+
+async def test_library_online_unknown_reachability_counts_as_online(aiohttp_server):
+    from aiohttp import web
+
+    async def health(req):
+        return web.json_response({"navidrome_reachable": True, "reachability_known": False})
+    app = web.Application()
+    app.router.add_get("/api/library/health", health)
+    srv = await aiohttp_server(app)
+    assert await library_online(str(srv.make_url("/api/library/health"))) is True

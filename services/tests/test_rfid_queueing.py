@@ -128,6 +128,10 @@ async def test_scan_failure_falls_back_to_track_objects(mopidy):
 
 # ---- the service's tap handler ------------------------------------------------
 
+async def _online() -> bool:
+    return True
+
+
 def _load_rfid_service():
     path = Path(__file__).resolve().parent.parent / "boombox-rfid.py"
     spec = importlib.util.spec_from_file_location("boombox_rfid_service", path)
@@ -154,6 +158,7 @@ async def test_tap_returns_before_tail_and_new_tap_supersedes(mopidy, monkeypatc
                             url="", username="", password="")))
     monkeypatch.setattr(svc, "resolve_uris",
                         lambda _c, ids, **_k: uris_by_card[ids[0]])
+    monkeypatch.setattr(svc, "library_online", _online)   # no real HTTP
     # Slow the tail so the second tap lands mid-append.
     monkeypatch.setattr(mc, "TAIL_GAP_S", 0.05)
 
@@ -205,6 +210,7 @@ def _tap_ctx(svc, mopidy, monkeypatch, uris_by_card):
                             url="", username="", password="")))
     monkeypatch.setattr(svc, "resolve_uris",
                         lambda _c, ids, **_k: uris_by_card[ids[0]])
+    monkeypatch.setattr(svc, "library_online", _online)   # no real HTTP
     return ctx
 
 

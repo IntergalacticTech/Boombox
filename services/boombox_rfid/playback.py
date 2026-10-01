@@ -93,7 +93,7 @@ async def library_online(url: str | None = None, timeout: float = 2.0) -> bool:
                 if r.status != 200:
                     return True
                 body = await r.json(content_type=None)
-    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+    except Exception:  # noqa: BLE001 — any failure to ask = "no answer" = online
         return True
     return not (isinstance(body, dict) and body.get("navidrome_reachable") is False)
 
