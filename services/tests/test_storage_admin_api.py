@@ -89,6 +89,11 @@ async def test_remove_and_retry_proxy(storage):
     assert ctx.library_calls[-1] == ("POST", "/api/library/storage/retry", {})
     for bad in ({"kind": "track", "id": "t1"}, {"kind": "album"}, ["al1"]):
         assert (await c.post("/api/accounts/storage/remove", json=bad, headers=auth)).status == 400
+    card = "bound to an RFID card — unbind the card to remove"
+    ctx.library_reply = (409, {"ok": False, "error": card})
+    r = await c.post("/api/accounts/storage/remove", json={"kind": "card_tracks", "id": ""}, headers=auth)
+    assert r.status == 409 and (await r.json())["error"] == card
+    assert ctx.library_calls[-1] == ("POST", "/api/library/storage/remove", {"kind": "card_tracks", "id": ""})
 
 
 async def test_upload_is_admin_multipart_only_on_its_path(storage):

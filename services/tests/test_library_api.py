@@ -884,3 +884,11 @@ async def test_json_with_charset_is_accepted(client):
     r = await c.post("/api/library/cache/clear", data=b"{}",
                      headers={"Content-Type": "application/json; charset=utf-8"})
     assert r.status == 200 and ctx.cleared_count == 1
+
+
+async def test_storage_remove_of_card_songs_is_refused(client):
+    c, _, _ = client
+    r = await c.post("/api/library/storage/remove", json={"kind": "card_tracks", "id": ""})
+    assert r.status == 409
+    assert await r.json() == {"ok": False,
+                              "error": "bound to an RFID card — unbind the card to remove"}

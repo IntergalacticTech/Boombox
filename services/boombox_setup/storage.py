@@ -18,7 +18,7 @@ from .accounts import STORAGE_UPLOAD_PATH
 log = logging.getLogger("boombox-setup.storage")
 
 LIBRARY_DOWN = "library service not answering"
-_REMOVE_KINDS = frozenset({"album", "artist", "playlist", "starred_tracks"})
+_REMOVE_KINDS = frozenset({"album", "artist", "playlist", "starred_tracks", "card_tracks"})
 
 
 async def _proxy(req: web.Request, method: str, path: str,

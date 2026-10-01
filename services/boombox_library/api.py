@@ -595,6 +595,8 @@ async def _storage_remove(req: web.Request) -> web.Response:
         body = None
     if isinstance(body, dict) and body.get("kind") == "starred_tracks":
         return _bad(keep_mod.STARRED_ONLY, 409)
+    if isinstance(body, dict) and body.get("kind") == "card_tracks":
+        return _bad(keep_mod.CARD_ONLY, 409)
     t = await _keep_target(req)
     if isinstance(t, web.Response):
         return t

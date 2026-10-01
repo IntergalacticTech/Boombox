@@ -166,6 +166,10 @@ def offline_flags(conn: Connection, results: list[dict]) -> list[dict]:
 
 
 STARRED_ONLY = "unstar in Navidrome to remove"
+CARD_ONLY = "bound to an RFID card — unbind the card to remove"
+# pins.source → the Storage page's "source" (an RFID pin shows as "card")
+_LISTED_SOURCES = {PinSource.USER.value: "user", PinSource.STARRED.value: "starred",
+                   PinSource.RFID.value: "card"}
 
 
 def _name(conn: Connection, kind: PinKind, target_id: str) -> str:
@@ -182,21 +186,26 @@ def _item(conn: Connection, kind: str, target_id: str, name: str, source: str,
 
 
 def kept_items(conn: Connection) -> list[dict]:
-    """User + starred keeps (albums / artists / playlists), oldest first,
-    then one aggregate row for starred single tracks."""
+    """User, starred and card-bound (RFID, source "card") pins on albums /
+    artists / playlists, oldest first, then one aggregate row each for
+    starred single tracks and card-bound single tracks."""
+    marks = ",".join("?" * len(_LISTED_SOURCES))
     rows = list(conn.execute(
-        "SELECT target_kind, target_id, source FROM pins "
-        "WHERE source IN ('user', 'starred') "
-        "AND target_kind IN ('album', 'artist', 'playlist') ORDER BY added_at"))
+        f"SELECT target_kind, target_id, source FROM pins WHERE source IN ({marks}) "
+        "AND target_kind IN ('album', 'artist', 'playlist') ORDER BY added_at",
+        tuple(_LISTED_SOURCES)))
     items: list[dict] = []
     for r in rows:
         kind = PinKind(r["target_kind"])
         items.append(_item(conn, kind.value, r["target_id"], _name(conn, kind, r["target_id"]),
-                           r["source"], track_ids(conn, kind, r["target_id"])))
-    starred = [r[0] for r in conn.execute(
-        "SELECT target_id FROM pins WHERE target_kind='track' AND source='starred'")]
-    if starred:
-        items.append(_item(conn, "starred_tracks", "", "Starred songs", "starred", starred))
+                           _LISTED_SOURCES[r["source"]], track_ids(conn, kind, r["target_id"])))
+    for source, kind_name, name in ((PinSource.STARRED, "starred_tracks", "Starred songs"),
+                                    (PinSource.RFID, "card_tracks", "Songs on cards")):
+        ids = [r[0] for r in conn.execute(
+            "SELECT target_id FROM pins WHERE target_kind='track' AND source=? "
+            "ORDER BY added_at", (source.value,))]
+        if ids:
+            items.append(_item(conn, kind_name, "", name, _LISTED_SOURCES[source.value], ids))
     return items
 
 
@@ -266,10 +275,14 @@ def remove_kept(conn: Connection, queue: Optional[QueueLike], kind: PinKind,
     pin protects any more (the plain unkeep leaves them to eviction).
     Only files that resolve inside ``cache_root`` (the adopted music drive)
     are deleted; any other path is logged and its row left 'present' (none
-    at all without a drive). Starred-only items can't be removed here.
+    at all without a drive). Starred-only and card-only items can't be
+    removed here (unstar / unbind the card instead).
     Idempotent."""
-    if _pin_source(conn, kind, target_id) == PinSource.STARRED.value:
+    source = _pin_source(conn, kind, target_id)
+    if source == PinSource.STARRED.value:
         return 409, {"ok": False, "error": STARRED_ONLY}
+    if source == PinSource.RFID.value:
+        return 409, {"ok": False, "error": CARD_ONLY}
     unkeep(conn, queue, kind, target_id, starred_auto_pin=starred_auto_pin)
     protected = all_pinned_track_ids(conn)
     orphans = [t for t in track_ids(conn, kind, target_id) if t not in protected]

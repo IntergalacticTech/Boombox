@@ -274,3 +274,56 @@ def test_remove_kept_without_a_drive_deletes_nothing(tmp_path):
     _present(conn, "t1", str(f1), 1)
     r = k.remove_kept(conn, None, PinKind.ALBUM, "al1", starred_auto_pin=True, cache_root=None)[1]
     assert r["removed_tracks"] == 0 and f1.exists()
+
+
+def _bind(conn, uid, kind, target_id, label=""):
+    from boombox_rfid.bindings import bind
+    from boombox_rfid.db import migrate as rfid_migrate
+    from boombox_rfid.models import BindingKind
+    rfid_migrate(conn)
+    bind(conn, uid, BindingKind(kind), target_id, label)
+
+
+def test_kept_items_lists_card_bound_pins_as_card(tmp_path):
+    conn = _db(tmp_path)
+    _bind(conn, "04aa", "album", "al1", "Blue")
+    _bind(conn, "04bb", "track", "t4")
+    _present(conn, "t1", size=700)
+    items = k.kept_items(conn)
+    assert {"kind": "album", "id": "al1", "name": "Blue", "source": "card",
+            "tracks_total": 3, "tracks_present": 1, "bytes": 700} in items
+    assert items[-1] == {"kind": "card_tracks", "id": "", "name": "Songs on cards",
+                         "source": "card", "tracks_total": 1, "tracks_present": 0, "bytes": 0}
+    # KeepState is unchanged: a card pin is not a keep
+    assert k.keep_state(conn, PinKind.ALBUM, "al1")["state"] == "none"
+
+
+def test_kept_items_shows_a_card_album_once_the_user_keeps_it_as_user(tmp_path):
+    conn = _db(tmp_path)
+    _bind(conn, "04aa", "album", "al1")
+    k.keep(conn, None, PinKind.ALBUM, "al1")
+    assert [(i["id"], i["source"]) for i in k.kept_items(conn)] == [("al1", "user")]
+
+
+def test_remove_card_only_pin_is_refused(tmp_path):
+    conn = _db(tmp_path)
+    _bind(conn, "04aa", "album", "al1")
+    f1 = tmp_path / "t1.mp3"
+    f1.write_bytes(b"x")
+    _present(conn, "t1", str(f1), 1)
+    status, r = k.remove_kept(conn, None, PinKind.ALBUM, "al1", starred_auto_pin=True, cache_root=tmp_path)
+    assert status == 409
+    assert r == {"ok": False, "error": "bound to an RFID card — unbind the card to remove"}
+    assert f1.exists() and _source(conn, "album", "al1") == "rfid"
+
+
+def test_remove_kept_card_overlap_falls_back_and_deletes_nothing(tmp_path):
+    conn = _db(tmp_path)
+    _bind(conn, "04aa", "album", "al1")
+    k.keep(conn, None, PinKind.ALBUM, "al1")
+    f1 = tmp_path / "t1.mp3"
+    f1.write_bytes(b"x")
+    _present(conn, "t1", str(f1), 1)
+    status, r = k.remove_kept(conn, None, PinKind.ALBUM, "al1", starred_auto_pin=True, cache_root=tmp_path)
+    assert status == 200 and r["removed_tracks"] == 0 and f1.exists()
+    assert _source(conn, "album", "al1") == "rfid"
