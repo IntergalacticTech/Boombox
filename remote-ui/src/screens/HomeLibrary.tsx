@@ -6,7 +6,7 @@ import { SectionMessage } from "../components/SectionMessage";
 import { SkeletonRows } from "../components/Skeleton";
 import { TILE_GRID } from "../components/grid";
 import {
-  KEEP_POLL_MS, MAX_EXPANDED_TRACKS, STATUS_POLL_MS, artPath, artistTrackIds, browseHome,
+  KEEP_IDLE_POLL_MS, KEEP_POLL_MS, KEEP_STALL_POLLS, MAX_EXPANDED_TRACKS, STATUS_POLL_MS, artPath, artistTrackIds, browseHome,
   homeDetail, homeStatus, keepHome, offlineIds, playHome, searchHome, unkeepHome,
   type HomeAlbumDetail, type HomeArtistDetail, type HomeItem, type HomeKind,
   type HomeList, type HomePlaylistDetail, type HomeSearchResult, type HomeStatus,
@@ -52,16 +52,22 @@ function usePlay(offline: boolean): { toast: string | null; play: PlayFn } {
 }
 
 /** Home Library reachability. null = unknown (route failed / older server):
- *  treated as online — no banner, nothing dimmed. */
+ *  treated as online — no banner, nothing dimmed. One failed check keeps the
+ *  last answer so a transient failure doesn't flicker the banner; the
+ *  second in a row falls back to unknown. */
 function useHomeStatus(): HomeStatus | null {
   const api = useApi();
   const [status, setStatus] = useState<HomeStatus | null>(null);
   useEffect(() => {
     let live = true;
+    let failures = 0;
     const load = () => {
       homeStatus(api)
-        .then((s) => { if (live) setStatus(s); })
-        .catch(() => { if (live) setStatus(null); });
+        .then((s) => { if (live) { failures = 0; setStatus(s); } })
+        .catch(() => {
+          failures += 1;
+          if (live && failures >= 2) setStatus(null);
+        });
     };
     load();
     const t = window.setInterval(load, STATUS_POLL_MS);
@@ -75,8 +81,10 @@ function mmss(sec: number | null | undefined): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-function NotOffline() {
-  return <span style={notOfflineTag}>not offline</span>;
+/** `tile`: in a column (tile) layout, don't stretch to the tile's width;
+ *  in a row the row's alignItems centers it. */
+function NotOffline({ tile }: { tile?: boolean }) {
+  return <span style={tile ? { ...notOfflineTag, alignSelf: "flex-start" } : notOfflineTag}>not offline</span>;
 }
 
 /** Home Library browser. Lists (albums / artists / playlists) and details
@@ -224,7 +232,7 @@ function HomeBrowse({ list, navigate, offline }: { list: HomeList; navigate: Nav
               {list === "albums" && i.year != null && (
                 <span style={{ fontSize: 12, color: "var(--ink2)" }}>{i.year}</span>
               )}
-              {dim(i.id) && <NotOffline />}
+              {dim(i.id) && <NotOffline tile />}
             </button>
           ))}
         </div>
@@ -303,18 +311,36 @@ function HomeDetail({ kind, id, navigate, offline }: {
     return () => { live = false; };
   }, [api, kind, id, attempt]);
 
-  // A kept item still downloading: refresh its progress (and track marks).
+  // A kept item still downloading: refresh its progress (and track marks)
+  // every KEEP_POLL_MS. After KEEP_STALL_POLLS polls with no change (tracks
+  // stuck in error / no_space, queue paused) slow to KEEP_IDLE_POLL_MS. A
+  // change in tracks_present re-runs this effect, which starts fast again;
+  // so does reopening the page (a new mount).
   const downloading = keep !== null && keep.state === "kept" && keep.tracks_present < keep.tracks_total;
+  const present = keep?.tracks_present ?? null;
   useEffect(() => {
     if (!downloading) return;
     let live = true;
-    const t = window.setInterval(() => {
+    let still = 0;
+    let t: number | undefined;
+    const schedule = () => {
+      t = window.setTimeout(tick, still >= KEEP_STALL_POLLS ? KEEP_IDLE_POLL_MS : KEEP_POLL_MS);
+    };
+    const tick = () => {
       homeDetail<Detail>(api, kind, id)
-        .then((d) => { if (live) { setData(d); setKeep(d.keep ?? null); } })
-        .catch(() => { /* keep showing the last progress */ });
-    }, KEEP_POLL_MS);
-    return () => { live = false; window.clearInterval(t); };
-  }, [api, kind, id, downloading]);
+        .then((d) => {
+          if (!live) return;
+          setData(d);
+          setKeep(d.keep ?? null);
+          // A change re-runs the effect (new `present`); this one just ends.
+          if ((d.keep?.tracks_present ?? null) === present) still += 1;
+        })
+        .catch(() => { still += 1; /* keep showing the last progress */ })
+        .finally(() => { if (live) schedule(); });
+    };
+    schedule();
+    return () => { live = false; window.clearTimeout(t); };
+  }, [api, kind, id, downloading, present]);
 
   const backList: HomeList = kind === "artist" ? "artists" : kind === "album" ? "albums" : "playlists";
   const back = (
@@ -349,7 +375,7 @@ function HomeDetail({ kind, id, navigate, offline }: {
                            style={{ width: "100%", aspectRatio: "1", borderRadius: 10 }} />
                 <span style={{ fontWeight: 600, fontSize: 14, ...ellipsis }}>{al.name}</span>
                 {al.year != null && <span style={{ fontSize: 12, color: "var(--ink2)" }}>{al.year}</span>}
-                {dimmed && <NotOffline />}
+                {dimmed && <NotOffline tile />}
               </button>
             );
           })}
@@ -430,7 +456,7 @@ const offlineBanner: CSSProperties = {
 };
 const notOfflineTag: CSSProperties = {
   fontSize: 11, color: "var(--ink2)", border: "1px solid var(--rule)", borderRadius: 999,
-  padding: "1px 6px", flexShrink: 0, alignSelf: "flex-start",
+  padding: "1px 6px", flexShrink: 0,
 };
 const keepRow: CSSProperties = {
   display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 14, color: "var(--ink2)",

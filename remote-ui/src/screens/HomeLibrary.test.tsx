@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { HomeLibrary } from "./HomeLibrary";
 import { Music } from "./Music";
 import { ApiProvider, ApiError, type RemoteApi } from "../lib/api";
-import { clearHomeCache } from "../lib/homeLibrary";
+import { clearHomeCache, KEEP_IDLE_POLL_MS, KEEP_POLL_MS, STATUS_POLL_MS } from "../lib/homeLibrary";
 
 const ALBUMS = { items: [
   { id: "al1", name: "Blue", artist_id: "ar1", year: 1971, art_id: "al-1" },
@@ -44,6 +44,7 @@ function wrap(api: RemoteApi, params: string[], navigate = vi.fn()) {
 }
 
 beforeEach(() => clearHomeCache());
+afterEach(() => { vi.useRealTimers(); });
 
 describe("HomeLibrary", () => {
   it("lists albums as tiles and opens one", async () => {
@@ -307,6 +308,59 @@ describe("HomeLibrary offline + keep", () => {
     expect(await screen.findByText("1 / 3 on the boombox")).toBeTruthy();
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(await screen.findByText("All 3 on the boombox")).toBeTruthy();
-    vi.useRealTimers();
+  });
+
+  it("progress polling backs off when nothing changes and resumes on a change", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const present = [1, 1, 1, 1, 2];
+    let calls = 0;
+    const api = mockApi({
+      get: vi.fn().mockImplementation(async (p: string) => {
+        if (p === "api/remote/home/album/al1") {
+          const n = present[Math.min(calls, present.length - 1)];
+          calls += 1;
+          return { ...ALBUM, keep: { state: "kept", tracks_total: 3, tracks_present: n } };
+        }
+        throw new Error(`unmocked ${p}`);
+      }),
+    });
+    wrap(api, ["album", "al1"]);
+    expect(await screen.findByText("1 / 3 on the boombox")).toBeTruthy();
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(KEEP_POLL_MS); });
+    }
+    expect(calls).toBe(4);   // the load + 3 polls with no change
+    await act(async () => { await vi.advanceTimersByTimeAsync(KEEP_POLL_MS * 2); });
+    expect(calls).toBe(4);   // backed off
+    await act(async () => { await vi.advanceTimersByTimeAsync(KEEP_IDLE_POLL_MS - KEEP_POLL_MS * 2); });
+    expect(calls).toBe(5);
+    expect(await screen.findByText("2 / 3 on the boombox")).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(KEEP_POLL_MS); });
+    expect(calls).toBe(6);   // a change brings back the 5 s poll
+  });
+
+  it("one failed status check keeps the last status; a second one drops it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let statusCalls = 0;
+    const api = offlineApi({
+      get: vi.fn().mockImplementation(async (p: string) => {
+        if (p === "api/remote/home/status") {
+          statusCalls += 1;
+          if (statusCalls === 1) return { online: false, internal_storage: true };
+          throw new Error("network");
+        }
+        if (p === "api/remote/home/offline") return { album_ids: ["al1"], artist_ids: [], playlist_ids: [] };
+        if (p === "api/remote/home/browse?type=albums") return ALBUMS;
+        throw new Error(`unmocked ${p}`);
+      }),
+    });
+    wrap(api, []);
+    expect(await screen.findByText("Offline — showing kept music")).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(STATUS_POLL_MS); });
+    expect(statusCalls).toBe(2);
+    expect(screen.getByText("Offline — showing kept music")).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(STATUS_POLL_MS); });
+    expect(statusCalls).toBe(3);
+    await waitFor(() => expect(screen.queryByText("Offline — showing kept music")).toBeNull());
   });
 });

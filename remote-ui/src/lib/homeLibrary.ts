@@ -39,6 +39,11 @@ export interface KeepResult { ok: boolean; keep: KeepState; queued?: number; can
 export const STATUS_POLL_MS = 30_000;
 /** How often a kept-but-incomplete detail page refreshes its progress. */
 export const KEEP_POLL_MS = 5_000;
+/** After KEEP_STALL_POLLS polls with no change in tracks_present (tracks
+ *  stuck in error / no_space, queue paused), poll only every KEEP_IDLE_POLL_MS
+ *  until something changes or the page is opened again. */
+export const KEEP_STALL_POLLS = 3;
+export const KEEP_IDLE_POLL_MS = 60_000;
 
 /** Cap for one "play artist", as on the kiosk. */
 export const MAX_EXPANDED_TRACKS = 500;
