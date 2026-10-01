@@ -85,6 +85,7 @@ class CacheStatus(str, Enum):
     DOWNLOADING = "downloading"
     PRESENT = "present"
     ERROR = "error"
+    NO_SPACE = "no_space"
 
 
 @dataclass(frozen=True)
