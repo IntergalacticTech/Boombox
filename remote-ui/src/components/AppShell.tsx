@@ -27,7 +27,7 @@ export function renderSection(route: Route, p: SectionProps, onOpenSettings: () 
     case "video": return <Video params={p.params} navigate={p.navigate} />;
     case "search": return <Search autoFocus={p.desktop} />;
     case "playlists": return <Playlists />;
-    case "files": return <Files />;
+    case "files": return <Files navigate={p.navigate} />;
     case "accounts": return <AccountsSection desktop={p.desktop} />;
     case "storage": return <StorageSection desktop={p.desktop} />;
     case "more":

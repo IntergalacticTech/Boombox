@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { Files } from "./Files";
+import { Files, FileBrowser, type FilesClient } from "./Files";
 import { ApiProvider, type RemoteApi } from "../lib/api";
 
 const sample = {
@@ -8,8 +8,7 @@ const sample = {
   parent: null,
   entries: [
     { name: "Albums", kind: "dir" as const, tracks: 42 },
-    { name: "Song.mp3", kind: "file" as const, size: 5 * 1024 * 1024,
-      deletable: true },
+    { name: "Song.mp3", kind: "file" as const, size: 5 * 1024 * 1024, deletable: true },
   ],
 };
 
@@ -17,73 +16,70 @@ function mockApi(overrides: Partial<RemoteApi> = {}): RemoteApi {
   return {
     base: "http://localhost/",
     get: vi.fn().mockResolvedValue(sample),
-    post: vi.fn().mockResolvedValue({ deleted: "x" }),
-    uploadFiles: vi.fn().mockResolvedValue({ saved: ["uploads/foo.mp3"] }),
+    post: vi.fn().mockResolvedValue({ ok: true }),
+    uploadFiles: vi.fn(),
     ...overrides,
   };
 }
 
-function wrap(api: RemoteApi) {
-  return render(<ApiProvider api={api}><Files /></ApiProvider>);
+function adminClient(overrides: Partial<FilesClient> = {}) {
+  return {
+    browse: vi.fn().mockResolvedValue(sample),
+    upload: vi.fn().mockResolvedValue({ saved: ["uploads/foo.mp3"] }),
+    remove: vi.fn().mockResolvedValue({ deleted: "Song.mp3" }),
+    ...overrides,
+  };
 }
 
-describe("Files", () => {
+describe("Files (household, read-only)", () => {
+  it("browses, offers no upload or delete, and points to Storage", async () => {
+    const navigate = vi.fn();
+    const api = mockApi();
+    render(<ApiProvider api={api}><Files navigate={navigate} /></ApiProvider>);
+    expect(await screen.findByText("Albums")).toBeTruthy();
+    expect(api.get).toHaveBeenCalledWith("api/remote/files/browse?path=");
+    expect(screen.queryByRole("button", { name: "+ Upload" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete Song.mp3" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open Storage" }));
+    expect(navigate).toHaveBeenCalledWith("storage");
+  });
+
+  it("enters a directory", async () => {
+    const api = mockApi();
+    render(<ApiProvider api={api}><Files navigate={vi.fn()} /></ApiProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: /Albums/ }));
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("api/remote/files/browse?path=Albums"));
+  });
+});
+
+describe("FileBrowser with the admin client", () => {
   beforeEach(() => { (globalThis as { confirm?: () => boolean }).confirm = () => true; });
   afterEach(() => { delete (globalThis as { confirm?: () => boolean }).confirm; });
 
-  it("loads the music root on mount", async () => {
-    const api = mockApi();
-    wrap(api);
-    await waitFor(() =>
-      expect(screen.getByText("Albums")).toBeTruthy());
-    expect(api.get).toHaveBeenCalledWith(
-      "api/remote/files/browse?path=",
-    );
-    expect(screen.getByText(/Song\.mp3/)).toBeTruthy();
-    expect(screen.getByText("(42)")).toBeTruthy();      // dir track count
-    expect(screen.getByText(/5\.0 MB/)).toBeTruthy();   // file size
-  });
-
-  it("entering a directory re-fetches with the new path", async () => {
-    const api = mockApi();
-    wrap(api);
-    await waitFor(() => screen.getByText("Albums"));
-    fireEvent.click(screen.getByText("Albums"));
-    expect(api.get).toHaveBeenLastCalledWith(
-      "api/remote/files/browse?path=Albums",
-    );
-  });
-
-  it("delete button POSTs the relative path then refreshes", async () => {
-    const api = mockApi();
-    wrap(api);
-    await waitFor(() => screen.getByText(/Song\.mp3/));
-    fireEvent.click(screen.getByLabelText(/Delete Song\.mp3/));
-    await waitFor(() => expect(api.post).toHaveBeenCalledWith(
-      "api/remote/files/delete", { path: "Song.mp3" },
-    ));
-  });
-
-  it("Upload click triggers uploadFiles + status message", async () => {
-    const api = mockApi();
-    wrap(api);
-    await waitFor(() => screen.getByText("Albums"));
+  it("uploads files", async () => {
+    const c = adminClient();
+    render(<FileBrowser client={c} />);
+    await screen.findByText("Albums");
     const input = screen.getByLabelText(/Choose files/i) as HTMLInputElement;
-    const file = new File(["bytes"], "drop.mp3", { type: "audio/mpeg" });
+    const file = new File(["x"], "foo.mp3", { type: "audio/mpeg" });
     fireEvent.change(input, { target: { files: [file] } });
-    await waitFor(() => expect(api.uploadFiles).toHaveBeenCalled());
-    expect((api.uploadFiles as ReturnType<typeof vi.fn>).mock.calls[0][0])
-      .toBe("api/remote/files/upload");
-    await waitFor(() =>
-      expect(screen.getByRole("status").textContent).toMatch(/Uploaded/));
+    await waitFor(() => expect(c.upload).toHaveBeenCalledWith([file]));
+    expect(await screen.findByText("Uploaded: 1 file(s)")).toBeTruthy();
   });
 
-  it("renders the error banner on a failed browse", async () => {
-    const api = mockApi({
-      get: vi.fn().mockRejectedValue(new Error("network")),
-    });
-    wrap(api);
-    await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toMatch(/Error/));
+  it("deletes a file after confirming", async () => {
+    const c = adminClient();
+    render(<FileBrowser client={c} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Song.mp3" }));
+    await waitFor(() => expect(c.remove).toHaveBeenCalledWith("Song.mp3"));
+  });
+
+  it("a browse failure shows the message and Retry", async () => {
+    const c = adminClient({ browse: vi.fn().mockRejectedValueOnce(new Error("library down"))
+                                             .mockResolvedValue(sample) });
+    render(<FileBrowser client={c} />);
+    expect(await screen.findByText("library down")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Albums")).toBeTruthy();
   });
 });

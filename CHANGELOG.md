@@ -5,6 +5,40 @@ prefixes in `git log`.
 
 ---
 
+## Unreleased — offline music (LAN app 2A)
+
+The boombox keeps music for the road on its own drive.
+
+### Migration
+
+`install.sh` now creates `/opt/boombox/storage/music` (boombox user, 0755);
+`boombox-library` also creates it on start when it can. A `library.yml`
+still carrying the old 1 GiB `reserve_bytes` default is read as 20 GiB.
+nginx gains `location = /api/accounts/storage/files/upload` (synced by
+`apply-release.sh swap` like the rest of the site).
+
+### Added
+
+- **Keep offline** on Home Library albums / artists / playlists in the LAN
+  app, with "N / M on the boombox" progress; everything starred in Navidrome
+  is kept automatically. Originals download to `/opt/boombox/storage/music`
+  (`cache.internal_path`), ≤ 2 at a time, paused while a stream plays, while
+  the SoC is ≥ 70 °C and while the homelab is unreachable; 20 GiB is always
+  kept free.
+- **Offline mode**: with the homelab unreachable the Music section says
+  "Offline — showing kept music", dims what isn't on the boombox and plays
+  only kept tracks; RFID cards do the same.
+- **Admin → Storage** (`#/storage`): drive size / free / reserve, kept items
+  with Remove, the download queue with its pause reason, Retry failed, and
+  the music-folder uploader.
+
+### Changed
+
+- Uploading and deleting files moved from the household Files tab to
+  Admin → Storage (`/api/accounts/storage/files/*`, admin session);
+  `POST /api/remote/files/upload|delete` now answer 403. Paired phones
+  browse and download only.
+
 ## Unreleased — LAN app
 
 The phone/laptop remote grows into the **LAN app** at `http://<boombox>:8090/`.

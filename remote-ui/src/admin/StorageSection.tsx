@@ -3,9 +3,10 @@ import { ErrorText, SecondaryButton } from "./ui";
 import { LockScreen } from "./LockScreen";
 import { lock, useAdminSession } from "./session";
 import { UNREACHABLE, ACCOUNTS_DESKTOP_COLUMNS } from "./AccountsSection";
-import { storageApi } from "./storage/api";
+import { adminFilesClient, storageApi } from "./storage/api";
 import type { KeptItem, PauseReason, StorageOverview } from "./storage/types";
 import { SectionMessage } from "../components/SectionMessage";
+import { FileBrowser } from "../screens/Files";
 
 export const STORAGE_POLL_MS = 5000;
 export const PAUSED_TEXT: Record<PauseReason, string> = {
@@ -204,7 +205,10 @@ function StoragePanel({ desktop, extra }: { desktop: boolean; extra?: ReactNode 
 export function StorageSection({ desktop }: { desktop: boolean }) {
   const { unlocked, expired } = useAdminSession();
   if (!unlocked) return <LockScreen expired={expired} purpose="manage storage" />;
-  return <StoragePanel desktop={desktop} />;
+  return (
+    <StoragePanel desktop={desktop} extra={
+      <Panel title="Uploads" wide><FileBrowser client={adminFilesClient} /></Panel>} />
+  );
 }
 
 const page: CSSProperties = { padding: 16, paddingBottom: 96, display: "flex", flexDirection: "column", gap: 16 };

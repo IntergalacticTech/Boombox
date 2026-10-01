@@ -107,23 +107,38 @@ describe("StorageSection", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       const fetchMock = mockFetch({ "GET /api/accounts/storage": OVERVIEW });
+      // Count overview polls only (the Uploads panel browses once per mount).
+      const polls = () => fetchMock.mock.calls.filter(([u]) => u === "/api/accounts/storage").length;
       const { unmount } = render(<StorageSection desktop={false} />);
       await screen.findByText("Internal drive");
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(polls()).toBe(1);
       await vi.advanceTimersByTimeAsync(STORAGE_POLL_MS);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(polls()).toBe(2);
       unmount();
       await vi.advanceTimersByTimeAsync(STORAGE_POLL_MS * 3);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(polls()).toBe(2);
 
       render(<StorageSection desktop={false} />);
-      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect(polls()).toBe(3));
       act(() => adminSession.clear("logout"));
       expect(await screen.findByLabelText("Web password")).toBeTruthy();
       await vi.advanceTimersByTimeAsync(STORAGE_POLL_MS * 3);
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(polls()).toBe(3);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("the Uploads panel browses the music folder with the admin session", async () => {
+    const fetchMock = mockFetch({
+      "GET /api/accounts/storage": OVERVIEW,
+      "GET /api/accounts/storage/files/browse?path=": {
+        path: "", parent: null, entries: [{ name: "uploads", kind: "dir", tracks: 3 }] },
+    });
+    render(<StorageSection desktop />);
+    expect(await screen.findByText("uploads")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "+ Upload" })).toBeTruthy();
+    const call = fetchMock.mock.calls.find(([u]) => u === "/api/accounts/storage/files/browse?path=")!;
+    expect((call[1] as RequestInit).headers).toEqual(expect.objectContaining({ Authorization: "Bearer tok" }));
   });
 });

@@ -24,8 +24,25 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   }
 }
 
+/** Multipart upload (field "file") with the admin token. */
+async function upload<T>(path: string, files: File[]): Promise<T> {
+  const form = new FormData();
+  for (const f of files) form.append("file", f, f.name);
+  const headers: Record<string, string> = {};
+  const token = adminSession.token();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const r = await fetch(BASE + path, { method: "POST", credentials: "same-origin", headers, body: form });
+  if (r.status === 401) adminSession.clear("expired");
+  try {
+    return (await r.json()) as T;
+  } catch {
+    throw new Error(`HTTP ${r.status}`);
+  }
+}
+
 export const accountsApi = {
   get: <T>(path: string) => call<T>("GET", path),
   post: <T>(path: string, body?: unknown) => call<T>("POST", path, body),
   put: <T>(path: string, body?: unknown) => call<T>("PUT", path, body),
+  upload: <T>(path: string, files: File[]) => upload<T>(path, files),
 };
