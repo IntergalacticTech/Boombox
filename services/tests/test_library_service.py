@@ -707,3 +707,149 @@ async def test_drive_swap_waits_for_the_old_download_to_unwind(ctx, tmp_path, mo
     assert seen == [(True, ["t1.part"], False, "absent")]
     assert ctx._download_queue is built[-1] and built[-1].cache_root == second
     assert old_task.cancelled()
+
+
+# ---- reachability probe (independent of the full sync) ----
+
+class _CountingClient(FakeClient):
+    made: list[dict] = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        _CountingClient.made.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_reachability_is_unknown_and_treated_online_until_the_first_probe(ctx):
+    assert ctx.reachability_known() is False
+    assert await ctx.is_online() is True          # boot: RFID / app still stream
+    assert ctx._online is False                   # the download gate stays idle
+
+
+@pytest.mark.asyncio
+async def test_probe_sets_reachability_from_a_short_ping(ctx, monkeypatch):
+    _CountingClient.made = []
+    monkeypatch.setattr(svc, "SubsonicClient", _CountingClient)
+    FakeClient.ping_exc = SubsonicUnreachable("timeout")
+    assert await ctx._probe_once() is False
+    assert ctx.reachability_known() is True
+    assert await ctx.is_online() is False
+    FakeClient.ping_exc = None
+    assert await ctx._probe_once() is True
+    assert await ctx.is_online() is True
+    assert _CountingClient.made[0]["timeout_seconds"] == svc.PROBE_TIMEOUT_S == 5
+
+
+@pytest.mark.asyncio
+async def test_probe_offline_to_online_edge_kicks_one_sync(ctx, monkeypatch):
+    kicks: list[bool] = []
+
+    async def fake_trigger():
+        kicks.append(True)
+    monkeypatch.setattr(ctx, "trigger_sync", fake_trigger)
+    assert await ctx._probe_once() is True        # unknown → online: no kick
+    assert kicks == []                            # (sync_timer's boot sync covers it)
+    FakeClient.ping_exc = SubsonicUnreachable("down")
+    await ctx._probe_once()
+    FakeClient.ping_exc = None
+    await ctx._probe_once()                       # offline → online
+    await ctx._probe_once()                       # still online
+    assert kicks == [True]
+
+
+@pytest.mark.asyncio
+async def test_probe_edge_does_not_start_a_second_sync(ctx):
+    running = asyncio.get_running_loop().create_future()
+    ctx._sync_task = running                      # a sync is already going
+    ctx._set_reachable(False)
+    assert await ctx._probe_once() is True
+    assert ctx._sync_task is running
+    running.cancel()
+
+
+@pytest.mark.asyncio
+async def test_probe_loop_retries_fast_at_boot_then_every_30s(ctx):
+    FakeClient.ping_exc = SubsonicUnreachable("wifi not up yet")
+    now = {"t": 1000.0}
+    delays: list[float] = []
+
+    async def fake_sleep(d):
+        delays.append(d)
+        now["t"] += d
+        if len(delays) == 15:
+            raise asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await ctx.reachability_probe(sleep=fake_sleep, clock=lambda: now["t"])
+    # 10 s retries for the first two minutes, then the regular 30 s cadence
+    assert delays[:12] == [10.0] * 12
+    assert delays[12:] == [30.0] * 3
+
+
+@pytest.mark.asyncio
+async def test_probe_loop_settles_to_30s_once_reachable(ctx):
+    delays: list[float] = []
+
+    async def fake_sleep(d):
+        delays.append(d)
+        if len(delays) == 3:
+            raise asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await ctx.reachability_probe(sleep=fake_sleep, clock=lambda: 0.0)
+    assert delays == [30.0, 30.0, 30.0]
+    assert await ctx.is_online() is True
+
+
+@pytest.mark.asyncio
+async def test_probe_does_nothing_without_a_music_server(ctx, monkeypatch):
+    _CountingClient.made = []
+    monkeypatch.setattr(svc, "SubsonicClient", _CountingClient)
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig())
+    delays: list[float] = []
+
+    async def fake_sleep(d):
+        delays.append(d)
+        if len(delays) == 2:
+            raise asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await ctx.reachability_probe(sleep=fake_sleep, clock=lambda: 0.0)
+    assert _CountingClient.made == []
+    assert delays == [30.0, 30.0]
+    assert await ctx.is_online() is False         # nothing to stream from
+
+
+@pytest.mark.asyncio
+async def test_link_failure_marks_offline_at_once(ctx):
+    await ctx._probe_once()
+    assert await ctx.is_online() is True
+    ctx.mark_offline()
+    assert await ctx.is_online() is False and ctx.reachability_known()
+
+
+@pytest.mark.asyncio
+async def test_sync_outcome_still_sets_reachability(ctx):
+    assert await ctx._sync_once() is True
+    assert ctx.reachability_known() and await ctx.is_online()
+    FakeClient.ping_exc = SubsonicUnreachable("down")
+    assert await ctx._sync_once() is False
+    assert await ctx.is_online() is False
+
+
+@pytest.mark.asyncio
+async def test_close_stops_the_reachability_probe(ctx):
+    ctx.start_reachability_probe()
+    task = ctx._probe_task
+    assert task is not None and not task.done()
+    await asyncio.sleep(0)
+    await ctx.close()
+    assert task.done()
+    assert ctx._probe_task is None
+
+
+@pytest.mark.asyncio
+async def test_queue_gate_reports_link_failures(ctx, tmp_path):
+    await ctx._probe_once()
+    ctx.cache_state = svc.CacheDriveState(present=True, mount_path=_drive(tmp_path / "m"),
+                                          free_bytes=None, total_bytes=None)
+    q = ctx.download_queue()
+    assert q is not None
+    q._gates.report_offline()
+    assert await ctx.is_online() is False

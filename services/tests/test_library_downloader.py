@@ -531,6 +531,25 @@ async def test_link_drop_idles_the_queue_instead_of_failing_every_track(tmp_path
     assert [_status(conn, f"t{i}") for i in range(5)] == ["present"] * 5
 
 
+async def test_link_drop_reports_the_server_offline(tmp_path):
+    conn = _db(tmp_path, n=1)
+    reported: list[bool] = []
+    now = {"t": 0.0}
+
+    async def fetch(url, params, dest):
+        if not reported:
+            raise aiohttp.ClientConnectionError("connection refused")
+        dest.write_bytes(b"x")
+
+    q = DownloadQueue(conn, FakeStreamingClient(b""), _cache(tmp_path), 1, fetch,
+                      gates=Gates(report_offline=lambda: reported.append(True)),
+                      sleep=Sleeps(lambda n: now.update(t=now["t"] + 60.0)),
+                      clock=lambda: now["t"])
+    q.enqueue("t0")
+    await q.drain()
+    assert reported == [True]
+
+
 async def test_low_space_is_a_hard_stop_until_room_appears(tmp_path):
     conn = _db(tmp_path)
     state = {"free": 10}

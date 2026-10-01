@@ -52,7 +52,7 @@ _RECHECK_S = {"offline": OFFLINE_RECHECK_S, "low_space": PAUSE_RECHECK_S,
               "hot": THERMAL_RECHECK_S, "streaming": PAUSE_RECHECK_S}
 # What a CDN / tunnel answers when the homelab behind it is down: the link
 # failed, not the track. (503 stays a track error: Navidrome itself sends it.)
-_LINK_DOWN_STATUSES = frozenset({502, 504, 520, 521, 522, 523, 524, 530})
+LINK_DOWN_STATUSES = frozenset({502, 504, 520, 521, 522, 523, 524, 530})
 
 
 class DownloadResult(str, enum.Enum):
@@ -94,7 +94,7 @@ def _safe_error_message(e: Exception) -> str:
 def is_link_failure(e: BaseException) -> bool:
     """The connection to the music server failed (vs. this track failing)."""
     if isinstance(e, aiohttp.ClientResponseError):
-        return e.status in _LINK_DOWN_STATUSES
+        return e.status in LINK_DOWN_STATUSES
     return isinstance(e, (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError,
                           asyncio.TimeoutError, ConnectionError))
 
@@ -280,6 +280,10 @@ def _unknown_free() -> Optional[int]:
     return None
 
 
+def _nothing() -> None:
+    return None
+
+
 @dataclass
 class Gates:
     """Inputs the scheduler checks before each start (defaults: all clear)."""
@@ -287,6 +291,9 @@ class Gates:
     is_streaming: Callable[[], Awaitable[bool]] = _never_streaming
     soc_temp_c: Callable[[], Optional[float]] = _unknown
     free_bytes: Callable[[], Optional[int]] = _unknown_free
+    # Told when a download loses the link, so the service marks the music
+    # server offline at once instead of waiting for its next probe.
+    report_offline: Callable[[], None] = _nothing
 
 
 class DownloadQueue:
@@ -432,6 +439,10 @@ class DownloadQueue:
         in flight, or it has now dropped MAX_LINK_RETRIES times in a row
         (then it is a track problem: 'error', retried by the hourly sync)."""
         self._offline_until = self._clock() + OFFLINE_RECHECK_S
+        try:
+            self._gates.report_offline()
+        except Exception:  # a broken hook never breaks the queue
+            log.exception("report_offline hook failed")
         if track_id in self._cancelled:
             self._link_failures.pop(track_id, None)
             self.conn.execute(

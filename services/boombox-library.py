@@ -16,6 +16,7 @@ import logging
 import signal
 import time
 from pathlib import Path
+from typing import Awaitable, Callable
 
 import aiohttp
 from aiohttp import web
@@ -78,6 +79,13 @@ CACHE_POLL_SECONDS = 5
 # Permanent failures (bad password, a local bug) wait the full interval:
 # hammering them only adds sync load and failed-auth hits at the edge.
 SYNC_RETRY_BASE_SECONDS = 60
+# Reachability probe (a Subsonic ping, independent of the hourly sync):
+# every PROBE_INTERVAL_S, or every PROBE_RETRY_S while it fails during the
+# first PROBE_BOOT_WINDOW_S after start (Wi-Fi often comes up after us).
+PROBE_INTERVAL_S = 30.0
+PROBE_RETRY_S = 10.0
+PROBE_BOOT_WINDOW_S = 120.0
+PROBE_TIMEOUT_S = 5.0
 PORT = 6687
 
 
@@ -109,7 +117,13 @@ class ServiceContext:
             present=False, mount_path=None,
             free_bytes=None, total_bytes=None,
         )
+        # Last known reachability of the music server. Until the first probe
+        # or sync answers it is unknown (_reachability_known False) and
+        # is_online() reports True, so a tap right after boot still streams;
+        # the download gate reads _online itself and idles until known.
         self._online = False
+        self._reachability_known = False
+        self._probe_task: asyncio.Task | None = None
         self._sync_task: asyncio.Task | None = None
         self._download_queue: DownloadQueue | None = None
         # (drive, source) the current queue was built for; see _ensure_download_queue
@@ -138,7 +152,27 @@ class ServiceContext:
 
     # ----- helpers exposed to api.py -----
     async def is_online(self) -> bool:
-        return self._online
+        if not self.cfg.source.url:
+            return False                 # no music server: nothing to stream
+        return self._online if self._reachability_known else True
+
+    def reachability_known(self) -> bool:
+        return self._reachability_known or not self.cfg.source.url
+
+    def _set_reachable(self, ok: bool) -> bool:
+        """Record a reachability answer. True on an offline → online edge
+        (a known offline before; unknown → online is not an edge)."""
+        edge = ok and self._reachability_known and not self._online
+        self._online = ok
+        self._reachability_known = True
+        return edge
+
+    def mark_offline(self) -> None:
+        """A stream relay or a download just lost the link: offline now,
+        not at the next probe. The probe flips it back (and syncs)."""
+        if self._online or not self._reachability_known:
+            log.info("music server link failed; marking offline")
+        self._set_reachable(False)
 
     def cache_drive_state(self) -> CacheDriveState:
         return self.cache_state
@@ -240,6 +274,10 @@ class ServiceContext:
 
     async def close(self) -> None:
         self._closed = True
+        task, self._probe_task = self._probe_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await self._retire_download_queue()
         await self._stream_probe.close()
 
@@ -281,9 +319,9 @@ class ServiceContext:
                     await client.ping()
                 except Exception as e:
                     log.warning("ping failed: %s: %s", type(e).__name__, e)
-                    self._online = False
+                    self._set_reachable(False)
                     return e
-                self._online = True
+                self._set_reachable(True)
                 try:
                     t0 = time.monotonic()
                     counts = await sync_full(client, self.conn)
@@ -306,7 +344,7 @@ class ServiceContext:
                 except SubsonicUnreachable as e:
                     # The link dropped mid-sync (timeout, Cloudflare page).
                     log.warning("sync aborted, source unreachable: %s", e)
-                    self._online = False
+                    self._set_reachable(False)
                     return e
                 except Exception as e:
                     log.exception("sync failed: %s", e)
@@ -314,7 +352,7 @@ class ServiceContext:
         except Exception as e:
             # Client setup/teardown itself failed — treat as unreachable.
             log.exception("sync client failed")
-            self._online = False
+            self._set_reachable(False)
             return e
         finally:
             self.syncing = False
@@ -361,6 +399,57 @@ class ServiceContext:
                 self._sync_done.clear()
                 if not await self._wait_or_woken(delay):
                     break
+
+    def start_reachability_probe(self) -> None:
+        """Start reachability_probe as a task owned here; close() stops it."""
+        if self._probe_task is None or self._probe_task.done():
+            self._probe_task = asyncio.create_task(self.reachability_probe())
+
+    async def _probe_once(self) -> bool | None:
+        """One short Subsonic ping. Sets reachability and returns it; None
+        (nothing done) when no music server is configured. Any failure —
+        unreachable, timeout, bad credentials — counts as offline, as it
+        does for the sync's own ping. An offline → online edge kicks a sync
+        (trigger_sync skips it when one is already running)."""
+        src = self.cfg.source
+        if not src.url:
+            return None
+        try:
+            async with SubsonicClient(src.url, src.username, src.password,
+                                      timeout_seconds=PROBE_TIMEOUT_S) as client:
+                await client.ping()
+            ok = True
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — any failure = unreachable
+            log.debug("reachability ping failed: %s: %s", type(e).__name__, e)
+            ok = False
+        was = self._online if self._reachability_known else None
+        if self._set_reachable(ok):
+            log.info("music server reachable again; syncing")
+            await self.trigger_sync()
+        elif was is not ok:
+            log.info("music server %s", "reachable" if ok else "unreachable")
+        return ok
+
+    async def reachability_probe(
+        self, *, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        """Ping now, then every PROBE_INTERVAL_S — every PROBE_RETRY_S while
+        failing in the first PROBE_BOOT_WINDOW_S. Never raises (other than
+        cancellation)."""
+        started = clock()
+        while True:
+            ok: bool | None = None
+            try:
+                ok = await self._probe_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("reachability probe failed; will retry")
+            booting = clock() - started < PROBE_BOOT_WINDOW_S
+            await sleep(PROBE_RETRY_S if ok is False and booting else PROBE_INTERVAL_S)
 
     async def cache_poll(self) -> None:
         while True:
@@ -450,6 +539,7 @@ class ServiceContext:
             reserve_bytes=self.cfg.cache.reserve_bytes,
             gates=Gates(
                 is_online=lambda: self._online,
+                report_offline=self.mark_offline,
                 is_streaming=self._stream_probe.is_streaming,
                 soc_temp_c=read_soc_temp_c,
                 free_bytes=lambda: free_bytes(mount),
@@ -573,6 +663,7 @@ async def amain() -> None:
     # Background loops
     sync_task = asyncio.create_task(ctx.sync_timer())
     cache_task = asyncio.create_task(ctx.cache_poll())
+    ctx.start_reachability_probe()
 
     # Wait forever (until SIGTERM)
     stop = asyncio.Event()

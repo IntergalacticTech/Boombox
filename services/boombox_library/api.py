@@ -48,7 +48,10 @@ class Context(Protocol):
     # SQLite on every browse.
     snapshot_dir: Path
 
+    # True while reachability is unknown (before the first probe answers):
+    # callers treat unknown as online. reachability_known says which it is.
     async def is_online(self) -> bool: ...
+    def reachability_known(self) -> bool: ...
     async def trigger_sync(self) -> None: ...
     def cache_drive_state(self): ...
     def save_config(self, cfg: LibraryConfig) -> None: ...
@@ -99,7 +102,11 @@ async def _health(req: web.Request) -> web.Response:
     drive = ctx.cache_drive_state()
     return web.json_response({
         "service_version": __version__,
+        # Boolean-compatible: true until the first probe answers (unknown
+        # counts as online for RFID and the apps); reachability_known
+        # tells the two apart.
         "navidrome_reachable": await ctx.is_online(),
+        "reachability_known": ctx.reachability_known(),
         "cache_present": bool(drive and drive.present) if drive else False,
         "cache_mount": str(drive.mount_path) if drive and drive.mount_path else None,
         "internal_storage": bool(drive and getattr(drive, "internal", False)),

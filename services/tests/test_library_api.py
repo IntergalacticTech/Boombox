@@ -25,6 +25,7 @@ class FakeContext:
         self.cfg = cfg or DEFAULT_CONFIG
         self.cache_state = cache_state  # CacheDriveState
         self._ping_ok = ping_ok
+        self._known = True
         self.synced = 0
         # Phase 2 additions:
         self.last_sync_ts: float = 0.0
@@ -43,6 +44,9 @@ class FakeContext:
 
     async def is_online(self) -> bool:
         return self._ping_ok
+
+    def reachability_known(self) -> bool:
+        return self._known
 
     async def trigger_sync(self) -> None:
         self.synced += 1
@@ -98,6 +102,16 @@ async def test_health_returns_status(client):
     assert "navidrome_reachable" in body
     assert "cache_present" in body
     assert "service_version" in body
+    assert body["reachability_known"] is True
+
+
+@pytest.mark.asyncio
+async def test_health_reports_unknown_reachability_as_reachable(client):
+    c, ctx, _ = client
+    ctx._known = False          # before the first probe; is_online() says True
+    body = await (await c.get("/api/library/health")).json()
+    assert body["navidrome_reachable"] is True
+    assert body["reachability_known"] is False
 
 
 @pytest.mark.asyncio

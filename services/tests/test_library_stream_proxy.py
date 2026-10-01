@@ -26,12 +26,16 @@ class Ctx:
         self.cfg = SimpleNamespace(source=source)
         self._online = online
         self.online_calls = 0
+        self.marked_offline = 0
         self.art_cache_dir = Path("/tmp/boombox-art-test")
         self.snapshot_dir = Path("/tmp/boombox-snap-test")
 
     async def is_online(self) -> bool:
         self.online_calls += 1
         return self._online
+
+    def mark_offline(self) -> None:
+        self.marked_offline += 1
 
 
 def _seed(conn):
@@ -83,6 +87,8 @@ class Upstream:
                 {"subsonic-response": {"status": "failed", "error": "bad"}})
         if self.mode == "http500":
             return web.Response(status=500, text="boom")
+        if self.mode == "http530":
+            return web.Response(status=530, text="origin unreachable")
         if self.mode == "slow":
             await asyncio.sleep(2)
         if self.mode == "endless":
@@ -241,13 +247,41 @@ async def test_stream_upstream_unreachable_is_502(env):
     assert "unreachable" in await r.text()
 
 
+async def test_stream_link_failure_marks_the_server_offline(env):
+    c, ctx, _, _ = env
+    ctx.cfg.source.url = "http://127.0.0.1:9"  # refused: the link, not the track
+    r = await c.get("/api/library/stream/t1")
+    assert r.status == 502
+    assert ctx.marked_offline == 1
+
+
+async def test_stream_tunnel_down_status_marks_offline_but_track_errors_do_not(env):
+    c, ctx, up, _ = env
+    up.mode = "http500"                        # Navidrome itself answered
+    await c.get("/api/library/stream/t1")
+    assert ctx.marked_offline == 0
+    up.mode = "http530"                        # Cloudflare: origin unreachable
+    r = await c.get("/api/library/stream/t1")
+    assert r.status == 502
+    assert ctx.marked_offline == 1
+
+
+async def test_stream_link_failure_without_a_mark_offline_hook_is_still_502(env):
+    c, ctx, _, _ = env
+    ctx.mark_offline = None                    # an older context: nothing to call
+    ctx.cfg.source.url = "http://127.0.0.1:9"
+    r = await c.get("/api/library/stream/t1")
+    assert r.status == 502
+
+
 async def test_stream_upstream_timeout_is_504(env, monkeypatch):
-    c, _, up, _ = env
+    c, ctx, up, _ = env
     up.mode = "slow"
     monkeypatch.setattr(stream_proxy, "UPSTREAM_TIMEOUT",
                         aiohttp.ClientTimeout(total=None, connect=1, sock_read=0.2))
     r = await c.get("/api/library/stream/t1")
     assert r.status == 504
+    assert ctx.marked_offline == 1
 
 
 async def test_stream_client_disconnect_releases_upstream(env):

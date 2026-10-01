@@ -512,6 +512,14 @@ over `/media` drives; `""` restores the USB-drive behaviour). Downloads keep
 at a time, and pause while Mopidy streams from the proxy, while the SoC is
 ≥ 70 °C (re-checked every 60 s) and while Navidrome is unreachable.
 
+Reachability comes from a short Subsonic ping (5 s timeout) every 30 s,
+independent of the hourly sync — every 10 s while it fails in the first
+two minutes after start. A stream relay or download that loses the link
+marks Navidrome offline at once; the next successful ping flips it back
+and starts a sync. Until the first ping answers, reachability is unknown
+and reported as reachable (`navidrome_reachable: true`,
+`reachability_known: false`) so a card tapped right after boot streams.
+
 The kiosk's **Settings → Home Library** + **Settings → Offline Cache**
 panels are the user surface; the touchscreen also gets a sync-status
 chip in the chrome, a per-track "source badge" on the NowPlayingBar,
@@ -520,7 +528,7 @@ buttons and offline-miss CTAs.
 
 | Endpoint | Used by |
 |----------|---------|
-| `GET  /api/library/health` | UI: sync indicator (`navidrome_reachable`, `cache_present`, `last_sync_ts`, `syncing`, `internal_storage` — music lives on the internal drive, `prune_deferred` — a large album removal the prune guard is holding off, or `null`) |
+| `GET  /api/library/health` | UI: sync indicator (`navidrome_reachable` — true while still unknown, `reachability_known`, `cache_present`, `last_sync_ts`, `syncing`, `internal_storage` — music lives on the internal drive, `prune_deferred` — a large album removal the prune guard is holding off, or `null`) |
 | `GET  /api/library/source` / `PUT` / `POST /source/test` | Settings → Home Library: source config + Test/Save |
 | `GET  /api/library/browse?type=artists\|albums\|playlists` | LibraryDrawer Home Library root; served from precomputed ETag-tagged JSON snapshots when present, falls back to SQLite |
 | `GET  /api/library/search?q=` | Search bar; FTS5-backed |
