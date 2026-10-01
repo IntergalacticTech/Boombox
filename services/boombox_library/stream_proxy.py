@@ -24,6 +24,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
+from .downloader import LINK_DOWN_STATUSES, is_link_failure
 from .subsonic import make_auth_params
 
 log = logging.getLogger("boombox-library.stream")
@@ -62,6 +63,17 @@ _SESSION_KEY = web.AppKey("stream_proxy_http", _SessionHolder)
 # sit out its full shutdown_timeout per phase (~120 s by default, past
 # systemd's 90 s stop timeout → SIGKILL on every restart).
 _ACTIVE_KEY = web.AppKey("stream_proxy_active", weakref.WeakSet)
+
+
+def _report_link_failure(req: web.Request) -> None:
+    """The music server's link failed: tell the service (ctx.mark_offline)
+    so it reports offline now instead of at its next reachability probe."""
+    hook = getattr(req.app["ctx"], "mark_offline", None)
+    if callable(hook):
+        try:
+            hook()
+        except Exception:  # never turn a relay error into a 500
+            log.exception("mark_offline failed")
 
 
 def valid_track_id(track_id: str) -> bool:
@@ -190,11 +202,14 @@ async def _fetch_and_relay(
         # Only reachable before headers were sent — _relay swallows
         # mid-body failures itself.
         log.warning("stream %s: upstream timeout", track_id)
+        _report_link_failure(req)
         return web.Response(status=504, text="upstream timeout")
     except aiohttp.ClientError as e:
         # Never log e itself: ClientResponseError's str() carries the
         # full URL, token and salt included.
         log.warning("stream %s: upstream unreachable (%s)", track_id, type(e).__name__)
+        if is_link_failure(e):
+            _report_link_failure(req)
         return web.Response(status=502, text="upstream unreachable")
 
 async def _relay(
@@ -217,6 +232,8 @@ async def _relay(
         return web.Response(status=416, headers={"Content-Range": cr} if cr else None)
     if up.status not in _RELAY_STATUSES:
         log.info("stream %s: upstream http %d", track_id, up.status)
+        if up.status in LINK_DOWN_STATUSES:   # the tunnel / CDN, not Navidrome
+            _report_link_failure(req)
         return web.Response(status=502, text=f"upstream http {up.status}")
 
     resp = web.StreamResponse(status=up.status)
@@ -239,6 +256,8 @@ async def _relay(
         # Headers are already out — all we can do is cut the body short
         # so the player sees a truncated stream rather than a hang.
         log.warning("stream %s: upstream failed mid-body (%s)", track_id, type(e).__name__)
+        if is_link_failure(e):
+            _report_link_failure(req)
         if req.transport is not None:
             req.transport.close()
     return resp

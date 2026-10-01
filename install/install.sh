@@ -71,13 +71,14 @@ migrate_legacy_layout() {
   mkdir -p "$RELEASES_DIR" "$STATE_DIR"
   if [[ ! -d "$target" ]]; then
     # Move the entire checkout (including .git) into releases/legacy-<sha>/.
-    # Skip the venv: it's about to live one level up.
+    # Skip the venv (it is about to live one level up) and user data
+    # (state, storage): a release dir is pruned by later auto-updates.
     mkdir "$target"
     shopt -s dotglob nullglob
     for entry in "$BOOMBOX_ROOT"/*; do
       base="$(basename "$entry")"
       case "$base" in
-        .venv|releases|current|previous|state) continue ;;
+        .venv|releases|current|previous|state|storage) continue ;;
       esac
       mv "$entry" "$target/"
     done
@@ -200,6 +201,10 @@ fi
 # State dir for SQLite catalog
 sudo mkdir -p /opt/boombox/state
 sudo chown "$BOOMBOX_USER:$BOOMBOX_USER" /opt/boombox/state
+# Internal music storage for "keep offline" downloads. boombox-library
+# adopts it as its always-present cache drive; Mopidy (user mopidy) reads
+# the files, so 0755.
+sudo install -d -o "$BOOMBOX_USER" -g "$BOOMBOX_USER" -m 0755 /opt/boombox/storage /opt/boombox/storage/music
 
 # ---------------------------------------------------------------------------
 # 1.5. Layout migration (must run before anything else touches REPO_DIR)

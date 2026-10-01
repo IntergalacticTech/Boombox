@@ -43,6 +43,7 @@ export function Sidebar({ active, onNavigate, onOpenSettings, adminLocked = true
       <div style={{ margin: "16px 12px 4px", fontSize: 11, textTransform: "uppercase",
                     letterSpacing: "0.08em", color: "var(--ink2)" }}>Admin</div>
       {item("accounts", "Accounts", adminLocked ? "🔒" : "🔓")}
+      {item("storage", "Storage", adminLocked ? "🔒" : "🔓")}
       <div style={{ flex: 1 }} />
       <button type="button" onClick={onOpenSettings} style={itemStyle(false)}>
         <span aria-hidden="true" style={{ width: 22, textAlign: "center" }}>⚙</span>

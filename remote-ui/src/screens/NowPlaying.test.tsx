@@ -11,7 +11,6 @@ const stubApi: RemoteApi = {
   base: "http://localhost/",
   get: vi.fn().mockResolvedValue({ ok: true, tracks: [] }),
   post: vi.fn().mockResolvedValue({ ok: true }),
-  uploadFiles: vi.fn(),
 };
 
 const playing: RemoteState = {

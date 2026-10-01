@@ -33,6 +33,7 @@ MAX_PLAY_IDS = 1000           # boombox-library's RESOLVE_BATCH_MAX
 SYNC_QUEUE_MAX = 10           # queue lists this short finish before we answer
 MAX_QUERY = 200
 _PASS_HEADERS = ("ETag", "Cache-Control")
+KEEP_KINDS = frozenset({"album", "artist", "playlist"})
 LIBRARY_DOWN = "library service not answering"
 NOTHING_PLAYABLE = ("none of these tracks can play right now — they aren't cached "
                     "and the Home Library server is unreachable")
@@ -131,6 +132,28 @@ async def _proxy_get(session: aiohttp.ClientSession, url: str,
     return web.Response(status=status, body=body, content_type=ctype, headers=passthrough)
 
 
+async def _proxy_json(session: aiohttp.ClientSession, method: str, url: str,
+                      body: dict | None = None) -> web.Response:
+    """JSON call to boombox-library; its status and body pass through, its
+    failures become 502."""
+    try:
+        async with session.request(method, url, json=body, timeout=TIMEOUT) as r:
+            status = r.status
+            try:
+                data = await r.json(content_type=None)
+            except ValueError:
+                data = None
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        log.warning("home library %s %s failed: %s", method, url, type(e).__name__)
+        return _fail(502, LIBRARY_DOWN)
+    if status >= 500 or not isinstance(data, dict):
+        log.warning("home library %s %s → HTTP %s", method, url, status)
+        return _fail(502, LIBRARY_DOWN)
+    if status >= 400 and "ok" not in data:
+        data = {"ok": False, "error": str(data.get("error") or "request refused")}
+    return web.json_response(data, status=status)
+
+
 def _make_handlers(session: aiohttp.ClientSession, base: str, player: HomePlayer):
     async def browse(req: web.Request) -> web.Response:
         t = req.query.get("type", "")
@@ -206,16 +229,51 @@ def _make_handlers(session: aiohttp.ClientSession, base: str, player: HomePlayer
         return web.json_response({"ok": True, "count": len(uris),
                                   "skipped": len(ids) - len(uris)})
 
-    return browse, search, detail, art, play
+    async def keep(req: web.Request) -> web.Response:
+        try:
+            body = await req.json()
+        except Exception:
+            return _fail(400, "invalid_json")
+        if not isinstance(body, dict):
+            return _fail(400, "expected a JSON object")
+        kind, item_id = body.get("kind"), body.get("id")
+        if not isinstance(kind, str) or kind not in KEEP_KINDS:
+            return _fail(400, "kind must be album, artist or playlist")
+        if not isinstance(item_id, str) or not _ID_RE.match(item_id):
+            return _fail(400, "bad id")
+        return await _proxy_json(session, req.method, f"{base}/api/library/keep",
+                                 {"kind": kind, "id": item_id})
+
+    async def status(req: web.Request) -> web.Response:
+        try:
+            async with session.get(f"{base}/api/library/health", timeout=TIMEOUT) as r:
+                health = await r.json(content_type=None) if r.status == 200 else None
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            log.warning("home library health failed: %s", type(e).__name__)
+            health = None
+        if not isinstance(health, dict):
+            return _fail(502, LIBRARY_DOWN)
+        return web.json_response({"online": bool(health.get("navidrome_reachable")),
+                                  "internal_storage": bool(health.get("internal_storage"))})
+
+    async def offline(req: web.Request) -> web.Response:
+        return await _proxy_get(session, f"{base}/api/library/offline", req)
+
+    return {"browse": browse, "search": search, "detail": detail, "art": art,
+            "play": play, "keep": keep, "status": status, "offline": offline}
 
 
 def add_routes(app: web.Application, session: aiohttp.ClientSession,
                player: HomePlayer, base: str = LIBRARY_BASE) -> None:
     """Register /api/remote/home/*. `session` is the service's shared client
     session (per-request 15 s timeouts override its default)."""
-    browse, search, detail, art, play = _make_handlers(session, base.rstrip("/"), player)
-    app.router.add_get("/api/remote/home/browse", browse)
-    app.router.add_get("/api/remote/home/search", search)
-    app.router.add_get("/api/remote/home/art/{art_id}", art)
-    app.router.add_get("/api/remote/home/{kind:artist|album|playlist}/{item_id}", detail)
-    app.router.add_post("/api/remote/home/play", play)
+    h = _make_handlers(session, base.rstrip("/"), player)
+    app.router.add_get("/api/remote/home/browse", h["browse"])
+    app.router.add_get("/api/remote/home/search", h["search"])
+    app.router.add_get("/api/remote/home/status", h["status"])
+    app.router.add_get("/api/remote/home/offline", h["offline"])
+    app.router.add_get("/api/remote/home/art/{art_id}", h["art"])
+    app.router.add_get("/api/remote/home/{kind:artist|album|playlist}/{item_id}", h["detail"])
+    app.router.add_post("/api/remote/home/play", h["play"])
+    app.router.add_post("/api/remote/home/keep", h["keep"])
+    app.router.add_delete("/api/remote/home/keep", h["keep"])

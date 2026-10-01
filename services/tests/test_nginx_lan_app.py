@@ -100,3 +100,28 @@ def test_other_lan_routes_keep_basic_auth():
     for header in ("location /api/remote/ {", "location /api/setup/ {",
                    "location ^~ /setup/ {", "location ^~ /local/ {"):
         assert "auth_basic off;" in _location(SNIPPET, header), header
+
+
+def test_admin_upload_streams_large_bodies_to_boombox_setup():
+    loc = _location(SNIPPET, "location = /api/accounts/storage/files/upload {")
+    for line in ("auth_basic off;",
+                 "proxy_pass http://127.0.0.1:6689/api/accounts/storage/files/upload;",
+                 "proxy_set_header X-Real-IP $remote_addr;",
+                 "proxy_set_header X-Boombox-Host $http_host;",
+                 "client_max_body_size 4096M;",
+                 "proxy_request_buffering off;",
+                 "proxy_read_timeout 1h;"):
+        assert line in loc, line
+
+
+def test_household_remote_location_no_longer_takes_large_bodies():
+    loc = _location(SNIPPET, "location /api/remote/ {")
+    assert "client_max_body_size" not in loc
+    assert "proxy_request_buffering" not in loc
+
+
+def test_accounts_comment_still_sits_above_its_location():
+    i = SNIPPET.index("location /api/accounts/ {")
+    above = SNIPPET[:i].rsplit("\n\n", 1)[-1]
+    assert above.startswith("# Admin → Accounts API (boombox-setup).")
+    assert "location" not in above

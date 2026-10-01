@@ -13,6 +13,7 @@ import { Files } from "../screens/Files";
 import { More } from "../screens/More";
 import { Video } from "../screens/Video";
 import { AccountsSection } from "../admin/AccountsSection";
+import { StorageSection } from "../admin/StorageSection";
 import { useAdminSession } from "../admin/session";
 
 export interface SectionProps { params: string[]; navigate: Navigate; desktop: boolean }
@@ -26,8 +27,9 @@ export function renderSection(route: Route, p: SectionProps, onOpenSettings: () 
     case "video": return <Video params={p.params} navigate={p.navigate} />;
     case "search": return <Search autoFocus={p.desktop} />;
     case "playlists": return <Playlists />;
-    case "files": return <Files />;
+    case "files": return <Files navigate={p.navigate} />;
     case "accounts": return <AccountsSection desktop={p.desktop} />;
+    case "storage": return <StorageSection desktop={p.desktop} />;
     case "more":
       return <More navigate={p.navigate} onOpenSettings={onOpenSettings} adminLocked={adminLocked} />;
   }

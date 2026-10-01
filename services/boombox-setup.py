@@ -259,6 +259,21 @@ class ServiceContext:
         except Exception:
             return {}
 
+    _STORAGE_TIMEOUT = aiohttp.ClientTimeout(total=15)
+
+    async def library_call(self, method: str, path: str,
+                           body: dict | None = None) -> tuple[int, dict | None]:
+        """One JSON call to boombox-library (Admin → Storage); (0, None)
+        when it doesn't answer — the route turns that into a 502."""
+        try:
+            s = await self._http()
+            async with s.request(method, f"{LIBRARY_BASE}{path}", json=body,
+                                 timeout=self._STORAGE_TIMEOUT) as r:
+                return r.status, await self._json_or_none(r)
+        except Exception as e:
+            log.warning("library %s %s failed: %s", method, path, type(e).__name__)
+            return 0, None
+
     async def music_test(self, url, username, password) -> tuple[bool, str]:
         s = await self._http()
         try:

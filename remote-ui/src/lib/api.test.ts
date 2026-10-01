@@ -53,3 +53,17 @@ describe("apiErrorMessage", () => {
     expect(apiErrorMessage(new TypeError("offline"), "x")).toBe("Couldn't reach the boombox.");
   });
 });
+
+describe("del", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("sends DELETE with a JSON body and the token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = makeApi("http://pi", "tok");
+    expect(await api.del!("api/remote/home/keep", { kind: "album", id: "al1" })).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith("http://pi/api/remote/home/keep", expect.objectContaining({
+      method: "DELETE", body: JSON.stringify({ kind: "album", id: "al1" }),
+      headers: expect.objectContaining({ Authorization: "Bearer tok", "Content-Type": "application/json" }),
+    }));
+  });
+});

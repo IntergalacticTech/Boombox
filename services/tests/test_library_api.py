@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from boombox_library.api import _same_origin, build_app
+from boombox_library.cache_drive import CacheDriveState
 from boombox_library.config import (
     DEFAULT_CONFIG,
     LibraryConfig,
@@ -24,6 +25,7 @@ class FakeContext:
         self.cfg = cfg or DEFAULT_CONFIG
         self.cache_state = cache_state  # CacheDriveState
         self._ping_ok = ping_ok
+        self._known = True
         self.synced = 0
         # Phase 2 additions:
         self.last_sync_ts: float = 0.0
@@ -38,9 +40,13 @@ class FakeContext:
         self.snapshot_dir = snapshot_dir or Path("/tmp/boombox-snap-test")
         self.tested: list[tuple[str, str, str]] = []
         self.saved: list = []
+        self.queue = None  # DownloadQueue stand-in (keep routes)
 
     async def is_online(self) -> bool:
         return self._ping_ok
+
+    def reachability_known(self) -> bool:
+        return self._known
 
     async def trigger_sync(self) -> None:
         self.synced += 1
@@ -70,6 +76,9 @@ class FakeContext:
     def cache_candidates(self) -> list[dict]:
         return self.candidates
 
+    def download_queue(self):
+        return self.queue
+
 
 @pytest.fixture
 async def client(tmp_path):
@@ -93,6 +102,16 @@ async def test_health_returns_status(client):
     assert "navidrome_reachable" in body
     assert "cache_present" in body
     assert "service_version" in body
+    assert body["reachability_known"] is True
+
+
+@pytest.mark.asyncio
+async def test_health_reports_unknown_reachability_as_reachable(client):
+    c, ctx, _ = client
+    ctx._known = False          # before the first probe; is_online() says True
+    body = await (await c.get("/api/library/health")).json()
+    assert body["navidrome_reachable"] is True
+    assert body["reachability_known"] is False
 
 
 @pytest.mark.asyncio
@@ -439,7 +458,7 @@ async def test_cache_streamed_rejects_missing_id(client):
 async def test_cache_clear_calls_service(client):
     """POST /cache/clear invokes ServiceContext.clear_streamed_cache."""
     c, ctx, _ = client
-    r = await c.post("/api/library/cache/clear")
+    r = await c.post("/api/library/cache/clear", json={})
     assert r.status == 200
     body = await r.json()
     assert body["ok"] is True
@@ -451,7 +470,7 @@ async def test_cache_clear_returns_count(client):
     """Response includes the number of entries cleared, for UI feedback."""
     c, ctx, _ = client
     ctx._clear_returns = 7
-    r = await c.post("/api/library/cache/clear")
+    r = await c.post("/api/library/cache/clear", json={})
     body = await r.json()
     assert body["cleared"] == 7
 
@@ -678,3 +697,218 @@ async def test_source_test_blank_password_other_origin_not_sent_stored(client):
     for url in ("https://evil.example", "http://m.example"):
         await c.post("/api/library/source/test", json={"url": url, "username": "bb"})
         assert ctx.tested[-1] == (url, "bb", "")
+
+
+class KeepQueue:
+    def __init__(self) -> None:
+        self.enqueued: list[str] = []
+        self.snap = {"queued": 0, "in_flight": [], "paused": None}
+
+    def enqueue(self, tid):
+        if tid in self.enqueued:
+            return False
+        self.enqueued.append(tid)
+        return True
+
+    def cancel(self, ids):
+        return 0
+
+    def snapshot(self):
+        return dict(self.snap)
+
+
+def _seed_keep(conn):
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) VALUES('ar1','Joni','joni',2,0)")
+    for al, name, starred in (("al1", "Blue", 0), ("al2", "Court and Spark", 1)):
+        conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,duration_s,is_compilation,"
+                     "navidrome_starred,updated_at) VALUES(?,?,?,'ar1',2,60,0,?,0)", (al, name, name.lower(), starred))
+    for tid, al in (("t1", "al1"), ("t2", "al1"), ("t3", "al1"), ("t4", "al2"), ("t5", "al2")):
+        conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,size_bytes,content_type,"
+                     "navidrome_starred,updated_at) VALUES(?,?,?,30,'mp3',1000,'audio/mpeg',0,0)",
+                     (tid, al, tid.upper()))
+    conn.execute("INSERT INTO playlists(id,name,song_count,owner,public,updated_at) VALUES('pl1','Mix',1,'u',0,0)")
+    conn.execute("INSERT INTO playlist_tracks(playlist_id,track_id,position) VALUES('pl1','t2',0)")
+    conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,downloaded_at) "
+                 "VALUES('t2','present','/m/t2.mp3',1000,0)")
+
+
+async def test_keep_route_pins_enqueues_and_unkeeps(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    ctx.queue = KeepQueue()
+    r = await c.post("/api/library/keep", json={"kind": "album", "id": "al1"})
+    assert r.status == 200
+    body = await r.json()
+    assert body["queued"] == 3
+    assert body["keep"] == {"state": "kept", "tracks_total": 3, "tracks_present": 1}
+    r = await c.delete("/api/library/keep", json={"kind": "album", "id": "al1"})
+    assert r.status == 200 and (await r.json())["keep"]["state"] == "none"
+
+
+async def test_keep_route_validates(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    assert (await c.post("/api/library/keep", json={"kind": "track", "id": "t1"})).status == 400
+    assert (await c.post("/api/library/keep", json={"kind": "album"})).status == 400
+    assert (await c.post("/api/library/keep", data="nope",
+                         headers={"Content-Type": "application/json"})).status == 400
+    r = await c.post("/api/library/keep", json={"kind": "album", "id": "zzz"})
+    assert r.status == 404 and (await r.json()) == {"ok": False, "error": "album not found"}
+
+
+async def test_keep_without_music_storage_still_pins(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    r = await c.post("/api/library/keep", json={"kind": "playlist", "id": "pl1"})
+    assert (await r.json()) == {"ok": True, "queued": 0,
+                                "keep": {"state": "kept", "tracks_total": 1, "tracks_present": 1}}
+
+
+async def test_album_and_playlist_detail_carry_keep_and_offline(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    d = await (await c.get("/api/library/album/al1")).json()
+    assert d["keep"] == {"state": "none", "tracks_total": 3, "tracks_present": 1}
+    assert [(t["id"], t["offline"]) for t in d["tracks"]] == [("t1", False), ("t2", True), ("t3", False)]
+    d = await (await c.get("/api/library/playlist/pl1")).json()
+    assert d["keep"]["tracks_present"] == 1 and d["tracks"][0]["offline"] is True
+
+
+async def test_artist_detail_albums_carry_offline(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    d = await (await c.get("/api/library/artist/ar1")).json()
+    assert {a["id"]: a["offline"] for a in d["albums"]} == {"al1": True, "al2": False}
+    assert d["keep"] == {"state": "none", "tracks_total": 5, "tracks_present": 1}
+
+
+async def test_search_results_carry_offline(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    conn.execute("INSERT INTO search_index(content_type,id,title,body) VALUES('album','al1','Blue','Blue')")
+    conn.execute("INSERT INTO search_index(content_type,id,title,body) VALUES('album','al2','Court','Court')")
+    blue = (await (await c.get("/api/library/search?q=blue")).json())["results"]
+    court = (await (await c.get("/api/library/search?q=court")).json())["results"]
+    assert blue[0]["offline"] is True and court[0]["offline"] is False
+
+
+async def test_offline_ids_route(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    assert (await (await c.get("/api/library/offline")).json()) == {
+        "album_ids": ["al1"], "artist_ids": ["ar1"], "playlist_ids": ["pl1"]}
+
+
+async def test_health_reports_internal_storage(client):
+    c, ctx, _ = client
+    assert (await (await c.get("/api/library/health")).json())["internal_storage"] is False
+    ctx.cache_state = CacheDriveState(present=True, mount_path=Path("/opt/boombox/storage/music"),
+                                      free_bytes=1, total_bytes=2, internal=True)
+    assert (await (await c.get("/api/library/health")).json())["internal_storage"] is True
+
+
+async def test_storage_route_overview(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    ctx.queue = KeepQueue()
+    ctx.cache_state = CacheDriveState(present=True, mount_path=Path("/opt/boombox/storage/music"),
+                                      free_bytes=5, total_bytes=9, internal=True)
+    await c.post("/api/library/keep", json={"kind": "playlist", "id": "pl1"})  # pins present t2
+    o = await (await c.get("/api/library/storage")).json()
+    assert o["drive"]["internal"] is True and o["drive"]["reserve_bytes"] == ctx.cfg.cache.reserve_bytes
+    assert o["drive"]["kept_tracks"] == 1 and o["downloads"]["active"] is True
+
+
+async def test_storage_remove_route(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    await c.post("/api/library/keep", json={"kind": "album", "id": "al1"})
+    r = await c.post("/api/library/storage/remove", json={"kind": "album", "id": "al1"})
+    assert r.status == 200 and (await r.json())["ok"] is True
+    r = await c.post("/api/library/storage/remove", json={"kind": "starred_tracks", "id": ""})
+    assert r.status == 409 and (await r.json())["error"] == "unstar in Navidrome to remove"
+    assert (await c.post("/api/library/storage/remove", json={"kind": "track", "id": "t1"})).status == 400
+
+
+async def test_storage_retry_route(client):
+    c, ctx, conn = client
+    r = await c.post("/api/library/storage/retry", json={})
+    assert r.status == 409 and (await r.json())["ok"] is False
+    ctx.queue = KeepQueue()
+    r = await c.post("/api/library/storage/retry", json={})
+    assert (await r.json()) == {"ok": True, "retried": 0}
+
+
+async def test_resolve_batch_offline_returns_kept_file_and_drops_the_rest(client, tmp_path):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    f = tmp_path / "t2.mp3"
+    f.write_bytes(b"x")
+    conn.execute("UPDATE cache_state SET local_path=? WHERE track_id='t2'", (str(f),))
+    ctx._ping_ok = False                       # Navidrome unreachable
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig(url="https://m.example", username="u", password="p"))
+    items = (await (await c.post("/api/library/resolve", json={"ids": ["t1", "t2"]})).json())["items"]
+    assert [(i["id"], i["source"]) for i in items] == [("t1", "offline_miss"), ("t2", "cache")]
+    assert items[1]["uri"] == f"file://{f}"
+
+
+
+# ----- mutating routes take application/json only (no cross-site simple POST) -----
+
+_JSON_ONLY = [
+    ("POST", "/api/library/keep", '{"kind": "album", "id": "al1"}'),
+    ("DELETE", "/api/library/keep", '{"kind": "album", "id": "al1"}'),
+    ("POST", "/api/library/storage/remove", '{"kind": "album", "id": "al1"}'),
+    ("POST", "/api/library/storage/retry", "{}"),
+    ("POST", "/api/library/pin", '{"kind": "album", "id": "al1", "mode": "pin"}'),
+    ("POST", "/api/library/cache/clear", "{}"),
+]
+
+
+@pytest.mark.parametrize("method,path,body", _JSON_ONLY)
+@pytest.mark.parametrize("ctype", ["text/plain", "application/x-www-form-urlencoded",
+                                   "multipart/form-data; boundary=x", None])
+async def test_mutating_routes_refuse_non_json(client, method, path, body, ctype):
+    c, ctx, conn = client
+    headers = {"Content-Type": ctype} if ctype else {}
+    r = await c.request(method, path, data=body.encode(), headers=headers,
+                        skip_auto_headers=["Content-Type"])
+    assert r.status == 415
+    assert await r.json() == {"ok": False, "error": "expected application/json"}
+    assert ctx.cleared_count == 0 and ctx.synced == 0
+    assert conn.execute("SELECT COUNT(*) FROM pins").fetchone()[0] == 0
+
+
+async def test_json_with_charset_is_accepted(client):
+    c, ctx, _ = client
+    r = await c.post("/api/library/cache/clear", data=b"{}",
+                     headers={"Content-Type": "application/json; charset=utf-8"})
+    assert r.status == 200 and ctx.cleared_count == 1
+
+
+async def test_storage_remove_of_card_songs_is_refused(client):
+    c, _, _ = client
+    r = await c.post("/api/library/storage/remove", json={"kind": "card_tracks", "id": ""})
+    assert r.status == 409
+    assert await r.json() == {"ok": False,
+                              "error": "bound to an RFID card — unbind the card to remove"}
+
+
+async def test_storage_remove_route_deletes_the_file_on_the_present_drive(client, tmp_path):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    music = tmp_path / "music"
+    (music / "audio").mkdir(parents=True)
+    f1 = music / "audio" / "t1.mp3"
+    f1.write_bytes(b"x" * 1234)
+    conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,downloaded_at) "
+                 "VALUES('t1','present',?,1234,0)", (str(f1),))
+    ctx.cache_state = CacheDriveState(present=True, mount_path=music, free_bytes=10**9,
+                                      total_bytes=10**10, internal=True)
+    await c.post("/api/library/keep", json={"kind": "album", "id": "al1"})
+    r = await c.post("/api/library/storage/remove", json={"kind": "album", "id": "al1"})
+    body = await r.json()
+    assert r.status == 200 and body["removed_tracks"] == 1 and body["freed_bytes"] == 1234
+    assert not f1.exists()
+    row = conn.execute("SELECT status, local_path FROM cache_state WHERE track_id='t1'").fetchone()
+    assert (row["status"], row["local_path"]) == ("absent", None)

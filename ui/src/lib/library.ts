@@ -15,6 +15,9 @@ export type Ref = {
   /** Home Library track rows only: display artist + duration (ms). */
   artist?: string;
   lengthMs?: number;
+  /** Home Library track rows only: the file is on the boombox. Undefined
+   * when the server didn't say (treated as playable). */
+  offline?: boolean;
 };
 
 export type MopidyTrack = {
@@ -400,6 +403,8 @@ function homeTrackRef(t: libraryApi.LibraryTrack, artId?: string): Ref {
     artist: t.artist || undefined,
     lengthMs: t.duration ? t.duration * 1000 : undefined,
     artId,
+    // Older payloads carry only cache_status.
+    offline: t.offline ?? (t.cache_status === undefined ? undefined : t.cache_status === "present"),
   };
 }
 
@@ -452,31 +457,37 @@ export async function browseHomeLibrary(uri: string): Promise<Ref[]> {
   return [];
 }
 
-/** Flatten a Home Library ref into ordered home:track: URIs — album and
- * playlist in listed order, artist as every album's tracks in the order
- * /artist/<id> lists the albums. Capped at MAX_EXPANDED_TRACKS. */
-export async function expandHomeRef(ref: Pick<Ref, "uri">): Promise<string[]> {
+/** Flatten a Home Library ref into ordered home:track: refs (with their
+ * `offline` flags) — album and playlist in listed order, artist as every
+ * album's tracks in the order /artist/<id> lists the albums. Capped at
+ * MAX_EXPANDED_TRACKS. */
+export async function expandHomeTracks(ref: Pick<Ref, "uri"> & Partial<Ref>): Promise<Ref[]> {
   const parsed = parseHomeUri(ref.uri);
   if (!parsed) return [];
-  let uris: string[] = [];
+  let refs: Ref[] = [];
   if (parsed.kind === "track") {
-    uris = [ref.uri];
+    refs = [{ name: "", type: "track", ...ref }];
   } else if (parsed.kind === "album" || parsed.kind === "playlist") {
-    uris = (await browseHomeLibrary(ref.uri)).map(r => r.uri);
+    refs = await browseHomeLibrary(ref.uri);
   } else if (parsed.kind === "artist") {
     const { albums } = await libraryApi.getArtist(parsed.id);
     for (const al of albums) {
       // One more album than needed is enough to know we're truncating.
-      if (uris.length > MAX_EXPANDED_TRACKS) break;
+      if (refs.length > MAX_EXPANDED_TRACKS) break;
       const { tracks } = await libraryApi.getAlbum(al.id);
-      uris.push(...tracks.map(t => `${HOME_TRACK_PREFIX}${t.id}`));
+      refs.push(...tracks.map(t => homeTrackRef(t)));
     }
   }
-  if (uris.length > MAX_EXPANDED_TRACKS) {
+  if (refs.length > MAX_EXPANDED_TRACKS) {
     console.warn(`[library] ${ref.uri}: queueing the first ${MAX_EXPANDED_TRACKS} tracks only`);
-    uris = uris.slice(0, MAX_EXPANDED_TRACKS);
+    refs = refs.slice(0, MAX_EXPANDED_TRACKS);
   }
-  return uris;
+  return refs;
+}
+
+/** expandHomeTracks as plain home:track: URIs. */
+export async function expandHomeRef(ref: Pick<Ref, "uri">): Promise<string[]> {
+  return (await expandHomeTracks(ref)).map(r => r.uri);
 }
 
 /** Trim a track list that contains Home Library refs to MAX_EXPANDED_TRACKS
@@ -503,6 +514,8 @@ export function homeSearchRefs(results: libraryApi.SearchResult[]): Ref[] {
         : `home:${r.content_type}:${r.id}`,
       name: r.title,
       type: r.content_type,
+      // Albums / artists are dimmed from GET /offline instead (fails open).
+      ...(r.content_type === "track" && r.offline !== undefined ? { offline: r.offline } : {}),
     }));
 }
 

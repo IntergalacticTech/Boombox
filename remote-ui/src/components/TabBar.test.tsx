@@ -19,7 +19,7 @@ describe("TabBar", () => {
   });
 
   it("lights More for the sections it holds", () => {
-    for (const r of ["playlists", "files", "accounts", "more"] as const) {
+    for (const r of ["playlists", "files", "accounts", "storage", "more"] as const) {
       expect(tabForRoute(r)).toBe("more");
     }
     expect(tabForRoute("music")).toBe("music");

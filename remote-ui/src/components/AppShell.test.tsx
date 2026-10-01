@@ -28,7 +28,6 @@ function stubApi(): RemoteApi {
       return { ok: true };
     }),
     post: vi.fn().mockResolvedValue({ ok: true }),
-    uploadFiles: vi.fn(),
   };
 }
 
@@ -122,6 +121,21 @@ describe("AppShell admin", () => {
     act(() => adminSession.set("t"));
     expect(accounts.textContent).toContain("🔓");
     act(() => adminSession.clear("logout"));
+    vi.unstubAllGlobals();
+  });
+
+  it("Storage is an admin section: locked, in the sidebar and in More", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
+    adminSession.clear("logout");
+    setViewport(1440, 900);
+    window.location.hash = "#/storage";
+    renderShell();
+    expect(await screen.findByLabelText("Web password")).toBeTruthy();
+    const sidebar = screen.getByRole("navigation", { name: "Sections" });
+    expect(within(sidebar).getByRole("button", { name: "Storage" }).textContent).toContain("🔒");
+    setViewport(390, 844);
+    act(() => { window.location.hash = "#/more"; window.dispatchEvent(new HashChangeEvent("hashchange")); });
+    expect(await screen.findByRole("button", { name: /Storage/ })).toBeTruthy();
     vi.unstubAllGlobals();
   });
 });

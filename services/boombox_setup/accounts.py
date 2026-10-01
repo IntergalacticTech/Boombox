@@ -33,6 +33,11 @@ SESSION_PATH = "/api/accounts/session"
 ADMIN_KEY = "admin"
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+STORAGE_UPLOAD_PATH = "/api/accounts/storage/files/upload"
+# Multipart bodies are accepted on these paths only. They still need the
+# admin bearer token (a cross-site form can't send one) and pass the
+# Origin check below.
+MULTIPART_PATHS = frozenset({STORAGE_UPLOAD_PATH})
 _BASE_RE = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+(/[A-Za-z0-9._~%/+-]*)?$")
 _KEY_RE = re.compile(r"^[A-Za-z0-9]+$")
 _BUILTIN_BASE = "http://127.0.0.1:8096"
@@ -66,7 +71,9 @@ def check_auth(req: web.Request) -> web.Response | None:
         if not admin.verify(_bearer(req)):
             return web.json_response({"error": "admin session required"}, status=401)
     if req.method in _MUTATING:
-        if req.content_type != "application/json":
+        multipart_ok = (req.path in MULTIPART_PATHS
+                        and req.content_type == "multipart/form-data")
+        if req.content_type != "application/json" and not multipart_ok:
             return web.json_response(
                 {"error": "Content-Type must be application/json"}, status=415)
         origin = req.headers.get("Origin")

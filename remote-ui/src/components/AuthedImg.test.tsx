@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 
 function api(getBlob?: RemoteApi["getBlob"]): RemoteApi {
-  return { base: "http://pi/", get: vi.fn(), post: vi.fn(), uploadFiles: vi.fn(), getBlob };
+  return { base: "http://pi/", get: vi.fn(), post: vi.fn(), getBlob };
 }
 
 describe("AuthedImg", () => {

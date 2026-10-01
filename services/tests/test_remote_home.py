@@ -19,6 +19,9 @@ class FakeLibrary:
         self.resolve_items: list[dict] = []
         self.resolved_ids: list[str] | None = None
         self.force_status: int | None = None
+        self.health: dict = {"navidrome_reachable": True, "internal_storage": True}
+        self.keep_calls: list[tuple[str, dict]] = []
+        self.keep_ctypes: list[str] = []
 
     def app(self) -> web.Application:
         async def handle(req: web.Request) -> web.StreamResponse:
@@ -45,6 +48,19 @@ class FakeLibrary:
             if p == "/api/library/resolve":
                 self.resolved_ids = (await req.json())["ids"]
                 return web.json_response({"items": self.resolve_items})
+            if p == "/api/library/health":
+                return web.json_response(self.health)
+            if p == "/api/library/offline":
+                return web.json_response({"album_ids": ["al1"], "artist_ids": [], "playlist_ids": []})
+            if p == "/api/library/keep":
+                body = await req.json()
+                self.keep_calls.append((req.method, body))
+                self.keep_ctypes.append(req.content_type)
+                if body.get("id") == "missing":
+                    return web.json_response({"ok": False, "error": "album not found"}, status=404)
+                state = "kept" if req.method == "POST" else "none"
+                return web.json_response({"ok": True, "queued": 3, "keep": {
+                    "state": state, "tracks_total": 3, "tracks_present": 0}})
             return web.json_response({"error": "not found"}, status=404)
 
         app = web.Application()
@@ -365,3 +381,79 @@ async def test_concurrent_plays_serialise_and_only_latest_tail_runs(ordered_mopi
     appends = [e for e in ev if e[0] == "append"]
     assert appends == [("append", second[1])]         # only the latest tail
     assert queue_intent.read_intent() is None         # tail done → intent cleared
+
+
+async def test_keep_status_offline_require_pair_token(home):
+    client, _lib, _ = home
+    body = {"kind": "album", "id": "al1"}
+    assert (await client.post("/api/remote/home/keep", json=body)).status == 401
+    assert (await client.delete("/api/remote/home/keep", json=body)).status == 401
+    for path in ("/api/remote/home/status", "/api/remote/home/offline"):
+        assert (await client.get(path)).status == 401, path
+
+
+async def test_keep_and_unkeep_proxy_to_the_library(home):
+    client, lib, _ = home
+    body = {"kind": "album", "id": "al1"}
+    r = await client.post("/api/remote/home/keep", json=body, headers=AUTH)
+    assert r.status == 200 and (await r.json())["keep"]["state"] == "kept"
+    r = await client.delete("/api/remote/home/keep", json=body, headers=AUTH)
+    assert r.status == 200 and (await r.json())["keep"]["state"] == "none"
+    assert lib.keep_calls == [("POST", body), ("DELETE", body)]
+    # boombox-library refuses anything but JSON on its mutating routes
+    assert lib.keep_ctypes == ["application/json", "application/json"]
+
+
+@pytest.mark.parametrize("body", [{"kind": "track", "id": "t1"}, {"kind": "album", "id": "a b"},
+                                  {"kind": "album"}, ["al1"],
+                                  {"kind": ["album"], "id": "al1"},
+                                  {"kind": {"a": 1}, "id": "al1"}])
+async def test_keep_validates_before_calling_the_library(home, body):
+    client, lib, _ = home
+    assert (await client.post("/api/remote/home/keep", json=body, headers=AUTH)).status == 400
+    assert lib.keep_calls == []
+
+
+async def test_keep_passes_a_library_404_through(home):
+    client, _lib, _ = home
+    r = await client.post("/api/remote/home/keep", json={"kind": "album", "id": "missing"}, headers=AUTH)
+    assert r.status == 404 and (await r.json()) == {"ok": False, "error": "album not found"}
+
+
+async def test_keep_and_status_library_failure_is_502(home):
+    client, lib, _ = home
+    lib.force_status = 500
+    r = await client.post("/api/remote/home/keep", json={"kind": "album", "id": "al1"}, headers=AUTH)
+    assert r.status == 502 and (await r.json()) == {"ok": False, "error": "library service not answering"}
+    assert (await client.get("/api/remote/home/status", headers=AUTH)).status == 502
+    assert (await client.get("/api/remote/home/offline", headers=AUTH)).status == 502
+
+
+async def test_status_maps_the_library_health(home):
+    client, lib, _ = home
+    r = await client.get("/api/remote/home/status", headers=AUTH)
+    assert (await r.json()) == {"online": True, "internal_storage": True}
+    lib.health = {"navidrome_reachable": False, "internal_storage": True}
+    r = await client.get("/api/remote/home/status", headers=AUTH)
+    assert (await r.json()) == {"online": False, "internal_storage": True}
+
+
+async def test_offline_ids_pass_through(home):
+    client, _lib, _ = home
+    r = await client.get("/api/remote/home/offline", headers=AUTH)
+    assert (await r.json()) == {"album_ids": ["al1"], "artist_ids": [], "playlist_ids": []}
+
+
+async def test_keep_status_offline_403_when_remote_disabled(home, tmp_path, monkeypatch):
+    client, lib, _ = home
+    state = tmp_path / "disabled-state.json"
+    state.write_text(json.dumps({"enabled": False}))
+    monkeypatch.setenv("BOOMBOX_REMOTE_STATE", str(state))
+    body = {"kind": "album", "id": "al1"}
+    for r in (await client.post("/api/remote/home/keep", json=body, headers=AUTH),
+              await client.delete("/api/remote/home/keep", json=body, headers=AUTH),
+              await client.get("/api/remote/home/status", headers=AUTH),
+              await client.get("/api/remote/home/offline", headers=AUTH)):
+        assert r.status == 403
+        assert (await r.json())["error"] == "remote_disabled"
+    assert lib.requests == []
