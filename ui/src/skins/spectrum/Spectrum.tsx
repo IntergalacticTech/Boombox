@@ -3,7 +3,7 @@
 import React from "react";
 import { Icon, useTicker, vu, mmss } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
-import { ChromeHomeBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
+import { ChromeHomeBtn, ChromeLibraryBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
 import { SyncIndicator } from "../../lib/SyncIndicator";
 import { SeekableBar } from "../../lib/SeekableBar";
 import type { ChromeApi } from "../../lib/skinRegistry";
@@ -160,6 +160,10 @@ export function SpectrumAudio({ track, state, elapsed, volume, shuffle, repeat, 
               font: SPC.font, mono: SPC.mono, height: 56, radius: 999, padding: "0 16px",
             }}/>
             <SyncIndicator />
+            <ChromeLibraryBtn chrome={chrome} theme={{
+              bg: SPC.glass, fg: SPC.ink, border: SPC.rule,
+              font: SPC.font, mono: SPC.mono, height: 56, radius: 999, padding: "0 16px",
+            }}/>
             <ChromeQueueBtn chrome={chrome} theme={{
               bg: SPC.glass, fg: SPC.ink, border: SPC.rule,
               font: SPC.font, mono: SPC.mono, height: 56, radius: 999, padding: "0 16px",

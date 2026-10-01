@@ -46,14 +46,15 @@ function AsciiSeg({ value, width = 16, color = SMP.cyan }: { value: number; widt
 
 function SmpFrame({ children, active = "home", chrome }: { children: React.ReactNode; active?: string; chrome?: ChromeApi }) {
   const t = useTicker(500);
-  // Sidebar nav: items that have a chrome action are clickable; others are
-  // decorative for now (Video / etc.).
-  const navItems: { id: string; label: string; icon: string; k: string; onClick?: () => void; badge?: string }[] = [
+  // Sidebar nav: items that have a chrome action are clickable; "Now
+  // Playing" is the current view, so it's a highlighted label.
+  const navItems: { id: string; label: string; icon: string; k: string; onClick?: () => void; aria?: string }[] = [
     {id: "home",     label: "Now Playing", icon: "play",    k: "01"},
-    {id: "gohome",   label: chrome ? `Home · ${chrome.sourceLabel}` : "Home", icon: "home", k: "02", onClick: chrome?.onGoHome},
-    {id: "queue",    label: chrome ? `Queue · ${chrome.queueCount}` : "Queue", icon: "queue", k: "03", onClick: chrome?.onOpenQueue},
-    {id: "skin",     label: chrome ? `Skin · ${chrome.skinName}` : "Skin", icon: "search", k: "04", onClick: chrome?.onOpenSkinPicker},
-    {id: "settings", label: "Settings",    icon: "search",  k: "05", onClick: chrome?.onOpenSettings},
+    {id: "gohome",   label: chrome ? `Home · ${chrome.sourceLabel}` : "Home", aria: "Home", icon: "home", k: "02", onClick: chrome?.onGoHome},
+    {id: "library",  label: "Library",     icon: "search",  k: "03", onClick: chrome?.onOpenLibrary},
+    {id: "queue",    label: chrome ? `Queue · ${chrome.queueCount}` : "Queue", icon: "queue", k: "04", onClick: chrome?.onOpenQueue},
+    {id: "skin",     label: chrome ? `Skin · ${chrome.skinName}` : "Skin", icon: "eq", k: "05", onClick: chrome?.onOpenSkinPicker},
+    {id: "settings", label: "Settings",    icon: "settings", k: "06", onClick: chrome?.onOpenSettings},
   ];
   return (
     <div style={{
@@ -89,6 +90,7 @@ function SmpFrame({ children, active = "home", chrome }: { children: React.React
                 key={item.id}
                 onClick={item.onClick}
                 disabled={!clickable}
+                aria-label={item.aria ?? item.label}
                 style={{
                   display: "flex", alignItems: "center", gap: 12, padding: "13px 12px",
                   borderRadius: 10,
@@ -101,7 +103,7 @@ function SmpFrame({ children, active = "home", chrome }: { children: React.React
                   textAlign: "left",
                   fontFamily: "inherit",
                   width: "100%",
-                  minHeight: 48,
+                  minHeight: 64,
                 }}
               >
                 <Icon name={item.icon} size={18} stroke={on ? SMP.glow : SMP.ink2} sw={1.8}/>

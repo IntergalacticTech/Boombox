@@ -186,6 +186,7 @@ function App() {
   const goHome = () => { setNpbDismissed(false); setView("home"); };
   const anyDrawerOpen = queueOpen || libraryOpen || skinPickerOpen || settingsOpen;
 
+  const openLibrary = () => { setNpbDismissed(false); setLibraryOpen(true); };
   const chrome: ChromeApi = {
     sourceLabel: chromeLabelFor(sourceId),
     sourceColor: accentFor(sourceId),
@@ -194,6 +195,7 @@ function App() {
     skinName: skin.name,
     onGoHome: goHome,
     onOpenQueue: () => { setNpbDismissed(false); setQueueOpen(true); },
+    onOpenLibrary: openLibrary,
     onOpenSkinPicker: () => { setNpbDismissed(false); setSkinPickerOpen(true); },
     onOpenSettings: () => { setNpbDismissed(false); setSettingsOpen(true); },
   };
@@ -210,7 +212,7 @@ function App() {
             theme={skin.theme}
             queueCount={queueCount}
             onGoPlayer={() => setView("player")}
-            onOpenLibrary={() => { setNpbDismissed(false); setLibraryOpen(true); }}
+            onOpenLibrary={openLibrary}
             onOpenSettings={() => { setNpbDismissed(false); setSettingsOpen(true); }}
             showNowPlaying={!anyDrawerOpen}
           />

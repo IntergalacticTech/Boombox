@@ -7,7 +7,7 @@
 import React from "react";
 import { useTicker, vu, mmss, SOURCES } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
-import { ChromeHomeBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
+import { ChromeHomeBtn, ChromeLibraryBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
 import { SyncIndicator } from "../../lib/SyncIndicator";
 import { SeekableBar } from "../../lib/SeekableBar";
 import { AlbumThumb } from "../../lib/AlbumThumb";
@@ -64,6 +64,7 @@ function DeckChrome({ children, title = "DECK//OS v0.4.1", chrome }: ChromeProps
           <>
             <ChromeHomeBtn chrome={chrome} theme={chromeTheme}/>
             <SyncIndicator />
+            <ChromeLibraryBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeQueueBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSkinBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSettingsBtn chrome={chrome} theme={chromeTheme}/>

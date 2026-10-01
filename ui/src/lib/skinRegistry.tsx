@@ -13,7 +13,7 @@ import { SpectrumAudio } from "../skins/spectrum/Spectrum";
 import { TapeshiftAudio } from "../skins/tapeshift/Tapeshift";
 
 /** Skin-chrome API: identity + actions a skin needs to integrate its chrome
- * with the rest of the boombox (home, queue, skin picker). Each skin renders
+ * with the rest of the boombox (home, library, queue, skin picker, settings). Each skin renders
  * these as part of its own top bar / nav / status row, in its own visual
  * style — they replace the previous floating overlay pills.
  *
@@ -29,6 +29,10 @@ export type ChromeApi = {
   skinName: string;        // human-readable skin name
   onGoHome: () => void;
   onOpenQueue: () => void;
+  /** Open the library drawer (browse / search the music catalog). Every
+   * skin must expose this from its player view: HomeScreen's Music tile
+   * only opens the library while nothing is queued. */
+  onOpenLibrary: () => void;
   onOpenSkinPicker: () => void;
   onOpenSettings: () => void;
 };
