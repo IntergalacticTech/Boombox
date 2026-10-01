@@ -458,7 +458,7 @@ async def test_cache_streamed_rejects_missing_id(client):
 async def test_cache_clear_calls_service(client):
     """POST /cache/clear invokes ServiceContext.clear_streamed_cache."""
     c, ctx, _ = client
-    r = await c.post("/api/library/cache/clear")
+    r = await c.post("/api/library/cache/clear", json={})
     assert r.status == 200
     body = await r.json()
     assert body["ok"] is True
@@ -470,7 +470,7 @@ async def test_cache_clear_returns_count(client):
     """Response includes the number of entries cleared, for UI feedback."""
     c, ctx, _ = client
     ctx._clear_returns = 7
-    r = await c.post("/api/library/cache/clear")
+    r = await c.post("/api/library/cache/clear", json={})
     body = await r.json()
     assert body["cleared"] == 7
 
@@ -750,7 +750,8 @@ async def test_keep_route_validates(client):
     _seed_keep(conn)
     assert (await c.post("/api/library/keep", json={"kind": "track", "id": "t1"})).status == 400
     assert (await c.post("/api/library/keep", json={"kind": "album"})).status == 400
-    assert (await c.post("/api/library/keep", data="nope")).status == 400
+    assert (await c.post("/api/library/keep", data="nope",
+                         headers={"Content-Type": "application/json"})).status == 400
     r = await c.post("/api/library/keep", json={"kind": "album", "id": "zzz"})
     assert r.status == 404 and (await r.json()) == {"ok": False, "error": "album not found"}
 
@@ -849,3 +850,37 @@ async def test_resolve_batch_offline_returns_kept_file_and_drops_the_rest(client
     items = (await (await c.post("/api/library/resolve", json={"ids": ["t1", "t2"]})).json())["items"]
     assert [(i["id"], i["source"]) for i in items] == [("t1", "offline_miss"), ("t2", "cache")]
     assert items[1]["uri"] == f"file://{f}"
+
+
+
+# ----- mutating routes take application/json only (no cross-site simple POST) -----
+
+_JSON_ONLY = [
+    ("POST", "/api/library/keep", '{"kind": "album", "id": "al1"}'),
+    ("DELETE", "/api/library/keep", '{"kind": "album", "id": "al1"}'),
+    ("POST", "/api/library/storage/remove", '{"kind": "album", "id": "al1"}'),
+    ("POST", "/api/library/storage/retry", "{}"),
+    ("POST", "/api/library/pin", '{"kind": "album", "id": "al1", "mode": "pin"}'),
+    ("POST", "/api/library/cache/clear", "{}"),
+]
+
+
+@pytest.mark.parametrize("method,path,body", _JSON_ONLY)
+@pytest.mark.parametrize("ctype", ["text/plain", "application/x-www-form-urlencoded",
+                                   "multipart/form-data; boundary=x", None])
+async def test_mutating_routes_refuse_non_json(client, method, path, body, ctype):
+    c, ctx, conn = client
+    headers = {"Content-Type": ctype} if ctype else {}
+    r = await c.request(method, path, data=body.encode(), headers=headers,
+                        skip_auto_headers=["Content-Type"])
+    assert r.status == 415
+    assert await r.json() == {"ok": False, "error": "expected application/json"}
+    assert ctx.cleared_count == 0 and ctx.synced == 0
+    assert conn.execute("SELECT COUNT(*) FROM pins").fetchone()[0] == 0
+
+
+async def test_json_with_charset_is_accepted(client):
+    c, ctx, _ = client
+    r = await c.post("/api/library/cache/clear", data=b"{}",
+                     headers={"Content-Type": "application/json; charset=utf-8"})
+    assert r.status == 200 and ctx.cleared_count == 1

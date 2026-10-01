@@ -31,6 +31,16 @@ describe("libraryApi", () => {
     expect(h.syncing).toBe(false);
   });
 
+  it("clearStreamedCache posts JSON (the library refuses anything else)", async () => {
+    mockJson({ ok: true, cleared: 2 });
+    expect(await api.clearStreamedCache()).toMatchObject({ cleared: 2 });
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/library/cache/clear");
+    expect(call[1].method).toBe("POST");
+    expect(call[1].headers).toMatchObject({ "Content-Type": "application/json" });
+    expect(JSON.parse(call[1].body)).toEqual({});
+  });
+
   it("pin sends source field when provided", async () => {
     mockJson({ ok: true });
     await api.pin("album", "al1", "favorite");

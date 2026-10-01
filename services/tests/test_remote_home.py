@@ -21,6 +21,7 @@ class FakeLibrary:
         self.force_status: int | None = None
         self.health: dict = {"navidrome_reachable": True, "internal_storage": True}
         self.keep_calls: list[tuple[str, dict]] = []
+        self.keep_ctypes: list[str] = []
 
     def app(self) -> web.Application:
         async def handle(req: web.Request) -> web.StreamResponse:
@@ -54,6 +55,7 @@ class FakeLibrary:
             if p == "/api/library/keep":
                 body = await req.json()
                 self.keep_calls.append((req.method, body))
+                self.keep_ctypes.append(req.content_type)
                 if body.get("id") == "missing":
                     return web.json_response({"ok": False, "error": "album not found"}, status=404)
                 state = "kept" if req.method == "POST" else "none"
@@ -398,6 +400,8 @@ async def test_keep_and_unkeep_proxy_to_the_library(home):
     r = await client.delete("/api/remote/home/keep", json=body, headers=AUTH)
     assert r.status == 200 and (await r.json())["keep"]["state"] == "none"
     assert lib.keep_calls == [("POST", body), ("DELETE", body)]
+    # boombox-library refuses anything but JSON on its mutating routes
+    assert lib.keep_ctypes == ["application/json", "application/json"]
 
 
 @pytest.mark.parametrize("body", [{"kind": "track", "id": "t1"}, {"kind": "album", "id": "a b"},

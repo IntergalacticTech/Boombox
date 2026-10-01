@@ -210,7 +210,12 @@ export async function adoptCache(mountPath: string): Promise<void> {
 }
 
 export async function clearStreamedCache(): Promise<{ cleared: number }> {
-  return jsonOrThrow(await fetch("/api/library/cache/clear", { method: "POST" }));
+  // boombox-library takes application/json only on its mutating routes.
+  return jsonOrThrow(await fetch("/api/library/cache/clear", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  }));
 }
 
 export async function triggerStreamedCacheDownload(trackId: string): Promise<void> {

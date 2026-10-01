@@ -285,6 +285,8 @@ async def _search(req: web.Request) -> web.Response:
 
 async def _pin(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
     body = await req.json()
     try:
         kind = PinKind(body["kind"])
@@ -515,6 +517,17 @@ def _bad(error: str, status: int = 400) -> web.Response:
     return web.json_response({"ok": False, "error": error}, status=status)
 
 
+def _not_json(req: web.Request) -> web.Response | None:
+    """415 unless the request says Content-Type: application/json. The
+    mutating routes are reachable with only the web password (LAN) or no
+    credential (kiosk loopback); requiring JSON makes a cross-site "simple"
+    POST (text/plain, form) fail instead of running — browsers preflight a
+    JSON one."""
+    if req.content_type != "application/json":
+        return _bad("expected application/json", 415)
+    return None
+
+
 async def _keep_target(req: web.Request) -> tuple[PinKind, str] | web.Response:
     """(kind, id) from a {kind, id} JSON body, or the 400 to answer."""
     try:
@@ -537,6 +550,8 @@ async def _keep_target(req: web.Request) -> tuple[PinKind, str] | web.Response:
 
 async def _keep_post(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
     t = await _keep_target(req)
     if isinstance(t, web.Response):
         return t
@@ -548,6 +563,8 @@ async def _keep_post(req: web.Request) -> web.Response:
 
 async def _keep_delete(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
     t = await _keep_target(req)
     if isinstance(t, web.Response):
         return t
@@ -570,6 +587,8 @@ async def _storage(req: web.Request) -> web.Response:
 
 async def _storage_remove(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
     try:
         body = await req.json()
     except ValueError:
@@ -590,6 +609,8 @@ async def _storage_remove(req: web.Request) -> web.Response:
 
 async def _storage_retry(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
     queue = ctx.download_queue()
     if queue is None:
         return _bad("downloads aren't running — no music storage or no music server set up", 409)
@@ -648,6 +669,8 @@ async def _cache_streamed(req: web.Request) -> web.Response:
 
 async def _cache_clear(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
     cleared = await ctx.clear_streamed_cache()
     return web.json_response({"ok": True, "cleared": cleared})
 
