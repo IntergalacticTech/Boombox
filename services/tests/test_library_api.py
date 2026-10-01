@@ -892,3 +892,23 @@ async def test_storage_remove_of_card_songs_is_refused(client):
     assert r.status == 409
     assert await r.json() == {"ok": False,
                               "error": "bound to an RFID card — unbind the card to remove"}
+
+
+async def test_storage_remove_route_deletes_the_file_on_the_present_drive(client, tmp_path):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    music = tmp_path / "music"
+    (music / "audio").mkdir(parents=True)
+    f1 = music / "audio" / "t1.mp3"
+    f1.write_bytes(b"x" * 1234)
+    conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,downloaded_at) "
+                 "VALUES('t1','present',?,1234,0)", (str(f1),))
+    ctx.cache_state = CacheDriveState(present=True, mount_path=music, free_bytes=10**9,
+                                      total_bytes=10**10, internal=True)
+    await c.post("/api/library/keep", json={"kind": "album", "id": "al1"})
+    r = await c.post("/api/library/storage/remove", json={"kind": "album", "id": "al1"})
+    body = await r.json()
+    assert r.status == 200 and body["removed_tracks"] == 1 and body["freed_bytes"] == 1234
+    assert not f1.exists()
+    row = conn.execute("SELECT status, local_path FROM cache_state WHERE track_id='t1'").fetchone()
+    assert (row["status"], row["local_path"]) == ("absent", None)
