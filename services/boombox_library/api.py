@@ -573,9 +573,11 @@ async def _storage_remove(req: web.Request) -> web.Response:
     if isinstance(t, web.Response):
         return t
     kind, target_id = t
+    drive = ctx.cache_drive_state()
+    root = drive.mount_path if drive is not None and drive.present else None
     status, out = keep_mod.remove_kept(
         ctx.conn, ctx.download_queue(), kind, target_id,
-        starred_auto_pin=ctx.cfg.sync.starred_auto_pin)
+        starred_auto_pin=ctx.cfg.sync.starred_auto_pin, cache_root=root)
     return web.json_response(out, status=status)
 
 

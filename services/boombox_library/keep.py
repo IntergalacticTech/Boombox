@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from sqlite3 import Connection
 from typing import Callable, Iterable, Iterator, Optional, Protocol
 
@@ -201,12 +202,22 @@ def kept_items(conn: Connection) -> list[dict]:
 
 def storage_overview(conn: Connection, drive: Optional[CacheDriveState],
                      reserve_bytes: int, queue: Optional[QueueLike]) -> dict:
-    count, total = conn.execute(
-        "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM cache_state "
-        "WHERE status='present'").fetchone()
-    failed = {r[0]: int(r[1]) for r in conn.execute(
-        "SELECT status, COUNT(*) FROM cache_state "
-        "WHERE status IN ('error', 'no_space') GROUP BY status")}
+    """The Admin → Storage page. ``music_bytes`` is every track file on disk
+    (kept or leftover streamed cache); ``kept_tracks`` and the ``failed`` /
+    ``no_space`` counters cover pinned tracks only — the same set
+    retry_failed re-enqueues, so the counters always match what Retry can do."""
+    protected = all_pinned_track_ids(conn)
+    total = count = 0
+    for r in conn.execute(
+            "SELECT track_id, size_bytes FROM cache_state WHERE status='present'"):
+        total += int(r[1] or 0)
+        if r[0] in protected:
+            count += 1
+    failed = {"error": 0, "no_space": 0}
+    for r in conn.execute(
+            "SELECT track_id, status FROM cache_state WHERE status IN ('error', 'no_space')"):
+        if r[0] in protected:
+            failed[r[1]] += 1
     snap = queue.snapshot() if queue is not None else {
         "queued": 0, "in_flight": [], "paused": None}
     in_flight = [str(t) for t in snap["in_flight"]]
@@ -224,8 +235,8 @@ def storage_overview(conn: Connection, drive: Optional[CacheDriveState],
             "total_bytes": drive.total_bytes if drive is not None and present else None,
             "free_bytes": drive.free_bytes if drive is not None and present else None,
             "reserve_bytes": reserve_bytes,
-            "music_bytes": int(total),
-            "kept_tracks": int(count),
+            "music_bytes": total,
+            "kept_tracks": count,
         },
         "kept": kept_items(conn),
         "downloads": {
@@ -233,18 +244,30 @@ def storage_overview(conn: Connection, drive: Optional[CacheDriveState],
             "queued": int(snap["queued"]),
             "in_flight": [{"id": t, "title": titles.get(t, t)} for t in in_flight],
             "paused": snap["paused"],
-            "failed": failed.get("error", 0),
-            "no_space": failed.get("no_space", 0),
+            "failed": failed["error"],
+            "no_space": failed["no_space"],
         },
     }
 
 
+def _inside(path: str, root: Optional[Path]) -> bool:
+    if root is None:
+        return False
+    try:
+        return Path(path).resolve().is_relative_to(Path(root).resolve())
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def remove_kept(conn: Connection, queue: Optional[QueueLike], kind: PinKind,
-                target_id: str, *, starred_auto_pin: bool,
+                target_id: str, *, starred_auto_pin: bool, cache_root: Optional[Path],
                 delete_file: Callable[[str], None] = os.unlink) -> tuple[int, dict]:
     """Storage → Remove: unkeep, then delete at once the files of tracks no
     pin protects any more (the plain unkeep leaves them to eviction).
-    Starred-only items can't be removed here. Idempotent."""
+    Only files that resolve inside ``cache_root`` (the adopted music drive)
+    are deleted; any other path is logged and its row left 'present' (none
+    at all without a drive). Starred-only items can't be removed here.
+    Idempotent."""
     if _pin_source(conn, kind, target_id) == PinSource.STARRED.value:
         return 409, {"ok": False, "error": STARRED_ONLY}
     unkeep(conn, queue, kind, target_id, starred_auto_pin=starred_auto_pin)
@@ -258,6 +281,10 @@ def remove_kept(conn: Connection, queue: Optional[QueueLike], kind: PinKind,
             f"WHERE status='present' AND track_id IN ({marks})", chunk))
         for r in rows:
             if r["local_path"]:
+                if not _inside(r["local_path"], cache_root):
+                    log.warning("not deleting %s: outside the music storage %s",
+                                r["local_path"], cache_root)
+                    continue
                 try:
                     delete_file(r["local_path"])
                 except FileNotFoundError:

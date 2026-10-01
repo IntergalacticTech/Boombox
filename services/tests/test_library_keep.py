@@ -190,11 +190,11 @@ def test_remove_kept_deletes_orphaned_files_now(tmp_path):
     k.keep(conn, q, PinKind.PLAYLIST, "pl1")
     _present(conn, "t1", str(f1), 10)
     _present(conn, "t2", str(f2), 1)
-    status, r = k.remove_kept(conn, q, PinKind.ALBUM, "al1", starred_auto_pin=True)
+    status, r = k.remove_kept(conn, q, PinKind.ALBUM, "al1", starred_auto_pin=True, cache_root=tmp_path)
     assert status == 200 and r["removed_tracks"] == 1 and r["freed_bytes"] == 10
     assert not f1.exists() and f2.exists()        # t2 is still kept via the playlist
     assert r["keep"]["state"] == "none"
-    assert k.remove_kept(conn, q, PinKind.ALBUM, "al1", starred_auto_pin=True)[1]["removed_tracks"] == 0
+    assert k.remove_kept(conn, q, PinKind.ALBUM, "al1", starred_auto_pin=True, cache_root=tmp_path)[1]["removed_tracks"] == 0
 
 
 def test_remove_kept_starred_overlap_deletes_nothing(tmp_path):
@@ -204,7 +204,7 @@ def test_remove_kept_starred_overlap_deletes_nothing(tmp_path):
     f4.write_bytes(b"x")
     _present(conn, "t4", str(f4), 1)
     k.keep(conn, None, PinKind.ALBUM, "al2")
-    status, r = k.remove_kept(conn, None, PinKind.ALBUM, "al2", starred_auto_pin=True)
+    status, r = k.remove_kept(conn, None, PinKind.ALBUM, "al2", starred_auto_pin=True, cache_root=tmp_path)
     assert status == 200 and r["removed_tracks"] == 0 and f4.exists()
     assert r["keep"]["state"] == "starred"
 
@@ -212,7 +212,7 @@ def test_remove_kept_starred_overlap_deletes_nothing(tmp_path):
 def test_remove_starred_only_is_refused(tmp_path):
     conn = _db(tmp_path)
     reconcile_starred(conn)
-    status, r = k.remove_kept(conn, None, PinKind.ALBUM, "al2", starred_auto_pin=True)
+    status, r = k.remove_kept(conn, None, PinKind.ALBUM, "al2", starred_auto_pin=True, cache_root=tmp_path)
     assert status == 409 and r == {"ok": False, "error": "unstar in Navidrome to remove"}
 
 
@@ -223,3 +223,54 @@ def test_retry_failed_requeues_pinned_failures_only(tmp_path):
     for tid, status in (("t1", "error"), ("t2", "no_space"), ("t4", "error")):
         conn.execute("INSERT INTO cache_state(track_id,status) VALUES(?,?)", (tid, status))
     assert k.retry_failed(conn, q) == 2 and q.enqueued == ["t1", "t2"]
+
+
+def test_failed_counts_follow_pins_after_remove(tmp_path):
+    conn = _db(tmp_path)
+    q = FakeQueue()
+    k.keep(conn, q, PinKind.ALBUM, "al1")
+    conn.execute("INSERT INTO cache_state(track_id,status) VALUES('t1','error')")
+    conn.execute("INSERT INTO cache_state(track_id,status) VALUES('t3','no_space')")
+    conn.execute("INSERT INTO cache_state(track_id,status) VALUES('t4','error')")  # never pinned
+    d = k.storage_overview(conn, None, 0, q)["downloads"]
+    assert (d["failed"], d["no_space"]) == (1, 1)
+    k.remove_kept(conn, q, PinKind.ALBUM, "al1", starred_auto_pin=True, cache_root=tmp_path)
+    d = k.storage_overview(conn, None, 0, q)["downloads"]
+    assert (d["failed"], d["no_space"]) == (0, 0)
+    assert k.retry_failed(conn, q) == 0
+
+
+def test_kept_tracks_counts_pinned_files_music_bytes_counts_all(tmp_path):
+    conn = _db(tmp_path)
+    k.keep(conn, None, PinKind.ALBUM, "al1")
+    _present(conn, "t1", size=100)
+    _present(conn, "t4", size=7)        # leftover streamed cache, no pin
+    o = k.storage_overview(conn, None, 0, None)["drive"]
+    assert o["kept_tracks"] == 1 and o["music_bytes"] == 107
+
+
+def test_remove_kept_leaves_files_outside_the_cache_root(tmp_path):
+    conn = _db(tmp_path)
+    root, other = tmp_path / "music", tmp_path / "elsewhere"
+    root.mkdir(); other.mkdir()
+    inside, outside = root / "t1.mp3", other / "t3.mp3"
+    inside.write_bytes(b"x" * 4)
+    outside.write_bytes(b"y" * 9)
+    k.keep(conn, None, PinKind.ALBUM, "al1")
+    _present(conn, "t1", str(inside), 4)
+    _present(conn, "t3", str(outside), 9)
+    status, r = k.remove_kept(conn, None, PinKind.ALBUM, "al1", starred_auto_pin=True, cache_root=root)
+    assert status == 200 and (r["removed_tracks"], r["freed_bytes"]) == (1, 4)
+    assert not inside.exists() and outside.exists()
+    row = conn.execute("SELECT status FROM cache_state WHERE track_id='t3'").fetchone()
+    assert row[0] == "present"
+
+
+def test_remove_kept_without_a_drive_deletes_nothing(tmp_path):
+    conn = _db(tmp_path)
+    f1 = tmp_path / "t1.mp3"
+    f1.write_bytes(b"x")
+    k.keep(conn, None, PinKind.ALBUM, "al1")
+    _present(conn, "t1", str(f1), 1)
+    r = k.remove_kept(conn, None, PinKind.ALBUM, "al1", starred_auto_pin=True, cache_root=None)[1]
+    assert r["removed_tracks"] == 0 and f1.exists()

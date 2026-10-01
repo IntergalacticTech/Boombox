@@ -798,6 +798,7 @@ async def test_storage_route_overview(client):
     ctx.queue = KeepQueue()
     ctx.cache_state = CacheDriveState(present=True, mount_path=Path("/opt/boombox/storage/music"),
                                       free_bytes=5, total_bytes=9, internal=True)
+    await c.post("/api/library/keep", json={"kind": "playlist", "id": "pl1"})  # pins present t2
     o = await (await c.get("/api/library/storage")).json()
     assert o["drive"]["internal"] is True and o["drive"]["reserve_bytes"] == ctx.cfg.cache.reserve_bytes
     assert o["drive"]["kept_tracks"] == 1 and o["downloads"]["active"] is True

@@ -533,8 +533,8 @@ buttons and offline-miss CTAs.
 | `GET  /api/library/art/{art_id}` | Album-art proxy with on-disk cache at `/opt/boombox/state/art-cache/` |
 | `POST` / `DELETE /api/library/keep` | LAN app "Keep offline": `{kind: album\|artist\|playlist, id}` → user pin + enqueue / unpin (a starred or card-bound target falls back to that pin) + cancel queued orphans → `{ok, queued\|cancelled, keep: {state, tracks_total, tracks_present}}` |
 | `GET  /api/library/offline` | `{album_ids, artist_ids, playlist_ids}` with ≥ 1 track on disk (LAN app dims the rest while offline) |
-| `GET  /api/library/storage` | Admin → Storage: `{drive, kept, downloads}` (reserve, music bytes, kept items with progress, queue / in-flight / paused reason / failed / no_space) |
-| `POST /api/library/storage/remove` | `{kind, id}` → unkeep + delete the now-unprotected files at once; starred-only → 409 "unstar in Navidrome to remove" |
+| `GET  /api/library/storage` | Admin → Storage: `{drive, kept, downloads}` (reserve, kept items with progress, queue / in-flight / paused reason / failed / no_space). `music_bytes` is every track file on disk; `kept_tracks`, `failed` and `no_space` count pinned tracks only (what Retry can act on) |
+| `POST /api/library/storage/remove` | `{kind, id}` → unkeep + delete the now-unprotected files at once (only paths inside the adopted music drive; none without one); starred-only → 409 "unstar in Navidrome to remove" |
 | `POST /api/library/storage/retry` | Re-enqueue pinned `error` / `no_space` tracks (otherwise retried by the hourly sync only) |
 
 **Sync semantics.** `sync_full` is the cold-boot path: full catalog
