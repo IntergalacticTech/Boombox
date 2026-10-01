@@ -1,7 +1,10 @@
 """keep.py — keep/unkeep with pin fall-back, keep state, offline facts."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from boombox_library import keep as k
+from boombox_library.cache_drive import CacheDriveState
 from boombox_library.db import connect, migrate
 from boombox_library.models import PinKind
 from boombox_library.pins import all_pinned_track_ids, reconcile_starred
@@ -139,3 +142,84 @@ def test_offline_ids_and_flags(tmp_path):
     ])
     assert [f["offline"] for f in flags] == [True, False, True, False, True]
     assert flags[0]["title"] == "T2"
+
+
+def test_storage_overview_reports_downloads_and_no_space(tmp_path):
+    conn = _db(tmp_path)
+    reconcile_starred(conn)
+    k.keep(conn, None, PinKind.ALBUM, "al1")
+    _present(conn, "t1", size=1500)
+    conn.execute("INSERT INTO cache_state(track_id,status,error_message) VALUES('t2','error','boom')")
+    conn.execute("INSERT INTO cache_state(track_id,status,error_message) VALUES('t3','no_space','no space')")
+    q = FakeQueue()
+    q.snap = {"queued": 4, "in_flight": ["t4"], "paused": "low_space"}
+    drive = CacheDriveState(present=True, mount_path=Path("/opt/boombox/storage/music"),
+                            free_bytes=10, total_bytes=100, internal=True)
+    o = k.storage_overview(conn, drive, 20, q)
+    assert o["drive"] == {"present": True, "internal": True, "mount_path": "/opt/boombox/storage/music",
+                          "total_bytes": 100, "free_bytes": 10, "reserve_bytes": 20,
+                          "music_bytes": 1500, "kept_tracks": 1}
+    assert o["downloads"] == {"active": True, "queued": 4, "in_flight": [{"id": "t4", "title": "T4"}],
+                              "paused": "low_space", "failed": 1, "no_space": 1}
+    assert sorted(o["kept"], key=lambda i: i["id"]) == [
+        {"kind": "album", "id": "al1", "name": "Blue", "source": "user",
+         "tracks_total": 3, "tracks_present": 1, "bytes": 1500},
+        {"kind": "album", "id": "al2", "name": "Court and Spark", "source": "starred",
+         "tracks_total": 2, "tracks_present": 0, "bytes": 0},
+    ]
+
+
+def test_storage_overview_without_drive_or_queue(tmp_path):
+    conn = _db(tmp_path)
+    conn.execute("UPDATE tracks SET navidrome_starred=1 WHERE id='t5'")
+    reconcile_starred(conn)
+    o = k.storage_overview(conn, None, 20, None)
+    assert o["drive"]["present"] is False and o["drive"]["free_bytes"] is None
+    assert o["downloads"]["active"] is False and o["downloads"]["paused"] is None
+    assert o["kept"][-1] == {"kind": "starred_tracks", "id": "", "name": "Starred songs", "source": "starred",
+                             "tracks_total": 1, "tracks_present": 0, "bytes": 0}
+
+
+def test_remove_kept_deletes_orphaned_files_now(tmp_path):
+    conn = _db(tmp_path)
+    q = FakeQueue()
+    f1, f2 = tmp_path / "t1.mp3", tmp_path / "t2.mp3"
+    f1.write_bytes(b"x" * 10)
+    f2.write_bytes(b"y")
+    k.keep(conn, q, PinKind.ALBUM, "al1")
+    k.keep(conn, q, PinKind.PLAYLIST, "pl1")
+    _present(conn, "t1", str(f1), 10)
+    _present(conn, "t2", str(f2), 1)
+    status, r = k.remove_kept(conn, q, PinKind.ALBUM, "al1", starred_auto_pin=True)
+    assert status == 200 and r["removed_tracks"] == 1 and r["freed_bytes"] == 10
+    assert not f1.exists() and f2.exists()        # t2 is still kept via the playlist
+    assert r["keep"]["state"] == "none"
+    assert k.remove_kept(conn, q, PinKind.ALBUM, "al1", starred_auto_pin=True)[1]["removed_tracks"] == 0
+
+
+def test_remove_kept_starred_overlap_deletes_nothing(tmp_path):
+    conn = _db(tmp_path)
+    reconcile_starred(conn)
+    f4 = tmp_path / "t4.mp3"
+    f4.write_bytes(b"x")
+    _present(conn, "t4", str(f4), 1)
+    k.keep(conn, None, PinKind.ALBUM, "al2")
+    status, r = k.remove_kept(conn, None, PinKind.ALBUM, "al2", starred_auto_pin=True)
+    assert status == 200 and r["removed_tracks"] == 0 and f4.exists()
+    assert r["keep"]["state"] == "starred"
+
+
+def test_remove_starred_only_is_refused(tmp_path):
+    conn = _db(tmp_path)
+    reconcile_starred(conn)
+    status, r = k.remove_kept(conn, None, PinKind.ALBUM, "al2", starred_auto_pin=True)
+    assert status == 409 and r == {"ok": False, "error": "unstar in Navidrome to remove"}
+
+
+def test_retry_failed_requeues_pinned_failures_only(tmp_path):
+    conn = _db(tmp_path)
+    q = FakeQueue()
+    k.keep(conn, None, PinKind.ALBUM, "al1")
+    for tid, status in (("t1", "error"), ("t2", "no_space"), ("t4", "error")):
+        conn.execute("INSERT INTO cache_state(track_id,status) VALUES(?,?)", (tid, status))
+    assert k.retry_failed(conn, q) == 2 and q.enqueued == ["t1", "t2"]

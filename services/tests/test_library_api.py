@@ -790,3 +790,34 @@ async def test_health_reports_internal_storage(client):
     ctx.cache_state = CacheDriveState(present=True, mount_path=Path("/opt/boombox/storage/music"),
                                       free_bytes=1, total_bytes=2, internal=True)
     assert (await (await c.get("/api/library/health")).json())["internal_storage"] is True
+
+
+async def test_storage_route_overview(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    ctx.queue = KeepQueue()
+    ctx.cache_state = CacheDriveState(present=True, mount_path=Path("/opt/boombox/storage/music"),
+                                      free_bytes=5, total_bytes=9, internal=True)
+    o = await (await c.get("/api/library/storage")).json()
+    assert o["drive"]["internal"] is True and o["drive"]["reserve_bytes"] == ctx.cfg.cache.reserve_bytes
+    assert o["drive"]["kept_tracks"] == 1 and o["downloads"]["active"] is True
+
+
+async def test_storage_remove_route(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    await c.post("/api/library/keep", json={"kind": "album", "id": "al1"})
+    r = await c.post("/api/library/storage/remove", json={"kind": "album", "id": "al1"})
+    assert r.status == 200 and (await r.json())["ok"] is True
+    r = await c.post("/api/library/storage/remove", json={"kind": "starred_tracks", "id": ""})
+    assert r.status == 409 and (await r.json())["error"] == "unstar in Navidrome to remove"
+    assert (await c.post("/api/library/storage/remove", json={"kind": "track", "id": "t1"})).status == 400
+
+
+async def test_storage_retry_route(client):
+    c, ctx, conn = client
+    r = await c.post("/api/library/storage/retry", json={})
+    assert r.status == 409 and (await r.json())["ok"] is False
+    ctx.queue = KeepQueue()
+    r = await c.post("/api/library/storage/retry", json={})
+    assert (await r.json()) == {"ok": True, "retried": 0}

@@ -13,9 +13,11 @@ until the next hourly reconcile.
 from __future__ import annotations
 
 import logging
+import os
 from sqlite3 import Connection
-from typing import Iterable, Iterator, Optional, Protocol
+from typing import Callable, Iterable, Iterator, Optional, Protocol
 
+from .cache_drive import CacheDriveState
 from .models import PinKind, PinSource
 from .pins import all_pinned_track_ids, expand_pin_to_tracks, pin, unpin
 
@@ -160,3 +162,122 @@ def offline_flags(conn: Connection, results: list[dict]) -> list[dict]:
                 have.add((ctype, row[0]))
     return [{**r, "offline": (str(r.get("content_type", "")), str(r["id"])) in have}
             for r in results]
+
+
+STARRED_ONLY = "unstar in Navidrome to remove"
+
+
+def _name(conn: Connection, kind: PinKind, target_id: str) -> str:
+    row = conn.execute(f"SELECT name FROM {_TABLE[kind]} WHERE id=?", (target_id,)).fetchone()
+    return str(row[0]) if row else target_id
+
+
+def _item(conn: Connection, kind: str, target_id: str, name: str, source: str,
+          ids: list[str]) -> dict:
+    sizes = present_sizes(conn, ids)
+    return {"kind": kind, "id": target_id, "name": name, "source": source,
+            "tracks_total": len(ids), "tracks_present": len(sizes),
+            "bytes": sum(sizes.values())}
+
+
+def kept_items(conn: Connection) -> list[dict]:
+    """User + starred keeps (albums / artists / playlists), oldest first,
+    then one aggregate row for starred single tracks."""
+    rows = list(conn.execute(
+        "SELECT target_kind, target_id, source FROM pins "
+        "WHERE source IN ('user', 'starred') "
+        "AND target_kind IN ('album', 'artist', 'playlist') ORDER BY added_at"))
+    items: list[dict] = []
+    for r in rows:
+        kind = PinKind(r["target_kind"])
+        items.append(_item(conn, kind.value, r["target_id"], _name(conn, kind, r["target_id"]),
+                           r["source"], track_ids(conn, kind, r["target_id"])))
+    starred = [r[0] for r in conn.execute(
+        "SELECT target_id FROM pins WHERE target_kind='track' AND source='starred'")]
+    if starred:
+        items.append(_item(conn, "starred_tracks", "", "Starred songs", "starred", starred))
+    return items
+
+
+def storage_overview(conn: Connection, drive: Optional[CacheDriveState],
+                     reserve_bytes: int, queue: Optional[QueueLike]) -> dict:
+    count, total = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM cache_state "
+        "WHERE status='present'").fetchone()
+    failed = {r[0]: int(r[1]) for r in conn.execute(
+        "SELECT status, COUNT(*) FROM cache_state "
+        "WHERE status IN ('error', 'no_space') GROUP BY status")}
+    snap = queue.snapshot() if queue is not None else {
+        "queued": 0, "in_flight": [], "paused": None}
+    in_flight = [str(t) for t in snap["in_flight"]]
+    titles: dict[str, str] = {}
+    for chunk in _chunks(in_flight):
+        marks = ",".join("?" * len(chunk))
+        titles.update((r[0], r[1]) for r in conn.execute(
+            f"SELECT id, title FROM tracks WHERE id IN ({marks})", chunk))
+    present = drive is not None and drive.present
+    return {
+        "drive": {
+            "present": present,
+            "internal": bool(drive is not None and drive.internal),
+            "mount_path": str(drive.mount_path) if drive is not None and present and drive.mount_path else None,
+            "total_bytes": drive.total_bytes if drive is not None and present else None,
+            "free_bytes": drive.free_bytes if drive is not None and present else None,
+            "reserve_bytes": reserve_bytes,
+            "music_bytes": int(total),
+            "kept_tracks": int(count),
+        },
+        "kept": kept_items(conn),
+        "downloads": {
+            "active": queue is not None,
+            "queued": int(snap["queued"]),
+            "in_flight": [{"id": t, "title": titles.get(t, t)} for t in in_flight],
+            "paused": snap["paused"],
+            "failed": failed.get("error", 0),
+            "no_space": failed.get("no_space", 0),
+        },
+    }
+
+
+def remove_kept(conn: Connection, queue: Optional[QueueLike], kind: PinKind,
+                target_id: str, *, starred_auto_pin: bool,
+                delete_file: Callable[[str], None] = os.unlink) -> tuple[int, dict]:
+    """Storage → Remove: unkeep, then delete at once the files of tracks no
+    pin protects any more (the plain unkeep leaves them to eviction).
+    Starred-only items can't be removed here. Idempotent."""
+    if _pin_source(conn, kind, target_id) == PinSource.STARRED.value:
+        return 409, {"ok": False, "error": STARRED_ONLY}
+    unkeep(conn, queue, kind, target_id, starred_auto_pin=starred_auto_pin)
+    protected = all_pinned_track_ids(conn)
+    orphans = [t for t in track_ids(conn, kind, target_id) if t not in protected]
+    removed = freed = 0
+    for chunk in _chunks(orphans):
+        marks = ",".join("?" * len(chunk))
+        rows = list(conn.execute(
+            f"SELECT track_id, local_path, size_bytes FROM cache_state "
+            f"WHERE status='present' AND track_id IN ({marks})", chunk))
+        for r in rows:
+            if r["local_path"]:
+                try:
+                    delete_file(r["local_path"])
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    log.warning("could not delete %s: %s", r["local_path"], e)
+                    continue
+            conn.execute(
+                "UPDATE cache_state SET status='absent', local_path=NULL, size_bytes=NULL, "
+                "downloaded_at=NULL, error_message=NULL WHERE track_id=?", (r["track_id"],))
+            removed += 1
+            freed += int(r["size_bytes"] or 0)
+    return 200, {"ok": True, "removed_tracks": removed, "freed_bytes": freed,
+                 "keep": keep_state(conn, kind, target_id)}
+
+
+def retry_failed(conn: Connection, queue: QueueLike) -> int:
+    """Re-enqueue pinned tracks in 'error' / 'no_space' (Storage → Retry failed)."""
+    protected = all_pinned_track_ids(conn)
+    ids = [r[0] for r in conn.execute(
+        "SELECT track_id FROM cache_state WHERE status IN ('error', 'no_space') "
+        "ORDER BY track_id") if r[0] in protected]
+    return sum(1 for t in ids if queue.enqueue(t))

@@ -87,6 +87,9 @@ def build_app(ctx: Context) -> web.Application:
     app.router.add_post("/api/library/keep", _keep_post)
     app.router.add_delete("/api/library/keep", _keep_delete)
     app.router.add_get("/api/library/offline", _offline)
+    app.router.add_get("/api/library/storage", _storage)
+    app.router.add_post("/api/library/storage/remove", _storage_remove)
+    app.router.add_post("/api/library/storage/retry", _storage_retry)
     stream_proxy.setup(app)  # GET/HEAD /api/library/stream/{track_id}
     return app
 
@@ -550,6 +553,38 @@ async def _keep_delete(req: web.Request) -> web.Response:
 async def _offline(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
     return web.json_response(keep_mod.offline_ids(ctx.conn))
+
+
+async def _storage(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    return web.json_response(keep_mod.storage_overview(
+        ctx.conn, ctx.cache_drive_state(), ctx.cfg.cache.reserve_bytes, ctx.download_queue()))
+
+
+async def _storage_remove(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    try:
+        body = await req.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and body.get("kind") == "starred_tracks":
+        return _bad(keep_mod.STARRED_ONLY, 409)
+    t = await _keep_target(req)
+    if isinstance(t, web.Response):
+        return t
+    kind, target_id = t
+    status, out = keep_mod.remove_kept(
+        ctx.conn, ctx.download_queue(), kind, target_id,
+        starred_auto_pin=ctx.cfg.sync.starred_auto_pin)
+    return web.json_response(out, status=status)
+
+
+async def _storage_retry(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    queue = ctx.download_queue()
+    if queue is None:
+        return _bad("downloads aren't running — no music storage or no music server set up", 409)
+    return web.json_response({"ok": True, "retried": keep_mod.retry_failed(ctx.conn, queue)})
 
 
 async def _cache_stats(req: web.Request) -> web.Response:
