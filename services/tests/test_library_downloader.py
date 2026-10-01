@@ -635,7 +635,7 @@ async def test_track_that_keeps_link_failing_ends_error_and_the_queue_moves_on(t
     assert sleeps.calls == [60.0, 60.0, 60.0]
 
 
-async def test_link_failure_counter_resets_after_a_success(tmp_path):
+async def test_link_failure_counter_resets_only_on_the_tracks_own_success(tmp_path):
     conn = _db(tmp_path, n=2)
     now = {"t": 1000.0}
     fails = {"t0": 2}
@@ -653,10 +653,35 @@ async def test_link_failure_counter_resets_after_a_success(tmp_path):
     q.enqueue("t0")
     await q.drain()
     assert _status(conn, "t0") == "present" and q._link_failures == {}
-    fails["t1"] = 2
+    # Another track's success must not clear a failing track's count.
+    q._link_failures["t9"] = 2
     q.enqueue("t1")
     await q.drain()
-    assert _status(conn, "t1") == "present"
+    assert _status(conn, "t1") == "present" and q._link_failures == {"t9": 2}
+
+
+async def test_always_failing_track_is_capped_at_concurrency_two(tmp_path):
+    conn = _db(tmp_path, n=6)
+    now = {"t": 1000.0}
+    calls: list = []
+
+    async def fetch(url, params, dest):
+        calls.append(url)
+        await asyncio.sleep(0)
+        if url.endswith("/t0"):
+            raise aiohttp.ClientPayloadError("Response payload is not completed")
+        dest.write_bytes(b"x")
+
+    sleeps = Sleeps(lambda n: now.__setitem__("t", now["t"] + 60.0))
+    q = DownloadQueue(conn, FakeStreamingClient(b""), _cache(tmp_path), 2, fetch,
+                      sleep=sleeps, clock=lambda: now["t"])
+    for i in range(6):
+        q.enqueue(f"t{i}")
+    await q.drain()
+    assert calls.count("http://nav/t0") == 3
+    assert _status(conn, "t0") == "error"
+    assert [_status(conn, f"t{i}") for i in range(1, 6)] == ["present"] * 5
+    assert len(sleeps.calls) <= 3
 
 
 async def test_cancelled_in_flight_track_that_link_fails_is_not_requeued(tmp_path):

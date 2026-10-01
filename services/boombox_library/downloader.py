@@ -408,8 +408,10 @@ class DownloadQueue:
                 self.conn, self.client, track_id, self.cache_root, self._fetch,
                 reserve_bytes=self.reserve_bytes)
             if result is DownloadResult.OK:
-                # The link works: earlier drops were outages, not the tracks.
-                self._link_failures.clear()
+                # Only this track's own count: another track succeeding says
+                # nothing about this one (a real outage is the is_online
+                # gate's job; a track wrongly failed retries hourly).
+                self._link_failures.pop(track_id, None)
             elif result is DownloadResult.OFFLINE:
                 self._on_link_failure(track_id)
         except asyncio.CancelledError:
