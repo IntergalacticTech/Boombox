@@ -822,3 +822,16 @@ async def test_storage_retry_route(client):
     ctx.queue = KeepQueue()
     r = await c.post("/api/library/storage/retry", json={})
     assert (await r.json()) == {"ok": True, "retried": 0}
+
+
+async def test_resolve_batch_offline_returns_kept_file_and_drops_the_rest(client, tmp_path):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    f = tmp_path / "t2.mp3"
+    f.write_bytes(b"x")
+    conn.execute("UPDATE cache_state SET local_path=? WHERE track_id='t2'", (str(f),))
+    ctx._ping_ok = False                       # Navidrome unreachable
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig(url="https://m.example", username="u", password="p"))
+    items = (await (await c.post("/api/library/resolve", json={"ids": ["t1", "t2"]})).json())["items"]
+    assert [(i["id"], i["source"]) for i in items] == [("t1", "offline_miss"), ("t2", "cache")]
+    assert items[1]["uri"] == f"file://{f}"

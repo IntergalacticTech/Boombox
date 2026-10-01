@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from sqlite3 import Connection
 from urllib.parse import urlsplit
 
@@ -71,6 +72,30 @@ def resolve_uris(
             continue
         out.append(r.uri)
     return out
+
+
+def _library_health_url() -> str:
+    base = os.environ.get("BOOMBOX_LIBRARY_BASE") or "http://127.0.0.1:6687"
+    return base.rstrip("/") + "/api/library/health"
+
+
+async def library_online(url: str | None = None, timeout: float = 2.0) -> bool:
+    """Is the Home Library server reachable, per boombox-library's own check?
+
+    Only a definite "unreachable" answer returns False — the tap then plays
+    the kept (cached) tracks and skips the rest instead of queueing stream
+    URLs that can't play. boombox-library itself not answering returns True,
+    so wait_for_stream_proxy still rides out its restart."""
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as s:
+            async with s.get(url or _library_health_url()) as r:
+                if r.status != 200:
+                    return True
+                body = await r.json(content_type=None)
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+        return True
+    return not (isinstance(body, dict) and body.get("navidrome_reachable") is False)
 
 
 async def wait_for_stream_proxy(
