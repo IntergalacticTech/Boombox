@@ -237,7 +237,7 @@ def _make_handlers(session: aiohttp.ClientSession, base: str, player: HomePlayer
         if not isinstance(body, dict):
             return _fail(400, "expected a JSON object")
         kind, item_id = body.get("kind"), body.get("id")
-        if kind not in KEEP_KINDS:
+        if not isinstance(kind, str) or kind not in KEEP_KINDS:
             return _fail(400, "kind must be album, artist or playlist")
         if not isinstance(item_id, str) or not _ID_RE.match(item_id):
             return _fail(400, "bad id")

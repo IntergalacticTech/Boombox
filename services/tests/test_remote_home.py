@@ -401,7 +401,9 @@ async def test_keep_and_unkeep_proxy_to_the_library(home):
 
 
 @pytest.mark.parametrize("body", [{"kind": "track", "id": "t1"}, {"kind": "album", "id": "a b"},
-                                  {"kind": "album"}, ["al1"]])
+                                  {"kind": "album"}, ["al1"],
+                                  {"kind": ["album"], "id": "al1"},
+                                  {"kind": {"a": 1}, "id": "al1"}])
 async def test_keep_validates_before_calling_the_library(home, body):
     client, lib, _ = home
     assert (await client.post("/api/remote/home/keep", json=body, headers=AUTH)).status == 400
@@ -436,3 +438,18 @@ async def test_offline_ids_pass_through(home):
     client, _lib, _ = home
     r = await client.get("/api/remote/home/offline", headers=AUTH)
     assert (await r.json()) == {"album_ids": ["al1"], "artist_ids": [], "playlist_ids": []}
+
+
+async def test_keep_status_offline_403_when_remote_disabled(home, tmp_path, monkeypatch):
+    client, lib, _ = home
+    state = tmp_path / "disabled-state.json"
+    state.write_text(json.dumps({"enabled": False}))
+    monkeypatch.setenv("BOOMBOX_REMOTE_STATE", str(state))
+    body = {"kind": "album", "id": "al1"}
+    for r in (await client.post("/api/remote/home/keep", json=body, headers=AUTH),
+              await client.delete("/api/remote/home/keep", json=body, headers=AUTH),
+              await client.get("/api/remote/home/status", headers=AUTH),
+              await client.get("/api/remote/home/offline", headers=AUTH)):
+        assert r.status == 403
+        assert (await r.json())["error"] == "remote_disabled"
+    assert lib.requests == []
