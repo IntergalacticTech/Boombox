@@ -55,6 +55,10 @@ _RECHECK_S = {"offline": OFFLINE_RECHECK_S, "low_space": PAUSE_RECHECK_S,
 LINK_DOWN_STATUSES = frozenset({502, 504, 520, 521, 522, 523, 524, 530})
 
 
+# Statuses cancel() may put back on a row it un-queues; anything else → 'absent'.
+_RESTORABLE = frozenset({"absent", "missing", "error", "no_space"})
+
+
 class DownloadResult(str, enum.Enum):
     OK = "ok"
     SKIPPED = "skipped"    # already present
@@ -321,7 +325,9 @@ class DownloadQueue:
         self._gates = gates or Gates()
         self._sleep = sleep
         self._clock = clock
-        self._pending: dict[str, None] = {}          # insertion-ordered set
+        # Insertion-ordered: track_id → its cache_state status before it was
+        # queued (cancel() puts that back).
+        self._pending: dict[str, Optional[str]] = {}
         self._in_flight: dict[str, asyncio.Task] = {}
         self._wake = asyncio.Event()
         self._runner: Optional[asyncio.Task] = None
@@ -353,7 +359,7 @@ class DownloadQueue:
                ON CONFLICT(track_id) DO UPDATE SET status='queued', error_message=NULL""",
             (track_id,),
         )
-        self._pending[track_id] = None
+        self._pending[track_id] = None if row is None else str(row["status"])
         if self._runner is None or self._runner.done():
             self._runner = asyncio.create_task(self._run())
         self._wake.set()
@@ -361,17 +367,25 @@ class DownloadQueue:
 
     def cancel(self, track_ids: Iterable[str]) -> int:
         """Drop queued (not yet started) downloads; in-flight ones finish.
+        A dropped track's row goes back to the status it had before it was
+        queued ('absent' if none), local_path kept — a 'missing' row on a
+        USB drive stays re-adoptable by restore_missing_rows.
         Returns how many were dropped."""
         n = 0
         for tid in track_ids:
             if tid in self._pending:
-                del self._pending[tid]
-                self.conn.execute(
-                    "DELETE FROM cache_state WHERE track_id=? AND status='queued'", (tid,))
+                prev = self._pending.pop(tid)
+                self._unqueue(tid, prev)
                 n += 1
             elif tid in self._in_flight:
                 self._cancelled.add(tid)   # let it finish; never requeue it
         return n
+
+    def _unqueue(self, track_id: str, prev: Optional[str] = None) -> None:
+        status = prev if prev in _RESTORABLE else "absent"
+        self.conn.execute(
+            "UPDATE cache_state SET status=? WHERE track_id=? AND status='queued'",
+            (status, track_id))
 
     def snapshot(self) -> dict:
         return {"queued": len(self._pending), "in_flight": list(self._in_flight),
@@ -445,8 +459,7 @@ class DownloadQueue:
             log.exception("report_offline hook failed")
         if track_id in self._cancelled:
             self._link_failures.pop(track_id, None)
-            self.conn.execute(
-                "DELETE FROM cache_state WHERE track_id=? AND status='queued'", (track_id,))
+            self._unqueue(track_id)
             return
         n = self._link_failures.get(track_id, 0) + 1
         if n >= MAX_LINK_RETRIES:

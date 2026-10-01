@@ -586,7 +586,34 @@ async def test_cancel_drops_queued_and_in_flight_finishes(tmp_path):
     release.set()
     await q.drain()
     assert _status(conn, "t0") == "present"
-    assert _status(conn, "t1") is None and _status(conn, "t2") is None
+    assert _status(conn, "t1") == "absent" and _status(conn, "t2") == "absent"
+
+
+async def test_cancel_restores_the_previous_status_and_keeps_local_path(tmp_path):
+    conn = _db(tmp_path, n=4)
+    conn.executemany(
+        "INSERT INTO cache_state(track_id,status,local_path,error_message) VALUES(?,?,?,?)",
+        [("t1", "missing", "/media/usb0/audio/t1.mp3", None),
+         ("t2", "error", None, "boom"),
+         ("t3", "absent", "/old/t3.mp3", None)])
+    started = asyncio.Event()
+
+    async def blocked(url, params, dest):
+        started.set()
+        await asyncio.Event().wait()
+
+    q = DownloadQueue(conn, FakeStreamingClient(b""), _cache(tmp_path), 1, blocked)
+    for i in range(4):
+        q.enqueue(f"t{i}")
+    await asyncio.wait_for(started.wait(), 1)          # t0 in flight, t1..t3 queued
+    assert _status(conn, "t1") == "queued"
+    assert q.cancel(["t1", "t2", "t3"]) == 3
+    rows = {r["track_id"]: (r["status"], r["local_path"]) for r in conn.execute(
+        "SELECT track_id, status, local_path FROM cache_state")}
+    assert rows["t1"] == ("missing", "/media/usb0/audio/t1.mp3")   # USB fallback can re-adopt it
+    assert rows["t2"] == ("error", None)
+    assert rows["t3"] == ("absent", "/old/t3.mp3")
+    await q.aclose()
 
 
 async def test_enqueue_is_idempotent_and_skips_present(tmp_path):
@@ -721,7 +748,7 @@ async def test_cancelled_in_flight_track_that_link_fails_is_not_requeued(tmp_pat
     assert q.cancel(["t0"]) == 0          # in flight: not dropped, but remembered
     release.set()
     await q.drain()
-    assert calls == ["http://nav/t0"] and _status(conn, "t0") is None
+    assert calls == ["http://nav/t0"] and _status(conn, "t0") == "absent"
     assert q.snapshot() == {"queued": 0, "in_flight": [], "paused": None}
 
 
