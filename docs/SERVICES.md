@@ -345,6 +345,9 @@ GATT transport for off-network Android phones.
 | `GET  /api/remote/home/search?q=`, `GET /api/remote/home/{artist\|album\|playlist}/{id}` | Bearer: Home Library search / drill-down |
 | `GET  /api/remote/home/art/{art_id}?size=` | Bearer: cover art via the library art proxy |
 | `POST /api/remote/home/play` | Bearer: `{ids, mode: play\|queue}` → resolve, drop offline misses, first track now + rest in background chunks |
+| `POST` / `DELETE /api/remote/home/keep` | Bearer: `{kind: album\|artist\|playlist, id}` → keep offline / stop keeping (boombox-library `/api/library/keep`) |
+| `GET  /api/remote/home/status` | Bearer: `{online, internal_storage}` — the app's Offline banner |
+| `GET  /api/remote/home/offline` | Bearer: `{album_ids, artist_ids, playlist_ids}` with music on the boombox (dimming while offline) |
 | `GET  /api/remote/video/views`, `/resume`, `/items?parent_id=&type=&search=&start=&limit=` | Bearer: Jellyfin browse as the kiosk's signed-in user (API key server-side only) |
 | `GET  /api/remote/video/image/{id}?max_width=` | Bearer: poster, cached on disk |
 | `POST /api/remote/video/play` | Bearer: `{item_id, start_ticks?}` → WATCH the kiosk if needed, wait ≤ 20 s for its session, PlayNow |
