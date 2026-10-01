@@ -940,3 +940,58 @@ async def test_internal_adoption_marks_usb_rows_missing_so_pins_redownload(
     ctx._ensure_download_queue = lambda: fake
     ctx._enqueue_pinned_downloads(now=10_000.0)
     assert fake.enqueued == ["t1"]               # re-downloaded to internal storage
+
+
+# ---- edge syncs are rate-limited (a blip must not cost a full sync) ----
+
+@pytest.mark.asyncio
+async def test_edge_sync_waits_out_the_min_gap_after_a_sync_started(ctx, monkeypatch):
+    now = {"t": 5000.0}
+    ctx._clock = lambda: now["t"]
+    kicks: list[float] = []
+    real_trigger = ctx.trigger_sync
+
+    async def counting_trigger():
+        kicks.append(now["t"])
+        await real_trigger()
+    monkeypatch.setattr(ctx, "trigger_sync", counting_trigger)
+
+    async def blip():
+        ctx.mark_offline()
+        await ctx._probe_once()
+
+    assert svc.EDGE_SYNC_MIN_GAP_S == 600
+    await blip()                                  # first edge after boot: syncs
+    assert kicks == [5000.0]
+    await ctx._sync_task
+    now["t"] += 120
+    await blip()                                  # 2 min after that sync started: skipped
+    assert kicks == [5000.0]
+    assert await ctx.is_online() is True          # still flips back online
+    now["t"] += 481                               # > 10 min since the sync started
+    await blip()
+    assert kicks == [5000.0, 5601.0]
+
+
+@pytest.mark.asyncio
+async def test_failed_sync_attempts_do_not_hold_off_the_edge_sync(ctx, monkeypatch):
+    now = {"t": 5000.0}
+    ctx._clock = lambda: now["t"]
+    FakeClient.ping_exc = SubsonicUnreachable("down")
+    assert await ctx._sync_once() is False        # backoff retry while offline
+    FakeClient.ping_exc = None
+    now["t"] += 60
+    kicks: list[bool] = []
+
+    async def fake_trigger():
+        kicks.append(True)
+    monkeypatch.setattr(ctx, "trigger_sync", fake_trigger)
+    await ctx._probe_once()                       # offline → online
+    assert kicks == [True]
+
+
+@pytest.mark.asyncio
+async def test_sync_records_its_start_on_the_injected_clock(ctx):
+    ctx._clock = lambda: 42.0
+    assert await ctx._sync_once() is True
+    assert ctx._last_sync_started == 42.0

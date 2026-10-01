@@ -87,6 +87,10 @@ PROBE_INTERVAL_S = 30.0
 PROBE_RETRY_S = 10.0
 PROBE_BOOT_WINDOW_S = 120.0
 PROBE_TIMEOUT_S = 5.0
+# An offline → online edge starts a sync only if none has reached the server
+# in this long: a streaming blip (link failure → offline → next probe) must
+# not cost a full sync each time. The hourly sync_timer is unaffected.
+EDGE_SYNC_MIN_GAP_S = 600.0
 PORT = 6687
 
 
@@ -144,6 +148,11 @@ class ServiceContext:
         # (wall-clock jumps from NTP at boot must not skip or force a retry);
         # -inf so the first sync always retries.
         self._last_failed_retry = float("-inf")
+        # Monotonic clock (injectable for tests) and when a sync last got
+        # past its ping — failed attempts while offline don't count, so the
+        # first edge after boot or a long outage always syncs.
+        self._clock: Callable[[], float] = time.monotonic
+        self._last_sync_started = float("-inf")
         # Phase 2: surfaced through /api/library/health for the UI's SyncIndicator
         self.last_sync_ts: float = 0.0
         self.syncing: bool = False
@@ -327,6 +336,7 @@ class ServiceContext:
                     self._set_reachable(False)
                     return e
                 self._set_reachable(True)
+                self._last_sync_started = self._clock()
                 try:
                     t0 = time.monotonic()
                     counts = await sync_full(client, self.conn)
@@ -415,7 +425,8 @@ class ServiceContext:
         (nothing done) when no music server is configured. Any failure —
         unreachable, timeout, bad credentials — counts as offline, as it
         does for the sync's own ping. An offline → online edge kicks a sync
-        (trigger_sync skips it when one is already running)."""
+        (trigger_sync skips it when one is already running) — unless a sync
+        got past its ping within EDGE_SYNC_MIN_GAP_S."""
         src = self.cfg.source
         if not src.url:
             return None
@@ -431,8 +442,13 @@ class ServiceContext:
             ok = False
         was = self._online if self._reachability_known else None
         if self._set_reachable(ok):
-            log.info("music server reachable again; syncing")
-            await self.trigger_sync()
+            since = self._clock() - self._last_sync_started
+            if since >= EDGE_SYNC_MIN_GAP_S:
+                log.info("music server reachable again; syncing")
+                await self.trigger_sync()
+            else:
+                log.info("music server reachable again; last sync %.0fs ago, "
+                         "not syncing again yet", since)
         elif was is not ok:
             log.info("music server %s", "reachable" if ok else "unreachable")
         return ok

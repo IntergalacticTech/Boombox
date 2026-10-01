@@ -516,7 +516,7 @@ Reachability comes from a short Subsonic ping (5 s timeout) every 30 s,
 independent of the hourly sync — every 10 s while it fails in the first
 two minutes after start. A stream relay or download that loses the link
 marks Navidrome offline at once; the next successful ping flips it back
-and starts a sync. Until the first ping answers, reachability is unknown
+and starts a sync, unless a sync reached the server in the last 10 minutes. Until the first ping answers, reachability is unknown
 and reported as reachable (`navidrome_reachable: true`,
 `reachability_known: false`) so a card tapped right after boot streams.
 
