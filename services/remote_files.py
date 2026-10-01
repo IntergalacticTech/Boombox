@@ -202,10 +202,17 @@ async def download(request: web.Request) -> web.StreamResponse:
 
 
 async def upload(request: web.Request) -> web.Response:
+    if request.content_type != "multipart/form-data":
+        return web.json_response(
+            {"error": "expected a multipart/form-data upload"}, status=400)
     music_uploads = _music_root() / "uploads"
     video_uploads = _video_root() / "uploads"
-    music_uploads.mkdir(parents=True, exist_ok=True)
-    video_uploads.mkdir(parents=True, exist_ok=True)
+    try:
+        music_uploads.mkdir(parents=True, exist_ok=True)
+        video_uploads.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log.warning("upload folders unavailable: %s", e)
+        return web.json_response({"error": DISK_FULL}, status=507)
     saved_audio: list[str] = []
     saved_video: list[str] = []
     reader = await request.multipart()
@@ -261,6 +268,8 @@ async def delete(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:
         return web.json_response({"error": "bad json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "expected a JSON object"}, status=400)
     rel = str(body.get("path", "") or "").strip("/").replace("\\", "/")
     root = _music_root()
     target = safe_compose(root, rel)

@@ -112,3 +112,16 @@ def test_admin_upload_streams_large_bodies_to_boombox_setup():
                  "proxy_request_buffering off;",
                  "proxy_read_timeout 1h;"):
         assert line in loc, line
+
+
+def test_household_remote_location_no_longer_takes_large_bodies():
+    loc = _location(SNIPPET, "location /api/remote/ {")
+    assert "client_max_body_size" not in loc
+    assert "proxy_request_buffering" not in loc
+
+
+def test_accounts_comment_still_sits_above_its_location():
+    i = SNIPPET.index("location /api/accounts/ {")
+    above = SNIPPET[:i].rsplit("\n\n", 1)[-1]
+    assert above.startswith("# Admin → Accounts API (boombox-setup).")
+    assert "location" not in above

@@ -161,3 +161,29 @@ async def test_delete_failure_is_409_not_500(storage, monkeypatch):
     monkeypatch.setattr(pathlib.Path, "unlink", refuse)
     r = await c.post("/api/accounts/storage/files/delete", json={"path": "Album/track.mp3"}, headers=auth)
     assert r.status == 409
+
+
+@pytest.mark.parametrize("body", [[], "x", 5, [{"path": "Album/track.mp3"}]])
+async def test_delete_non_object_body_is_400(storage, body):
+    c, _ctx, auth, music = storage
+    r = await c.post("/api/accounts/storage/files/delete", json=body, headers=auth)
+    assert r.status == 400 and (await r.json()) == {"error": "expected a JSON object"}
+    assert (music / "Album" / "track.mp3").exists()
+
+
+async def test_upload_with_a_json_body_is_400(storage):
+    c, _ctx, auth, music = storage
+    r = await c.post("/api/accounts/storage/files/upload", json={"file": "x"}, headers=auth)
+    assert r.status == 400
+    assert not (music / "uploads").exists()
+
+
+async def test_upload_folder_unwritable_is_507(storage, monkeypatch):
+    import pathlib
+    c, _ctx, auth, _ = storage
+
+    def refuse(self, *a, **k):
+        raise OSError(30, "Read-only file system")
+    monkeypatch.setattr(pathlib.Path, "mkdir", refuse)
+    r = await c.post("/api/accounts/storage/files/upload", data=_song(), headers=auth)
+    assert r.status == 507 and (await r.json())["error"] == "the boombox's disk is full or not writable"
