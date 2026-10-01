@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import {
   _resetForTests, useSyncStatus, useCacheStats, applyHealth, applyCacheStats,
+  useHomeLibraryOffline,
 } from "../homeLibrary";
 
 beforeEach(() => { _resetForTests(); });
@@ -45,5 +46,33 @@ describe("homeLibrary store", () => {
       cache_mount: null, last_sync_ts: 100, syncing: false,
     }));
     expect(result.current.syncing).toBe(false);
+  });
+});
+
+describe("useHomeLibraryOffline", () => {
+  const health = {
+    service_version: "0.1", cache_present: true, cache_mount: "/m",
+    last_sync_ts: 1, syncing: false,
+  };
+
+  it("is false before any health answer (unknown reads as online)", () => {
+    const { result } = renderHook(() => useHomeLibraryOffline());
+    expect(result.current).toBe(false);
+  });
+
+  it("is true only when Navidrome is known to be unreachable", () => {
+    const { result } = renderHook(() => useHomeLibraryOffline());
+    act(() => applyHealth({ ...health, navidrome_reachable: false, reachability_known: false }));
+    expect(result.current).toBe(false);
+    act(() => applyHealth({ ...health, navidrome_reachable: false, reachability_known: true }));
+    expect(result.current).toBe(true);
+    act(() => applyHealth({ ...health, navidrome_reachable: true, reachability_known: true }));
+    expect(result.current).toBe(false);
+  });
+
+  it("trusts navidrome_reachable from servers without reachability_known", () => {
+    const { result } = renderHook(() => useHomeLibraryOffline());
+    act(() => applyHealth({ ...health, navidrome_reachable: false }));
+    expect(result.current).toBe(true);
   });
 });

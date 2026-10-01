@@ -10,11 +10,13 @@
 // alone are already a huge UX win over "use your phone".
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { browse, browseHomeLibrary, capHomeTrackList, expandHomeRef, friendlyTrackTitle, getHistory, lookup, parseHomeUri, playUris, search, searchHomeLibrary, ROOTS, RADIO_STATIONS, type Ref, type MopidyTrack, type HistoryEntry, type RadioStation } from "./library";
+import { browse, browseHomeLibrary, capHomeTrackList, expandHomeTracks, friendlyTrackTitle, getHistory, lookup, parseHomeUri, playUris, search, searchHomeLibrary, ROOTS, RADIO_STATIONS, type Ref, type MopidyTrack, type HistoryEntry, type RadioStation } from "./library";
 import { AlbumThumb } from "./AlbumThumb";
 import { getFavorites } from "./favorites";
 import { useIncrementalRender } from "./useIncrementalRender";
 import { DrawerHomeBtn } from "./ChromeButtons";
+import { useHomeLibraryOffline } from "./homeLibrary";
+import { NOTHING_KEPT, isUnkept, skippedMessage, useOfflineSets } from "./offlineMusic";
 
 type Crumb = { uri: string | null; name: string };
 
@@ -88,6 +90,12 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
   // mixed queue; the ref guards synchronously, the state dims the list.
   const busyRef = useRef(false);
   const [busy, setBusy] = useState(false);
+  // Homelab unreachable: Home Library music that isn't on the boombox is
+  // dimmed and skipped. Unknown reachability, or a failed /offline fetch,
+  // dims nothing.
+  const offline = useHomeLibraryOffline();
+  const offlineSets = useOfflineSets(offline);
+  const unkept = (r: Pick<Ref, "uri" | "offline">) => isUnkept(r, offline, offlineSets);
 
   const here = stack.length === 0 ? null : stack[stack.length - 1];
   const hereUri = here?.uri ?? null;
@@ -274,14 +282,24 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
   const homeArtistHere = !searchActive && !!hereUri && items.length > 0
     && parseHomeUri(hereUri)?.kind === "artist";
 
-  /** Run a playback action; close on success, surface failures inline. */
-  const runPlayback = async (action: () => Promise<void>) => {
+  // Home Library track rows of the current list that can't play offline.
+  // Only home:track: refs ever land here, so filtering any URI list by it
+  // leaves local / radio / favourites untouched.
+  const unkeptTrackUris = useMemo(() => new Set(
+    (searchActive ? (homeResults ?? []) : items)
+      .filter(r => r.type === "track" && isUnkept(r, offline, offlineSets)).map(r => r.uri),
+  ), [searchActive, homeResults, items, offline, offlineSets]);
+
+  /** Run a playback action; close on success, surface failures inline. An
+   * action that returns a message (tracks skipped offline) played, but
+   * keeps the drawer open to show it. */
+  const runPlayback = async (action: () => Promise<string | void>) => {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     try {
-      await action();
-      onClose();
+      const message = await action();
+      if (message) setNotice(message); else onClose();
     } catch (e) {
       setNotice(e instanceof Error ? e.message : String(e));
     } finally {
@@ -290,13 +308,31 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
     }
   };
 
+  /** Play the URIs that are on the boombox, skipping (and counting) the
+   * rest. Nothing kept → NOTHING_KEPT, and nothing is played. */
+  const playKept = async (uris: string[], isOut: (uri: string) => boolean): Promise<string | void> => {
+    const kept = uris.filter(u => !isOut(u));
+    const skipped = uris.length - kept.length;
+    if (kept.length === 0 && skipped > 0) throw new Error(NOTHING_KEPT);
+    await playUris(capHomeTrackList(kept));
+    if (skipped > 0) return skippedMessage(skipped);
+  };
+
+  /** Expand a Home Library album / artist / playlist and play its kept tracks. */
+  const playExpanded = async (r: Pick<Ref, "uri" | "name">): Promise<string | void> => {
+    const refs = await expandHomeTracks(r);
+    if (refs.length === 0) throw new Error(`“${r.name}” has no tracks.`);
+    const out = new Set(refs.filter(unkept).map(x => x.uri));
+    return playKept(refs.map(x => x.uri), u => out.has(u));
+  };
+
   const playAll = async () => {
-    if (homeArtistHere && allTrackUris.length === 0 && hereUri) {
-      await runPlayback(async () => playUris(await expandHomeRef({ uri: hereUri })));
+    if (homeArtistHere && allTrackUris.length === 0 && hereUri && here) {
+      await runPlayback(() => playExpanded({ uri: hereUri, name: here.name }));
       return;
     }
     if (allTrackUris.length === 0) return;
-    await runPlayback(() => playUris(capHomeTrackList(allTrackUris)));
+    await runPlayback(() => playKept(allTrackUris, u => unkeptTrackUris.has(u)));
   };
 
   const playTrackAt = async (idx: number) => {
@@ -307,7 +343,7 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
     // Tapped track first, then the rest of the list behind it. playUris
     // starts the head before appending, and resolves home:track: refs in
     // one batch (skipping any that are offline and uncached).
-    await runPlayback(() => playUris(capHomeTrackList(allTrackUris.slice(Math.max(0, idx)))));
+    await runPlayback(() => playKept(allTrackUris.slice(Math.max(0, idx)), u => unkeptTrackUris.has(u)));
   };
 
   const enterRef = (r: Ref) => {
@@ -352,11 +388,7 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
       return;
     }
     if (r.uri.startsWith("home:")) {
-      await runPlayback(async () => {
-        const uris = await expandHomeRef(r);
-        if (uris.length === 0) throw new Error(`“${r.name}” has no tracks.`);
-        await playUris(uris);
-      });
+      await runPlayback(() => playExpanded(r));
       return;
     }
     if (busyRef.current) return;
@@ -657,9 +689,14 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                         padding: 12,
                         justifyItems: "center",
                       }}>
-                        {listItems.slice(0, visibleCount).map(r => (
+                        {listItems.slice(0, visibleCount).map(r => {
+                          // Un-kept albums stay browsable (their track list
+                          // shows what's missing) but lose quick-play.
+                          const dimmed = unkept(r);
+                          return (
                           <div
                             key={r.uri}
+                            data-tile
                             onClick={() => enterRef(r)}
                             style={{
                               cursor: "pointer",
@@ -671,12 +708,13 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                               width: "100%",
                               maxWidth: 160,
                               position: "relative",
+                              opacity: dimmed ? 0.4 : 1,
                             }}
                           >
                             <AlbumThumb album={r.name} artId={r.artId} seed={r.uri} size={140} radius={8}/>
                             {/* Quick-play overlay button — tap to play the whole
                               * album immediately without drilling into tracks. */}
-                            <button
+                            {(!dimmed || bindMode) && <button
                               onClick={(e) => { e.stopPropagation(); void playRefImmediate(r); }}
                               aria-label={`Play ${r.name}`}
                               style={{
@@ -694,15 +732,17 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                                 display: "grid",
                                 placeItems: "center",
                               }}
-                            >▶</button>
+                            >▶</button>}
                             <div style={{
                               fontSize: 13, fontWeight: 600,
                               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                               paddingInline: 4,
                               width: "100%",
                             }}>{r.name}</div>
+                            {dimmed && <NotOfflineTag />}
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                       {visibleCount < listItems.length && (
                         <div ref={sentinelRef} style={{ height: 1 }} />
@@ -715,9 +755,14 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
                         const isAlbum = r.type === "album";
                         const isArtist = r.type === "artist";
                         const isTrack = r.type === "track";
+                        const dimmed = unkept(r);
                         return (
                           <Row
                             key={r.uri}
+                            dimmed={dimmed}
+                            // Containers stay browsable; un-kept tracks can't
+                            // be tapped (bind mode binds, never plays).
+                            disabled={dimmed && isTrack && !bindMode}
                             title={r.name}
                             subtitle={isAlbum ? "Album" : isArtist ? "Artist" : isTrack ? (r.artist || "Track") : r.type === "playlist" ? "Playlist" : "Folder"}
                             meta={isTrack && r.lengthMs ? formatDuration(r.lengthMs) : undefined}
@@ -763,14 +808,34 @@ export function LibraryDrawer({ onClose, onHome, bindUid: bindUidProp = null }: 
   );
 }
 
-function Row({ title, subtitle, meta, onClick, icon, thumb }: {
+/** Small pill on Home Library music that isn't on the boombox while the
+ * homelab is unreachable (same wording as the LAN app). */
+function NotOfflineTag() {
+  return (
+    <span style={{
+      fontFamily: "'JetBrains Mono', monospace",
+      fontSize: 11, letterSpacing: "0.04em",
+      color: "rgba(255,255,255,0.75)",
+      border: "1px solid rgba(255,255,255,0.3)",
+      borderRadius: 999, padding: "1px 8px",
+      flexShrink: 0, whiteSpace: "nowrap",
+    }}>not offline</span>
+  );
+}
+
+function Row({ title, subtitle, meta, onClick, icon, thumb, dimmed = false, disabled = false }: {
   title: string; subtitle?: string; meta?: string;
   onClick: () => void; icon: string; thumb?: ReactNode;
+  /** Not on the boombox while offline: faded + "not offline" tag. */
+  dimmed?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       style={{
+        opacity: dimmed ? 0.45 : 1,
         width: "100%",
         textAlign: "left",
         background: "transparent",
@@ -781,7 +846,7 @@ function Row({ title, subtitle, meta, onClick, icon, thumb }: {
         alignItems: "center",
         gap: 12,
         color: "inherit",
-        cursor: "pointer",
+        cursor: disabled ? "default" : "pointer",
         minHeight: 60,
       }}
     >
@@ -808,6 +873,7 @@ function Row({ title, subtitle, meta, onClick, icon, thumb }: {
           }}>{subtitle}</div>
         )}
       </div>
+      {dimmed && <NotOfflineTag />}
       {meta && (
         <div style={{
           fontFamily: "'JetBrains Mono', monospace",

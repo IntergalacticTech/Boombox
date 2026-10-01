@@ -18,6 +18,9 @@ import {
 
 export type SyncStatus = {
   reachable: boolean;
+  /** False until health has said whether Navidrome answers. Unknown reads
+   * as online everywhere offline-aware (see useHomeLibraryOffline). */
+  reachabilityKnown: boolean;
   lastSyncTs: number;
   syncing: boolean;
   cachePresent: boolean;
@@ -25,7 +28,7 @@ export type SyncStatus = {
 };
 
 const EMPTY_SYNC: SyncStatus = {
-  reachable: false, lastSyncTs: 0, syncing: false,
+  reachable: false, reachabilityKnown: false, lastSyncTs: 0, syncing: false,
   cachePresent: false, cacheMount: null,
 };
 
@@ -48,6 +51,8 @@ function publishStats() {
 export function applyHealth(h: Health): void {
   _sync = {
     reachable: h.navidrome_reachable,
+    // Older servers don't send the flag; their answer is all we have.
+    reachabilityKnown: h.reachability_known ?? true,
     lastSyncTs: h.last_sync_ts,
     syncing: h.syncing,
     cachePresent: h.cache_present,
@@ -112,6 +117,15 @@ export function useCacheStats(): CacheStats | null {
     };
   }, []);
   return state;
+}
+
+/** True only while the Home Library server is known to be unreachable —
+ * the kiosk then shows music that isn't on the boombox as unavailable.
+ * Unknown reachability (no health answer yet, or the server hasn't probed
+ * Navidrome yet) reads as online. Shares the existing health poll. */
+export function useHomeLibraryOffline(): boolean {
+  const s = useSyncStatus();
+  return s.reachabilityKnown && !s.reachable;
 }
 
 /** Force a single refresh (e.g., right after a Save in LibraryPanel). */

@@ -9,6 +9,9 @@ export type SourceConfigWithPassword = SourceConfig & { password: string };
 export type Health = {
   service_version: string;
   navidrome_reachable: boolean;
+  /** False until the first Navidrome probe answers (navidrome_reachable is
+   * then a placeholder `true`). Absent on older servers. */
+  reachability_known?: boolean;
   cache_present: boolean;
   cache_mount: string | null;
   last_sync_ts: number;       // 0 if never synced
@@ -31,6 +34,8 @@ export type SearchResult = {
   content_type: "artist" | "album" | "track";
   id: string;
   title: string;
+  /** At least one of its tracks is on the boombox. */
+  offline?: boolean;
 };
 
 export type PinKind = "album" | "artist" | "playlist" | "track";
@@ -88,6 +93,15 @@ export type LibraryTrack = {
   track?: number;
   duration?: number;            // seconds (Subsonic convention)
   cache_status?: CacheStatus;
+  /** The file is on the boombox (playable with the homelab down). */
+  offline?: boolean;
+};
+
+/** GET /offline — everything with at least one track on the boombox. */
+export type OfflineIds = {
+  album_ids: string[];
+  artist_ids: string[];
+  playlist_ids: string[];
 };
 
 export type LibraryPlaylist = { id: string; name: string };
@@ -162,6 +176,10 @@ export async function resolveTracks(ids: string[]): Promise<ResolvedTrack[]> {
     }),
   );
   return body.items ?? [];
+}
+
+export async function getOfflineIds(): Promise<OfflineIds> {
+  return jsonOrThrow(await fetch("/api/library/offline"));
 }
 
 export async function search(q: string): Promise<SearchResult[]> {

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { LibraryDrawer } from "../LibraryDrawer";
+import { _resetForTests, applyHealth } from "../homeLibrary";
 
 // Same routing idea as library.test.ts: Mopidy JSON-RPC is recorded,
 // /api/library/* answers from `routes`, everything else (art lookups) 404s.
@@ -23,6 +24,7 @@ class NoopIO {
 }
 
 beforeEach(() => {
+  _resetForTests();
   rpcMethods = [];
   libCalls = [];
   routes = {
@@ -276,5 +278,198 @@ describe("LibraryDrawer · Home Library", () => {
     } finally {
       window.removeEventListener("boombox:rfid-bind-target", handler);
     }
+  });
+});
+
+// Task 11b: while the homelab is unreachable, music that isn't on the
+// boombox is dimmed, tagged "not offline" and can't be played.
+describe("LibraryDrawer · offline (homelab unreachable)", () => {
+  const OFFLINE_HEALTH = {
+    service_version: "0.1", navidrome_reachable: false, reachability_known: true,
+    cache_present: true, cache_mount: "/m", last_sync_ts: 1, syncing: false,
+  };
+
+  beforeEach(() => {
+    routes["GET /api/library/browse?type=albums"] = {
+      items: [
+        { id: "al1", name: "Record", art_id: "al-1" },
+        { id: "al2", name: "Other Record", art_id: "al-2" },
+      ],
+    };
+    routes["GET /api/library/album/al1"] = {
+      album: { id: "al1", name: "Record", artist: "Band", art_id: "al-1" },
+      tracks: [
+        { id: "t1", title: "Side A", artist: "Band", duration: 125, cache_status: "present", offline: true },
+        { id: "t2", title: "Side B", artist: "Band", duration: 90, cache_status: "absent", offline: false },
+        { id: "t3", title: "Side C", artist: "Band", duration: 60, cache_status: "absent" },
+      ],
+    };
+    routes["GET /api/library/album/al2"] = {
+      album: { id: "al2", name: "Other Record", artist: "Band", art_id: "al-2" },
+      tracks: [
+        { id: "t4", title: "Gone A", artist: "Band", duration: 60, cache_status: "absent", offline: false },
+        { id: "t5", title: "Gone B", artist: "Band", duration: 60, cache_status: "absent", offline: false },
+      ],
+    };
+    routes["GET /api/library/offline"] = { album_ids: ["al1"], artist_ids: ["ar1"], playlist_ids: [] };
+    routes["POST /api/library/resolve"] = (b: unknown) => ({
+      items: (b as { ids: string[] }).ids.map(id => id === "t1"
+        ? { id, source: "cache", uri: `file:///music/${id}.flac`, cache_status: "present" }
+        : { id, source: "offline_miss", uri: null, cache_status: "absent" }),
+    });
+  });
+
+  function goOffline() {
+    routes["GET /api/library/health"] = OFFLINE_HEALTH;
+    applyHealth(OFFLINE_HEALTH);
+  }
+
+  async function openAlbums(utils: ReturnType<typeof render>) {
+    fireEvent.click(await utils.findByText("Home Library"));
+    fireEvent.click(await utils.findByText("Albums"));
+    await utils.findByText("Other Record");
+  }
+
+  async function openRecord(utils: ReturnType<typeof render>) {
+    await openAlbums(utils);
+    fireEvent.click(utils.getByText("Record"));
+    await utils.findByText("Side C");
+  }
+
+  const rowOf = (utils: ReturnType<typeof render>, text: string) =>
+    utils.getByText(text).closest("button") as HTMLButtonElement;
+  const tileOf = (utils: ReturnType<typeof render>, text: string) =>
+    utils.getByText(text).closest("[data-tile]") as HTMLElement;
+
+  it("dims album tiles that aren't on the boombox and drops their quick-play", async () => {
+    goOffline();
+    const utils = render(<LibraryDrawer onClose={() => {}} />);
+    await openAlbums(utils);
+    await waitFor(() => expect(tileOf(utils, "Other Record").style.opacity).toBe("0.4"));
+    expect(tileOf(utils, "Other Record").textContent).toContain("not offline");
+    expect(utils.queryByLabelText("Play Other Record")).toBeNull();
+    expect(tileOf(utils, "Record").style.opacity).toBe("1");
+    expect(tileOf(utils, "Record").textContent).not.toContain("not offline");
+    expect(utils.getByLabelText("Play Record")).toBeInTheDocument();
+    expect(libCalls.filter(k => k === "GET /api/library/offline")).toHaveLength(1);
+  });
+
+  it("dims and disables un-kept track rows (offline flag, cache_status fallback)", async () => {
+    goOffline();
+    const utils = render(<LibraryDrawer onClose={() => {}} />);
+    await openRecord(utils);
+    for (const t of ["Side B", "Side C"]) {
+      expect(rowOf(utils, t).style.opacity).toBe("0.45");
+      expect(rowOf(utils, t).disabled).toBe(true);
+      expect(rowOf(utils, t).textContent).toContain("not offline");
+    }
+    expect(rowOf(utils, "Side A").style.opacity).toBe("1");
+    expect(rowOf(utils, "Side A").disabled).toBe(false);
+    expect(rowOf(utils, "Side A").textContent).not.toContain("not offline");
+  });
+
+  it("dims nothing while online", async () => {
+    applyHealth({ ...OFFLINE_HEALTH, navidrome_reachable: true });
+    const utils = render(<LibraryDrawer onClose={() => {}} />);
+    await openRecord(utils);
+    expect(rowOf(utils, "Side B").style.opacity).toBe("1");
+    expect(rowOf(utils, "Side B").disabled).toBe(false);
+    expect(utils.queryByText("not offline")).toBeNull();
+    expect(libCalls).not.toContain("GET /api/library/offline");
+  });
+
+  it("dims nothing while reachability is unknown", async () => {
+    // No health answer yet: the store's initial state must not read as offline.
+    const utils = render(<LibraryDrawer onClose={() => {}} />);
+    await openRecord(utils);
+    expect(rowOf(utils, "Side B").disabled).toBe(false);
+    expect(utils.queryByText("not offline")).toBeNull();
+    // And a server that says it hasn't probed yet is treated the same way.
+    applyHealth({ ...OFFLINE_HEALTH, reachability_known: false });
+    await waitFor(() => expect(rowOf(utils, "Side B").disabled).toBe(false));
+    expect(utils.queryByText("not offline")).toBeNull();
+    expect(libCalls).not.toContain("GET /api/library/offline");
+  });
+
+  it("fails open: a failed /offline fetch dims no tiles", async () => {
+    goOffline();
+    delete routes["GET /api/library/offline"];
+    const utils = render(<LibraryDrawer onClose={() => {}} />);
+    await openAlbums(utils);
+    await waitFor(() => expect(libCalls).toContain("GET /api/library/offline"));
+    expect(tileOf(utils, "Other Record").style.opacity).toBe("1");
+    expect(utils.queryByText("not offline")).toBeNull();
+    expect(utils.getByLabelText("Play Other Record")).toBeInTheDocument();
+  });
+
+  it("Play all on a partly kept album plays the kept tracks and says so", async () => {
+    goOffline();
+    const onClose = vi.fn();
+    const utils = render(<LibraryDrawer onClose={onClose} />);
+    await openRecord(utils);
+    fireEvent.click(utils.getByText(/PLAY ALL/));
+    const alert = await utils.findByRole("alert");
+    expect(alert.textContent).toBe("2 tracks aren't on the boombox — playing the rest.");
+    expect(rpcMethods.find(c => c.method === "core.tracklist.add")?.params).toEqual({
+      uris: ["file:///music/t1.flac"],
+    });
+    expect(rpcMethods.map(c => c.method)).toContain("core.playback.play");
+    // Only the kept track is resolved.
+    const resolveBodies = (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls
+      .filter(([u]) => u === "/api/library/resolve")
+      .map(([, init]) => JSON.parse(String(init?.body)));
+    expect(resolveBodies).toEqual([{ ids: ["t1"] }]);
+  });
+
+  it("Play all with nothing kept says so and doesn't play", async () => {
+    goOffline();
+    const onClose = vi.fn();
+    const utils = render(<LibraryDrawer onClose={onClose} />);
+    await openAlbums(utils);
+    fireEvent.click(utils.getByText("Other Record"));
+    await utils.findByText("Gone B");
+    fireEvent.click(utils.getByText(/PLAY ALL/));
+    const alert = await utils.findByRole("alert");
+    expect(alert.textContent).toBe("None of these tracks are on the boombox.");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(libCalls).not.toContain("POST /api/library/resolve");
+    expect(rpcMethods.some(c => c.method.startsWith("core.tracklist"))).toBe(false);
+  });
+
+  it("artist Play all expands albums and plays only the kept tracks", async () => {
+    goOffline();
+    routes["GET /api/library/artist/ar1"] = {
+      artist: { id: "ar1", name: "Band" },
+      albums: [{ id: "al1", name: "Record", art_id: "al-1" }, { id: "al2", name: "Other Record" }],
+    };
+    const utils = render(<LibraryDrawer onClose={() => {}} />);
+    fireEvent.click(await utils.findByText("Home Library"));
+    fireEvent.click(await utils.findByText("Artists"));
+    fireEvent.click(await utils.findByText("Band"));
+    await utils.findByText("Other Record");
+    fireEvent.click(utils.getByText("▶ PLAY ALL"));
+    const alert = await utils.findByRole("alert");
+    expect(alert.textContent).toBe("4 tracks aren't on the boombox — playing the rest.");
+    expect(rpcMethods.find(c => c.method === "core.tracklist.add")?.params).toEqual({
+      uris: ["file:///music/t1.flac"],
+    });
+  });
+
+  it("dims un-kept track search hits", async () => {
+    goOffline();
+    routes["GET /api/library/search?q=side"] = {
+      results: [
+        { content_type: "track", id: "t1", title: "Side A", offline: true },
+        { content_type: "track", id: "t2", title: "Side B", offline: false },
+      ],
+    };
+    const utils = render(<LibraryDrawer onClose={() => {}} />);
+    fireEvent.click(await utils.findByText("Home Library"));
+    await utils.findByText("Artists");
+    fireEvent.change(utils.getByPlaceholderText("Search library…"), { target: { value: "side" } });
+    await utils.findByText("Side B");
+    expect(rowOf(utils, "Side B").disabled).toBe(true);
+    expect(rowOf(utils, "Side B").style.opacity).toBe("0.45");
+    expect(rowOf(utils, "Side A").disabled).toBe(false);
   });
 });
