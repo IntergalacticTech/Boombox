@@ -407,7 +407,7 @@ async def test_artist_detail(env):
     # Year ascending, ties by sort name, undated last.
     assert [a["id"] for a in body["albums"]] == ["al3", "al1", "al2", "al0"]
     assert body["albums"][1] == {"id": "al1", "name": "Arrival", "year": 1976,
-                                 "art_id": "al-al1", "track_count": 2}
+                                 "art_id": "al-al1", "track_count": 2, "offline": False}
 
 
 async def test_album_detail_tracks_sorted_by_disc_then_track(env):
@@ -422,7 +422,9 @@ async def test_album_detail_tracks_sorted_by_disc_then_track(env):
     assert [t["id"] for t in body["tracks"]] == ["t1", "t2", "t3"]
     assert body["tracks"][0] == {"id": "t1", "title": "Dancing Queen", "artist": "ABBA",
                                  "album_id": "al1", "disc": 1, "track": 1,
-                                 "duration": 200, "cache_status": "absent"}
+                                 "duration": 200, "cache_status": "absent",
+                                 "offline": False}
+    assert body["tracks"][1]["offline"] is False  # queued is not on disk
     assert body["tracks"][1]["cache_status"] == "queued"
 
 

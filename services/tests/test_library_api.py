@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from boombox_library.api import _same_origin, build_app
+from boombox_library.cache_drive import CacheDriveState
 from boombox_library.config import (
     DEFAULT_CONFIG,
     LibraryConfig,
@@ -38,6 +39,7 @@ class FakeContext:
         self.snapshot_dir = snapshot_dir or Path("/tmp/boombox-snap-test")
         self.tested: list[tuple[str, str, str]] = []
         self.saved: list = []
+        self.queue = None  # DownloadQueue stand-in (keep routes)
 
     async def is_online(self) -> bool:
         return self._ping_ok
@@ -69,6 +71,9 @@ class FakeContext:
 
     def cache_candidates(self) -> list[dict]:
         return self.candidates
+
+    def download_queue(self):
+        return self.queue
 
 
 @pytest.fixture
@@ -678,3 +683,110 @@ async def test_source_test_blank_password_other_origin_not_sent_stored(client):
     for url in ("https://evil.example", "http://m.example"):
         await c.post("/api/library/source/test", json={"url": url, "username": "bb"})
         assert ctx.tested[-1] == (url, "bb", "")
+
+
+class KeepQueue:
+    def __init__(self) -> None:
+        self.enqueued: list[str] = []
+        self.snap = {"queued": 0, "in_flight": [], "paused": None}
+
+    def enqueue(self, tid):
+        if tid in self.enqueued:
+            return False
+        self.enqueued.append(tid)
+        return True
+
+    def cancel(self, ids):
+        return 0
+
+    def snapshot(self):
+        return dict(self.snap)
+
+
+def _seed_keep(conn):
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) VALUES('ar1','Joni','joni',2,0)")
+    for al, name, starred in (("al1", "Blue", 0), ("al2", "Court and Spark", 1)):
+        conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,duration_s,is_compilation,"
+                     "navidrome_starred,updated_at) VALUES(?,?,?,'ar1',2,60,0,?,0)", (al, name, name.lower(), starred))
+    for tid, al in (("t1", "al1"), ("t2", "al1"), ("t3", "al1"), ("t4", "al2"), ("t5", "al2")):
+        conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,size_bytes,content_type,"
+                     "navidrome_starred,updated_at) VALUES(?,?,?,30,'mp3',1000,'audio/mpeg',0,0)",
+                     (tid, al, tid.upper()))
+    conn.execute("INSERT INTO playlists(id,name,song_count,owner,public,updated_at) VALUES('pl1','Mix',1,'u',0,0)")
+    conn.execute("INSERT INTO playlist_tracks(playlist_id,track_id,position) VALUES('pl1','t2',0)")
+    conn.execute("INSERT INTO cache_state(track_id,status,local_path,size_bytes,downloaded_at) "
+                 "VALUES('t2','present','/m/t2.mp3',1000,0)")
+
+
+async def test_keep_route_pins_enqueues_and_unkeeps(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    ctx.queue = KeepQueue()
+    r = await c.post("/api/library/keep", json={"kind": "album", "id": "al1"})
+    assert r.status == 200
+    body = await r.json()
+    assert body["queued"] == 3
+    assert body["keep"] == {"state": "kept", "tracks_total": 3, "tracks_present": 1}
+    r = await c.delete("/api/library/keep", json={"kind": "album", "id": "al1"})
+    assert r.status == 200 and (await r.json())["keep"]["state"] == "none"
+
+
+async def test_keep_route_validates(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    assert (await c.post("/api/library/keep", json={"kind": "track", "id": "t1"})).status == 400
+    assert (await c.post("/api/library/keep", json={"kind": "album"})).status == 400
+    assert (await c.post("/api/library/keep", data="nope")).status == 400
+    r = await c.post("/api/library/keep", json={"kind": "album", "id": "zzz"})
+    assert r.status == 404 and (await r.json()) == {"ok": False, "error": "album not found"}
+
+
+async def test_keep_without_music_storage_still_pins(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    r = await c.post("/api/library/keep", json={"kind": "playlist", "id": "pl1"})
+    assert (await r.json()) == {"ok": True, "queued": 0,
+                                "keep": {"state": "kept", "tracks_total": 1, "tracks_present": 1}}
+
+
+async def test_album_and_playlist_detail_carry_keep_and_offline(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    d = await (await c.get("/api/library/album/al1")).json()
+    assert d["keep"] == {"state": "none", "tracks_total": 3, "tracks_present": 1}
+    assert [(t["id"], t["offline"]) for t in d["tracks"]] == [("t1", False), ("t2", True), ("t3", False)]
+    d = await (await c.get("/api/library/playlist/pl1")).json()
+    assert d["keep"]["tracks_present"] == 1 and d["tracks"][0]["offline"] is True
+
+
+async def test_artist_detail_albums_carry_offline(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    d = await (await c.get("/api/library/artist/ar1")).json()
+    assert {a["id"]: a["offline"] for a in d["albums"]} == {"al1": True, "al2": False}
+    assert d["keep"] == {"state": "none", "tracks_total": 5, "tracks_present": 1}
+
+
+async def test_search_results_carry_offline(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    conn.execute("INSERT INTO search_index(content_type,id,title,body) VALUES('album','al1','Blue','Blue')")
+    conn.execute("INSERT INTO search_index(content_type,id,title,body) VALUES('album','al2','Court','Court')")
+    blue = (await (await c.get("/api/library/search?q=blue")).json())["results"]
+    court = (await (await c.get("/api/library/search?q=court")).json())["results"]
+    assert blue[0]["offline"] is True and court[0]["offline"] is False
+
+
+async def test_offline_ids_route(client):
+    c, ctx, conn = client
+    _seed_keep(conn)
+    assert (await (await c.get("/api/library/offline")).json()) == {
+        "album_ids": ["al1"], "artist_ids": ["ar1"], "playlist_ids": ["pl1"]}
+
+
+async def test_health_reports_internal_storage(client):
+    c, ctx, _ = client
+    assert (await (await c.get("/api/library/health")).json())["internal_storage"] is False
+    ctx.cache_state = CacheDriveState(present=True, mount_path=Path("/opt/boombox/storage/music"),
+                                      free_bytes=1, total_bytes=2, internal=True)
+    assert (await (await c.get("/api/library/health")).json())["internal_storage"] is True
