@@ -200,6 +200,10 @@ fi
 # State dir for SQLite catalog
 sudo mkdir -p /opt/boombox/state
 sudo chown "$BOOMBOX_USER:$BOOMBOX_USER" /opt/boombox/state
+# Internal music storage for "keep offline" downloads. boombox-library
+# adopts it as its always-present cache drive; Mopidy (user mopidy) reads
+# the files, so 0755.
+sudo install -d -o "$BOOMBOX_USER" -g "$BOOMBOX_USER" -m 0755 /opt/boombox/storage /opt/boombox/storage/music
 
 # ---------------------------------------------------------------------------
 # 1.5. Layout migration (must run before anything else touches REPO_DIR)

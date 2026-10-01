@@ -23,6 +23,11 @@ from cryptography.fernet import Fernet, InvalidToken
 CONFIG_PATH = Path("/etc/boombox/library.yml")
 _MACHINE_ID_PATH = Path("/etc/machine-id")
 _KEY_SALT = b"boombox-library-v1"
+DEFAULT_INTERNAL_PATH = "/opt/boombox/storage/music"
+DEFAULT_RESERVE_BYTES = 20 * 1024 ** 3  # 20 GiB
+# The pre-2A default. A library.yml carrying exactly this value was written
+# by the old template / a Settings save, not chosen by hand: upgrade it.
+LEGACY_RESERVE_BYTES = 1_073_741_824
 
 
 @dataclass(frozen=True)
@@ -48,7 +53,12 @@ class SyncConfig:
 class CacheConfig:
     marker_filename: str = ".boombox-cache"
     search_paths: tuple = ("/media",)
-    reserve_bytes: int = 1_073_741_824  # 1 GB
+    # Downloads stop while free space is below this.
+    reserve_bytes: int = DEFAULT_RESERVE_BYTES
+    # Internal music storage, adopted as an always-present cache drive and
+    # preferred over /media drives. "" disables it (a marker-carrying drive
+    # under search_paths is then adopted, as before).
+    internal_path: str = DEFAULT_INTERNAL_PATH
 
 
 @dataclass(frozen=True)
@@ -111,6 +121,22 @@ def _non_negative_int(value: Any) -> int:
     return max(n, 0)
 
 
+def _reserve_bytes(value: Any) -> int:
+    """Junk / negative → the default; the legacy 1 GiB default → 20 GiB."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RESERVE_BYTES
+    if n < 0 or n == LEGACY_RESERVE_BYTES:
+        return DEFAULT_RESERVE_BYTES
+    return n
+
+
+def _internal_path(value: Any) -> str:
+    """None / "" (YAML `internal_path:` or `internal_path: ""`) disables it."""
+    return str(value).strip() if value else ""
+
+
 def load_config(path: Path = CONFIG_PATH) -> LibraryConfig:
     if not path.exists():
         return DEFAULT_CONFIG
@@ -135,7 +161,8 @@ def load_config(path: Path = CONFIG_PATH) -> LibraryConfig:
     cache = CacheConfig(
         marker_filename=ca.get("marker_filename", ".boombox-cache"),
         search_paths=tuple(ca.get("search_paths", ["/media"])),
-        reserve_bytes=int(ca.get("reserve_bytes", 1_073_741_824)),
+        reserve_bytes=_reserve_bytes(ca.get("reserve_bytes", DEFAULT_RESERVE_BYTES)),
+        internal_path=_internal_path(ca.get("internal_path", DEFAULT_INTERNAL_PATH)),
     )
 
     return LibraryConfig(source=source, sync=sync, cache=cache)
@@ -155,6 +182,7 @@ def save_config(cfg: LibraryConfig, path: Path = CONFIG_PATH) -> None:
             "max_concurrent_downloads": cfg.sync.max_concurrent_downloads,
         },
         "cache": {
+            "internal_path": cfg.cache.internal_path,
             "marker_filename": cfg.cache.marker_filename,
             "search_paths": list(cfg.cache.search_paths),
             "reserve_bytes": cfg.cache.reserve_bytes,

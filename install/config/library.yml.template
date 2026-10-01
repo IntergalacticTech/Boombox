@@ -14,7 +14,11 @@ sync:
   max_concurrent_downloads: 2
 
 cache:
+  # Kept-offline music lives here on the boombox's own drive. Set to ""
+  # to use a USB drive carrying the marker file under search_paths instead.
+  internal_path: /opt/boombox/storage/music
   marker_filename: ".boombox-cache"
   search_paths:
     - /media
-  reserve_bytes: 1073741824  # 1 GB
+  # Downloads stop while free space is below this (20 GiB).
+  reserve_bytes: 21474836480

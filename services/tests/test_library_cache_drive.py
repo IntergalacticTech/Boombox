@@ -6,7 +6,9 @@ from pathlib import Path
 from boombox_library.cache_drive import (
     adopt_drive,
     detect_cache_drive,
+    ensure_internal_drive,
     remove_symlink,
+    select_cache_drive,
     update_symlink,
 )
 
@@ -191,3 +193,51 @@ def test_missing_rows_are_never_resolved_to_a_file(tmp_path: Path):
     r = resolve_playback(conn, "t1", online=False)
     assert r.source == PlaybackSource.OFFLINE_MISS
     assert r.uri is None
+
+
+def test_internal_storage_is_created_marked_and_adopted(tmp_path: Path):
+    music = tmp_path / "storage" / "music"
+    state = select_cache_drive(str(music), [tmp_path / "media"])
+    assert state.present and state.internal and state.mount_path == music
+    assert (music / ".boombox-cache").exists()
+    for sub in ("audio", "meta", "tmp"):
+        assert (music / sub).is_dir()
+    assert music.stat().st_mode & 0o777 == 0o755
+    assert state.total_bytes and state.free_bytes is not None
+
+
+def test_internal_storage_preferred_over_media_drive(tmp_path: Path):
+    media = tmp_path / "media"
+    media.mkdir()
+    _make_drive(media, "usb0", has_marker=True)
+    state = select_cache_drive(str(tmp_path / "music"), [media])
+    assert state.internal and state.mount_path == tmp_path / "music"
+
+
+def test_internal_disabled_falls_back_to_media_drive(tmp_path: Path):
+    media = tmp_path / "media"
+    media.mkdir()
+    usb = _make_drive(media, "usb0", has_marker=True)
+    state = select_cache_drive("", [media])
+    assert state.present and not state.internal and state.mount_path == usb
+
+
+def test_unusable_internal_path_falls_back_to_media_drive(tmp_path: Path):
+    media = tmp_path / "media"
+    media.mkdir()
+    usb = _make_drive(media, "usb0", has_marker=True)
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    state = select_cache_drive(str(blocker / "music"), [media])
+    assert state.mount_path == usb and not state.internal
+
+
+def test_internal_storage_adoption_is_idempotent(tmp_path: Path):
+    music = tmp_path / "music"
+    first = ensure_internal_drive(music)
+    (music / "audio" / "t1.flac").write_bytes(b"x")
+    marker_mtime = (music / ".boombox-cache").stat().st_mtime_ns
+    second = ensure_internal_drive(music)
+    assert first.mount_path == second.mount_path == music
+    assert (music / "audio" / "t1.flac").read_bytes() == b"x"
+    assert (music / ".boombox-cache").stat().st_mtime_ns == marker_mtime  # no write every poll

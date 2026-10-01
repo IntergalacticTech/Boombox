@@ -44,6 +44,8 @@ class CacheDriveState:
     mount_path: Optional[Path]
     free_bytes: Optional[int]
     total_bytes: Optional[int]
+    # True for the internal music storage (cache.internal_path).
+    internal: bool = False
 
 
 def detect_cache_drive(
@@ -91,6 +93,49 @@ def adopt_drive(mount_path: Path, marker: str = ".boombox-cache") -> None:
     (mount_path / marker).touch(exist_ok=True)
     for sub in _REQUIRED_SUBDIRS:
         (mount_path / sub).mkdir(exist_ok=True)
+
+
+def ensure_internal_drive(path: Path, marker: str = ".boombox-cache") -> CacheDriveState:
+    """The internal music store as an always-present cache drive: create it
+    (0755), write the marker and audio/meta/tmp when missing. Cheap when
+    everything is there (cache_poll calls it every few seconds — no write).
+    Raises OSError when the path can't be created or written."""
+    created = not path.exists()
+    path.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if created:
+        path.chmod(0o755)  # mkdir's mode is filtered by the umask
+    if not (path / marker).exists() or any(
+            not (path / sub).is_dir() for sub in _REQUIRED_SUBDIRS):
+        adopt_drive(path, marker=marker)
+    free, total = _disk_usage(path)
+    return CacheDriveState(present=True, mount_path=path, free_bytes=free,
+                           total_bytes=total, internal=True)
+
+
+_warned_internal: set[str] = set()
+
+
+def select_cache_drive(
+    internal_path: str,
+    search_paths: Iterable[Path],
+    marker: str = ".boombox-cache",
+) -> CacheDriveState:
+    """The cache drive for this poll: the internal storage when configured
+    and usable (it always wins over /media), else the first marker-carrying
+    drive under search_paths — the removable-drive fallback."""
+    paths = [Path(p) for p in search_paths]
+    if internal_path:
+        try:
+            state = ensure_internal_drive(Path(internal_path), marker)
+            _warned_internal.discard(internal_path)
+            return state
+        except OSError as e:
+            if internal_path not in _warned_internal:
+                _warned_internal.add(internal_path)
+                log.warning("internal music storage %s is unusable (%s); "
+                            "falling back to a marked drive under %s",
+                            internal_path, e, [str(p) for p in paths])
+    return detect_cache_drive(paths, marker)
 
 
 def update_symlink(symlink_path: Path, target: Path) -> None:
