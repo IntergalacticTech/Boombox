@@ -145,6 +145,24 @@ def test_mark_rows_missing_under_lost_mount_without_stat(tmp_path: Path):
     assert _status(conn, "t4")[0] == "present"
 
 
+def test_mark_rows_outside_missing_flips_present_rows_off_the_root(tmp_path: Path):
+    from boombox_library.cache_drive import mark_rows_outside_missing
+    conn = _db(tmp_path)
+    root = tmp_path / "storage" / "music"
+    usb = tmp_path / "media" / "usb0"
+    _row(conn, "inside", "present", f"{root}/audio/a.mp3")
+    _row(conn, "usb", "present", f"{usb}/audio/b.mp3")
+    _row(conn, "sibling", "present", f"{root}2/audio/c.mp3")   # path boundary
+    _row(conn, "nopath", "present", None)
+    _row(conn, "queued", "queued", None)
+    assert mark_rows_outside_missing(conn, root) == 3
+    assert _status(conn, "inside")[0] == "present"
+    assert _status(conn, "usb") == ("missing", f"{usb}/audio/b.mp3")   # path kept
+    assert _status(conn, "sibling")[0] == "missing"
+    assert _status(conn, "nopath")[0] == "missing"
+    assert _status(conn, "queued")[0] == "queued"
+
+
 def test_mark_rows_missing_startup_checks_files(tmp_path: Path):
     from boombox_library.cache_drive import mark_rows_missing
     conn = _db(tmp_path)

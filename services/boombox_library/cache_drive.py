@@ -231,6 +231,18 @@ def mark_rows_missing(conn: Connection, lost_mount: Optional[Path]) -> int:
     return apply_rows_missing(conn, gone)
 
 
+def mark_rows_outside_missing(conn: Connection, root: Path) -> int:
+    """Flip 'present' rows whose file is not under `root` to 'missing'
+    (path kept). Called when the internal storage is adopted: rows still
+    pointing at an old USB cache are no longer watched by anything, so
+    pinned ones must be re-downloaded internally; restore_missing_rows can
+    still re-adopt them if that USB drive becomes the cache again. No
+    filesystem access. Returns the number of rows flipped."""
+    return apply_rows_missing(conn, [
+        (tid, path) for tid, path in present_rows(conn)
+        if not (path and _is_under(path, root))])
+
+
 def restore_missing_rows(conn: Connection, mount: Path) -> int:
     """Re-adopt 'missing' rows whose file is present on `mount`.
 

@@ -33,6 +33,7 @@ from boombox_library.cache_drive import (
     find_restorable_rows,
     list_candidate_drives,
     mark_rows_missing,
+    mark_rows_outside_missing,
     missing_rows,
     present_rows,
     remove_symlink,
@@ -487,6 +488,13 @@ class ServiceContext:
         if new_state.present and new_state.mount_path:
             log.info("cache drive present at %s", new_state.mount_path)
             update_symlink(DEFAULT_SYMLINK, new_state.mount_path)
+            if new_state.internal:
+                # Rows on an old (maybe still mounted) USB cache are not
+                # watched any more: 'missing', so pinned ones download again.
+                n = mark_rows_outside_missing(self.conn, new_state.mount_path)
+                if n:
+                    log.info("marked %d cached tracks outside %s missing",
+                             n, new_state.mount_path)
             await self._reconcile_cache_rows(new_state.mount_path)
             # Drive swap: the old queue's downloads must have finished their
             # cancel cleanup before a new queue (whose constructor sweeps

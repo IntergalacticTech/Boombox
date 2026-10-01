@@ -913,3 +913,30 @@ async def test_cancelling_the_retire_wait_does_not_cancel_the_teardown(ctx):
     release.set()
     await asyncio.gather(*pending)
     assert finished == [True]
+
+
+# ---- M1: adopting the internal drive retires rows on an old USB cache ----
+
+@pytest.mark.asyncio
+async def test_internal_adoption_marks_usb_rows_missing_so_pins_redownload(
+        ctx, tmp_path, monkeypatch):
+    _seed_pinned_album(ctx.conn)
+    usb = _drive(tmp_path / "media" / "usb0")     # still mounted, files intact
+    (usb / "audio" / "t1.mp3").write_bytes(b"x")
+    music = tmp_path / "storage" / "music"
+    kept = music / "audio" / "t2.mp3"
+    ctx.conn.executemany(
+        "INSERT INTO cache_state(track_id, status, local_path) VALUES (?,?,?)",
+        [("t1", "present", str(usb / "audio" / "t1.mp3")),
+         ("t2", "present", str(kept))])
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b"y")
+    ctx.cfg = replace(ctx.cfg, cache=replace(ctx.cfg.cache, internal_path=str(music)))
+    await _poll_once(ctx, monkeypatch)
+    assert ctx.cache_state.internal and ctx.cache_state.mount_path == music
+    assert _status(ctx.conn, "t1") == "missing"
+    assert _status(ctx.conn, "t2") == "present"
+    fake = FakeQueue()
+    ctx._ensure_download_queue = lambda: fake
+    ctx._enqueue_pinned_downloads(now=10_000.0)
+    assert fake.enqueued == ["t1"]               # re-downloaded to internal storage
