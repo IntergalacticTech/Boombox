@@ -8,7 +8,7 @@ const rowStyle: CSSProperties = {
   textAlign: "left",
 };
 
-/** The phone's More tab: Playlists, Files, Admin → Accounts, Settings. */
+/** The phone's More tab: Playlists, Files, Admin → Accounts / Storage, Settings. */
 export function More({ navigate, onOpenSettings, adminLocked = true }: {
   navigate: Navigate; onOpenSettings: () => void; adminLocked?: boolean;
 }) {
@@ -17,6 +17,8 @@ export function More({ navigate, onOpenSettings, adminLocked = true }: {
     { label: "Files", icon: "📁", onClick: () => navigate("files") },
     { label: "Accounts", icon: adminLocked ? "🔒" : "🔓", hint: "Admin",
       onClick: () => navigate("accounts") },
+    { label: "Storage", icon: adminLocked ? "🔒" : "🔓", hint: "Admin",
+      onClick: () => navigate("storage") },
     { label: "Settings", icon: "⚙", onClick: onOpenSettings },
   ];
   return (

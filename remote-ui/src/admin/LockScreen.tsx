@@ -3,7 +3,7 @@ import { ErrorText, Field, PrimaryButton, inputStyle } from "./ui";
 import { unlock } from "./session";
 
 /** Admin sections stay locked until the boombox web password is entered. */
-export function LockScreen({ expired }: { expired: boolean }) {
+export function LockScreen({ expired, purpose = "manage accounts" }: { expired: boolean; purpose?: string }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +27,7 @@ export function LockScreen({ expired }: { expired: boolean }) {
       <p style={{ margin: 0, color: "var(--ink2)", fontSize: 14 }}>
         {expired
           ? "Your admin session expired. Enter the boombox web password again."
-          : "Enter the boombox web password to manage accounts."}
+          : `Enter the boombox web password to ${purpose}.`}
       </p>
       <Field label="Web password">
         <input type="password" autoComplete="current-password" value={password}

@@ -3,7 +3,7 @@ import { parseHash, hashFor } from "./route";
 
 describe("hash routes", () => {
   it("parses the spec's section routes", () => {
-    for (const r of ["now", "music", "video", "search", "playlists", "files", "accounts", "more"]) {
+    for (const r of ["now", "music", "video", "search", "playlists", "files", "accounts", "storage", "more"]) {
       expect(parseHash(`#/${r}`)).toEqual({ route: r, params: [] });
     }
   });

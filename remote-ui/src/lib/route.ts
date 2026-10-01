@@ -4,10 +4,10 @@ import { useCallback, useEffect, useState } from "react";
  *  forward and links work without a router dependency. `more` is the
  *  phone's More tab. */
 export type Route =
-  | "now" | "music" | "video" | "search" | "playlists" | "files" | "accounts" | "more";
+  | "now" | "music" | "video" | "search" | "playlists" | "files" | "accounts" | "storage" | "more";
 
 export const ROUTES: readonly Route[] = [
-  "now", "music", "video", "search", "playlists", "files", "accounts", "more",
+  "now", "music", "video", "search", "playlists", "files", "accounts", "storage", "more",
 ];
 
 export interface HashLocation { route: Route; params: string[] }
