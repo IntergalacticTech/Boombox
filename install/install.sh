@@ -241,10 +241,12 @@ fi
 "$SHARED_VENV/bin/pip" install -r "$ACTIVE_SCRIPT_DIR/config/requirements.txt"
 
 # ---------------------------------------------------------------------------
-# 3. Group memberships (gpio, audio, render, video, bluetooth, plugdev)
+# 3. Group memberships (gpio, audio, render, video, bluetooth, plugdev,
+#    dialout — serial ports; the USB knob is also owned by the user via its
+#    udev rule, so it works before this membership takes effect)
 # ---------------------------------------------------------------------------
 log "ensuring $BOOMBOX_USER is in required groups"
-for grp in gpio audio video render bluetooth plugdev; do
+for grp in gpio audio video render bluetooth plugdev dialout; do
   if getent group "$grp" >/dev/null && ! id -nG "$BOOMBOX_USER" | tr ' ' '\n' | grep -qx "$grp"; then
     sudo usermod -aG "$grp" "$BOOMBOX_USER"
     warn "added $BOOMBOX_USER to $grp — log out / reboot to pick up"
@@ -581,9 +583,20 @@ sudo install -m 0644 "$ACTIVE_SCRIPT_DIR/udev/99-cyd-autoflash.rules" \
   /etc/udev/rules.d/99-cyd-autoflash.rules
 sudo install -d -o root -g root -m 755 /opt/boombox/firmware/cyd
 
+# The rotary knob's USB link: /dev/boombox-knob, owned by the boombox user so
+# boombox-remote's knob bridge can open it without a re-login.
+log "installing USB knob udev rule (/dev/boombox-knob)"
+TMP_KNOB_RULE="$(mktemp)"
+sed "s/%BOOMBOX_USER%/$BOOMBOX_USER/g" "$ACTIVE_SCRIPT_DIR/udev/99-boombox-knob.rules" > "$TMP_KNOB_RULE"
+sudo install -m 0644 -o root -g root "$TMP_KNOB_RULE" /etc/udev/rules.d/99-boombox-knob.rules
+rm -f "$TMP_KNOB_RULE"
+
 sudo systemctl daemon-reload
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=block --action=change || true
+# "change", not "add": re-applies the knob's name/owner to an already
+# plugged-in knob without re-firing the CYD auto-flash (an add-only rule).
+sudo udevadm trigger --subsystem-match=tty --action=change || true
 
 # usb-mount needs to know which user owns the music directory.
 echo "$BOOMBOX_USER" | sudo tee /etc/boombox/desktop-user >/dev/null

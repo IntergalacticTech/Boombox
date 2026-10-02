@@ -1,0 +1,21 @@
+# /etc/udev/rules.d/99-boombox-knob.rules — the rotary knob's USB link.
+#
+# The CrowPanel 2.1" knob (ESP32-S3) is cabled to the boombox and enumerates
+# on its native USB-Serial/JTAG port (VID 303a, PID 1001) as /dev/ttyACM*.
+# This gives it a stable name, /dev/boombox-knob, which boombox-remote's
+# USB knob bridge (services/knob_usb.py) opens first.
+#
+# Access: the device is owned by the boombox user (install.sh substitutes
+# %BOOMBOX_USER%) as well as group dialout. Owner is what lets the
+# already-running user services open it straight away — a new dialout
+# membership only reaches the systemd user manager after it restarts
+# (reboot / re-login), and TAG+="uaccess" only covers an active seat session,
+# which a lingering headless user manager may not have.
+#
+# 303a:1001 is Espressif's generic USB-JTAG ID, so another S3/C3 board
+# plugged in would match too; the bridge only adopts a port whose hello
+# answers with a knob profile. CH340 bridges (CYD remotes, 1a86:7523) don't
+# match and stay with 99-cyd-autoflash.rules. ModemManager is told to keep
+# its probes off the port.
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", SYMLINK+="boombox-knob", MODE="0660", GROUP="dialout", OWNER="%BOOMBOX_USER%", ENV{ID_MM_DEVICE_IGNORE}="1"
