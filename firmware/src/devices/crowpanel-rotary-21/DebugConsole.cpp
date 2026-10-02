@@ -101,6 +101,9 @@ void consoleSnapshot() {
         Serial.println("SNAPERR snapshot allocation failed");
         return;
     }
+    // The snapshot is ~600 KB of base64; give a briefly busy host more slack
+    // than the default 100 ms before USB-Serial/JTAG starts dropping bytes.
+    Serial.setTxTimeoutMs(1500);
     const uint32_t w = db->header.w;
     const uint32_t h = db->header.h;
     const uint32_t stride = db->header.stride;
@@ -132,6 +135,8 @@ void consoleSnapshot() {
         Serial.println(line);
     }
     Serial.println("SNAPEND");
+    Serial.flush();
+    Serial.setTxTimeoutMs(100);
     Serial.printf("[snap] %ux%u in %u ms\n", (unsigned)w, (unsigned)h,
                   (unsigned)(millis() - t0));
     lv_draw_buf_destroy(db);

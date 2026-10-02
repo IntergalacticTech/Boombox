@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import base64
 import os
+import re
 import subprocess
 import sys
 
@@ -35,7 +36,7 @@ cmds = sys.argv[5:]
 out = sys.stdout
 # Default DTR/RTS (both asserted) is what the kernel already does on open,
 # so pyserial changes nothing and the S3's USB-JTAG reset logic isn't poked.
-s = serial.Serial(tty, 115200, timeout=0.2)
+s = serial.Serial(tty, 115200, timeout=0.02)
 def pump(seconds, stop=None):
     end = time.time() + seconds
     buf = b""
@@ -46,9 +47,10 @@ def pump(seconds, stop=None):
         out.write(chunk.decode("utf-8", "replace"))
         out.flush()
         if stop:
-            buf = (buf + chunk)[-64:]
-            if stop in buf:
+            window = buf + chunk
+            if stop in window:
                 return True
+            buf = window[-64:]
     return False
 try:
     s.reset_input_buffer()
@@ -86,6 +88,10 @@ def _shq(s: str) -> str:
     return "'" + s.replace("'", "'\"'\"'") + "'"
 
 
+class SnapshotError(Exception):
+    pass
+
+
 def decode_snapshot(text: str):
     lines = text.splitlines()
     start = None
@@ -101,11 +107,24 @@ def decode_snapshot(text: str):
     while end < len(lines) and lines[end] != "SNAPEND":
         chunks.append(lines[end].strip())
         end += 1
-    raw = base64.b64decode("".join(chunks))
+    try:
+        raw = base64.b64decode("".join(chunks))
+    except ValueError as e:
+        raise SnapshotError(f"snapshot corrupt: {e}") from e
     if len(raw) != n:
-        raise SystemExit(f"snapshot truncated: got {len(raw)} of {n} bytes")
+        raise SnapshotError(f"snapshot truncated: got {len(raw)} of {n} bytes")
     log = "\n".join(lines[:start] + lines[end + 1:])
     return (w, h, raw), log
+
+
+_B64_LINE = re.compile(r"^[A-Za-z0-9+/=]{64,}$")
+
+
+def clean_log(log: str) -> str:
+    """Drop the tail of an earlier, abandoned snapshot stream."""
+    return "\n".join(ln for ln in log.splitlines()
+                     if not _B64_LINE.match(ln) and ln != "SNAPEND"
+                     and not ln.startswith("SNAP "))
 
 
 def rgb565_to_png(w: int, h: int, raw: bytes, path: str) -> None:
@@ -142,7 +161,14 @@ def main() -> None:
     text = run_remote(a.cmd, a.wait, a.log, snap)
     img, log = (None, text)
     if snap:
-        img, log = decode_snapshot(text)
+        try:
+            img, log = decode_snapshot(text)
+        except SnapshotError as e:
+            # A dropped USB chunk; the screen is still there — grab it again
+            # (without re-sending the commands).
+            sys.stderr.write(f"[knob-snap] {e}; retrying snapshot\n")
+            img, _ = decode_snapshot(run_remote([], a.wait, 0, True))
+    log = clean_log(log)
     if not a.quiet and log.strip():
         print(log.rstrip())
     if snap:

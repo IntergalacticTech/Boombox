@@ -53,6 +53,11 @@ public:
     // and populates `id` + `name` from the JSON payload.
     bool readDeviceInfo(String& out_id, String& out_name);
 
+    // Called repeatedly while findFirstBoomboxNonBlocking() waits. Default
+    // ticks LVGL; a profile can widen it (e.g. to keep a serial console and
+    // input polling alive during the scan).
+    void setIdleHook(std::function<void()> hook) { _idle_hook = hook; }
+
     // Register callbacks before subscribing.
     void onState(StateCallback cb)   { _on_state = cb; }
     void onStatus(StatusCallback cb) { _on_status = cb; }
@@ -80,6 +85,7 @@ private:
     void* _device_info_char = nullptr;
     StateCallback _on_state;
     StatusCallback _on_status;
+    std::function<void()> _idle_hook;
     PairResult _pair_cb;
     bool _pair_pending = false;
     uint32_t _pair_deadline = 0;

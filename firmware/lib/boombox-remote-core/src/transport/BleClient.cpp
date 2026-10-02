@@ -29,9 +29,15 @@ static size_t   _state_buf_len = 0;
 static volatile bool _state_dirty = false;
 static portMUX_TYPE  _state_mux = portMUX_INITIALIZER_UNLOCKED;
 
+// GAP name the remote advertises/introduces itself with. Profiles override
+// it from platformio.ini (-D BOOMBOX_BLE_NAME=...).
+#ifndef BOOMBOX_BLE_NAME
+#define BOOMBOX_BLE_NAME "boombox-cyd"
+#endif
+
 BleClient::BleClient() {
     g_inst = this;
-    NimBLEDevice::init("boombox-cyd");
+    NimBLEDevice::init(BOOMBOX_BLE_NAME);
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
     // Consolidated state JSON is ~500 bytes — well over the 20-byte
     // payload of the default 23-byte ATT MTU. Request the BLE max so
@@ -103,7 +109,8 @@ String BleClient::findFirstBoomboxNonBlocking(uint32_t duration_ms) {
 
     uint32_t deadline = millis() + duration_ms + 500;
     while (found_address.length() == 0 && millis() < deadline) {
-        lv_timer_handler();
+        if (_idle_hook) _idle_hook();
+        else lv_timer_handler();
         delay(15);
     }
     scanner->stop();

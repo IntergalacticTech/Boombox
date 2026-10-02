@@ -3,6 +3,7 @@
 
 #include "CssColor.h"
 #include "KnobGesture.h"
+#include "TextFold.h"
 #include "VolumeCoalescer.h"
 
 using namespace knob;
@@ -193,6 +194,17 @@ void test_volume_unknown_report() {
     TEST_ASSERT_EQUAL_INT(4, v.turn(2, 2, 10));
 }
 
+// -------------------------------------------------------------- text fold
+void test_fold_to_ascii() {
+    TEST_ASSERT_EQUAL_STRING("Plain ASCII 123", foldToAscii("Plain ASCII 123").c_str());
+    TEST_ASSERT_EQUAL_STRING("Beyonce", foldToAscii("Beyonc\xC3\xA9").c_str());
+    TEST_ASSERT_EQUAL_STRING("Motorhead - Ace's", foldToAscii("Mot\xC3\xB6rhead \xE2\x80\x94 Ace\xE2\x80\x99s").c_str());
+    TEST_ASSERT_EQUAL_STRING("Strasse...", foldToAscii("Stra\xC3\x9F" "e\xE2\x80\xA6").c_str());
+    TEST_ASSERT_EQUAL_STRING("?", foldToAscii("\xE6\x97\xA5").c_str());   // CJK
+    TEST_ASSERT_EQUAL_STRING("a?", foldToAscii("a\xC3").c_str());           // truncated
+    TEST_ASSERT_EQUAL_STRING("", foldToAscii(nullptr).c_str());
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_hex_forms);
@@ -212,5 +224,6 @@ int main(int, char**) {
     RUN_TEST(test_volume_ignores_stale_reports_while_turning_then_settles);
     RUN_TEST(test_volume_clamps);
     RUN_TEST(test_volume_unknown_report);
+    RUN_TEST(test_fold_to_ascii);
     return UNITY_END();
 }

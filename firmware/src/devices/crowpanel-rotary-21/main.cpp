@@ -1,89 +1,304 @@
-// boombox-remote firmware — CrowPanel 2.1" rotary knob (bring-up build).
+// boombox-remote firmware — CrowPanel 2.1" rotary knob.
 //
-// Phase 1: prove the hardware. Shows colour bars and a ring, logs encoder
-// detents, switch press/release and touch to serial, and answers the debug
-// console (snap / enc / click / dclick / long / tap).
+// A themed volume + transport knob for the boombox over BLE:
+//   rotate = volume, click = play/pause, double click = next,
+//   long press = ring menu (previous, next, source, shuffle, repeat, mute).
+//
+// Boot / link state machine (same shape as the CYD profile):
+//   Scan → Connect → (saved pairing for this boombox? → Playing : Pair)
+//   Pair: PIN entered with the knob → pair_request → Playing
+//   Playing: state notifies drive the face; a dropped link goes back to Scan
+//            and the face shows "Reconnecting…".
+//
+// All LVGL work happens on this (Arduino loop) task. BLE notifies are
+// buffered by BleClient and drained in pumpEvents(); the pair response is
+// handed over through a small mailbox for the same reason.
+//
+// Serial console (115200, USB-Serial/JTAG) — see DebugConsole.h. Extra
+// commands here: state, demo, ble, testscreen, unpair, reboot, info, bl.
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <lvgl.h>
+#include <time.h>
 
 #include "board/Board.h"
 #include "board/LvglPort.h"
 #include "DebugConsole.h"
-#include "KnobGesture.h"
+#include "KnobApp.h"
+#include "storage/PairedBoombox.h"
+#include "transport/BleClient.h"
+#include "state/BoomboxState.h"
 
 using namespace knob;
+using boombox::BleClient;
+using boombox::BoomboxState;
+using boombox::PairedBoombox;
+using boombox::PairedBoomboxStore;
 
-static GestureRecognizer gGesture;
-static lv_obj_t* gTestRing = nullptr;
-static lv_obj_t* gTestLabel = nullptr;
-static int gTestValue = 50;
+static KnobApp gApp;
+static BleClient* gBle = nullptr;
 
-static void buildTestScreen() {
-    lv_obj_t* scr = lv_screen_active();
-    lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
-    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+enum class Link { Scan, Connect, Pair, Playing, Paused };
+static Link gLink = Link::Scan;
+static String gPendingAddress;
+static PairedBoombox gPair;
+static bool gHaveSaved = false;
+static bool gPlayingWired = false;
+static uint32_t gNextScanAt = 0;
 
-    // Eight vertical colour bars: white, yellow, cyan, green, magenta, red,
-    // blue, black — the classic order, so a swapped R/B shows at a glance.
-    static const uint32_t BARS[8] = {0xFFFFFF, 0xFFFF00, 0x00FFFF, 0x00FF00,
-                                     0xFF00FF, 0xFF0000, 0x0000FF, 0x000000};
-    for (int i = 0; i < 8; i++) {
-        lv_obj_t* b = lv_obj_create(scr);
-        lv_obj_remove_style_all(b);
-        lv_obj_set_size(b, 60, 480);
-        lv_obj_set_pos(b, i * 60, 0);
-        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(b, lv_color_hex(BARS[i]), 0);
+// Pair response mailbox: written on the NimBLE host task, read in loop().
+static portMUX_TYPE gPairMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool gPairDone = false;
+static bool gPairOk = false;
+static String gPairToken, gPairId, gPairName, gPairError;
+static bool gPairPending = false;
+static uint32_t gPairDeadline = 0;
+
+// ------------------------------------------------------------------ input
+static void pollInputs(uint32_t now) {
+    const int32_t d = encoderTakeDetents();
+    if (d) {
+        Serial.printf("[enc] detents=%+ld raw=%ld\n", (long)d, (long)encoderRawCount());
+        gApp.onDetents(d, now);
+    }
+    bool down;
+    if (buttonPoll(now, down)) {
+        Serial.printf("[btn] %s\n", down ? "press" : "release");
+        gApp.onButton(down, now);
+    }
+}
+
+static void service(uint32_t now) {
+    consolePoll();
+    pollInputs(now);
+    gApp.tick(now);
+    lv_timer_handler();
+}
+
+// -------------------------------------------------------------------- BLE
+static bool sendToBoombox(const char* action, const String* value) {
+    if (gLink != Link::Playing || !gBle || !gBle->isConnected()) return false;
+    return gBle->sendCommand(String(action), value);
+}
+
+static void onPinEntered(const String& pin) {
+    if (!gBle) return;
+    Serial.printf("[pair] submitting PIN %s\n", pin.c_str());
+    gPairPending = true;
+    gPairDeadline = millis() + 9000;
+    gPairDone = false;
+    gBle->requestPair(pin,
+        [](bool ok, const String& token, const String& bid,
+           const String& bname, const String& error) {
+            // NimBLE host task: no LVGL here, just hand the result over.
+            portENTER_CRITICAL(&gPairMux);
+            gPairOk = ok;
+            gPairToken = token;
+            gPairId = bid;
+            gPairName = bname;
+            gPairError = error;
+            gPairDone = true;
+            portEXIT_CRITICAL(&gPairMux);
+        }, 8000);
+}
+
+static void handlePairResult(uint32_t now) {
+    if (!gPairPending) return;
+    if (gPairDone) {
+        portENTER_CRITICAL(&gPairMux);
+        const bool ok = gPairOk;
+        const String token = gPairToken, bid = gPairId, bname = gPairName,
+                     err = gPairError;
+        gPairDone = false;
+        portEXIT_CRITICAL(&gPairMux);
+        gPairPending = false;
+        if (!ok) {
+            Serial.printf("[pair] failed: %s\n", err.c_str());
+            gApp.pairFailed(err == "bad_pin" ? "Wrong PIN - try again"
+                          : err == "no_active_pin" ? "No active PIN - start pairing on the boombox"
+                          : "Pairing failed - try again");
+            return;
+        }
+        PairedBoombox pb;
+        pb.id = bid;
+        pb.name = bname;
+        pb.auth_token = token;
+        pb.paired_at = (uint32_t)time(nullptr);
+        PairedBoomboxStore::save(pb);
+        gPair = pb;
+        gHaveSaved = true;
+        Serial.printf("[pair] paired with %s (%s)\n", bname.c_str(), bid.c_str());
+        gApp.pairSucceeded();
+        gLink = Link::Playing;
+        return;
+    }
+    if ((int32_t)(now - gPairDeadline) > 0) {
+        gPairPending = false;
+        Serial.println("[pair] no response");
+        gApp.pairFailed("No response - try again");
+    }
+}
+
+static const char* searchingTitle() {
+    return gHaveSaved ? "Reconnecting..." : "Looking for a boombox";
+}
+
+static void linkStep(uint32_t now) {
+    if ((gLink == Link::Pair || gLink == Link::Playing) && gBle && !gBle->isConnected()) {
+        Serial.println("[link] dropped - rescanning");
+        gPlayingWired = false;
+        gPairPending = false;
+        gApp.showSearching(searchingTitle(), "Lost the boombox");
+        gLink = Link::Scan;
     }
 
-    gTestRing = lv_arc_create(scr);
-    lv_obj_set_size(gTestRing, 440, 440);
-    lv_obj_center(gTestRing);
-    lv_arc_set_bg_angles(gTestRing, 135, 45);
-    lv_arc_set_range(gTestRing, 0, 100);
-    lv_arc_set_value(gTestRing, gTestValue);
-    lv_obj_set_style_arc_width(gTestRing, 18, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(gTestRing, 18, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(gTestRing, lv_color_hex(0x202020), LV_PART_MAIN);
-    lv_obj_set_style_arc_color(gTestRing, lv_color_hex(0xFF8800), LV_PART_INDICATOR);
-    lv_obj_remove_flag(gTestRing, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* disc = lv_obj_create(scr);
-    lv_obj_remove_style_all(disc);
-    lv_obj_set_size(disc, 220, 220);
-    lv_obj_center(disc);
-    lv_obj_set_style_radius(disc, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_opa(disc, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(disc, lv_color_hex(0x101018), 0);
-
-    gTestLabel = lv_label_create(scr);
-    lv_obj_set_style_text_color(gTestLabel, lv_color_white(), 0);
-    lv_obj_set_style_text_font(gTestLabel, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_align(gTestLabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text_fmt(gTestLabel, "BRING-UP\n%d", gTestValue);
-    lv_obj_center(gTestLabel);
+    switch (gLink) {
+        case Link::Paused:
+            break;
+        case Link::Scan: {
+            if ((int32_t)(now - gNextScanAt) < 0) break;
+            gApp.setSearchingStatus("Scanning over Bluetooth...");
+            gPendingAddress = gBle->findFirstBoomboxNonBlocking(8000);
+            if (gLink != Link::Scan) break;   // console paused/changed us mid-scan
+            if (gPendingAddress.length() == 0) {
+                gApp.setSearchingStatus("No boombox found - retrying");
+                gNextScanAt = millis() + 1500;
+                break;
+            }
+            gLink = Link::Connect;
+            break;
+        }
+        case Link::Connect: {
+            Serial.printf("[link] connecting to %s\n", gPendingAddress.c_str());
+            gApp.setSearchingStatus("Connecting...");
+            lv_timer_handler();
+            if (!gBle->connect(gPendingAddress)) {
+                gApp.setSearchingStatus("Connect failed - rescanning");
+                gNextScanAt = millis() + 800;
+                gLink = Link::Scan;
+                break;
+            }
+            String bid, bname;
+            const bool info = gBle->readDeviceInfo(bid, bname);
+            if (gHaveSaved && info && bid.length() && bid == gPair.id) {
+                Serial.printf("[link] resumed pairing with %s\n", bname.c_str());
+                if (bname.length()) gPair.name = bname;
+                gLink = Link::Playing;
+                break;
+            }
+            Serial.println("[link] connected; not paired with this boombox");
+            gApp.startPairing(info ? bname : String(), onPinEntered);
+            gLink = Link::Pair;
+            break;
+        }
+        case Link::Pair:
+            handlePairResult(now);
+            break;
+        case Link::Playing:
+            if (!gPlayingWired) {
+                gPlayingWired = true;
+                Serial.printf("[link] playing with %s\n", gPair.name.c_str());
+                gBle->onState([](const BoomboxState& s) { gApp.onState(s, millis()); });
+                gBle->onStatus([](bool) {});
+                gApp.showFace();
+                if (!gBle->subscribeState())
+                    Serial.println("[link] state subscribe failed");
+            }
+            break;
+    }
 }
 
-static void setTestValue(int v, const char* why) {
-    gTestValue = constrain(v, 0, 100);
-    lv_arc_set_value(gTestRing, gTestValue);
-    lv_label_set_text_fmt(gTestLabel, "%s\n%d", why, gTestValue);
+// ---------------------------------------------------------------- console
+static void registerCommands() {
+    consoleOn("enc", "enc +N|-N  inject encoder detents", [](const String& a) {
+        gApp.onDetents(a.toInt(), millis());
+    });
+    consoleOn("click", "inject a click", [](const String&) {
+        gApp.onGesture(Gesture::Click, millis());
+    });
+    consoleOn("dclick", "inject a double click", [](const String&) {
+        gApp.onGesture(Gesture::DoubleClick, millis());
+    });
+    consoleOn("long", "inject a long press", [](const String&) {
+        gApp.onGesture(Gesture::LongPress, millis());
+    });
+    consoleOn("tap", "tap X Y  inject a touch tap", [](const String& a) {
+        const int sp = a.indexOf(' ');
+        injectTap(a.toInt(), sp > 0 ? a.substring(sp + 1).toInt() : 240);
+    });
+    consoleOn("state", "state {json}  inject a BoomboxState (enters demo mode)",
+              [](const String& a) {
+        // Accept {"ok":true,"data":{...}} or the bare data object.
+        String body = a;
+        if (body.indexOf("\"data\"") < 0) body = String("{\"ok\":true,\"data\":") + a + "}";
+        BoomboxState s;
+        if (!boombox::parseStateJson(body, s)) {
+            Serial.println("[state] parse failed");
+            return;
+        }
+        if (gLink != Link::Paused) {
+            Serial.println("[state] demo mode: BLE paused (ble on to resume)");
+            gLink = Link::Paused;
+        }
+        gApp.onState(s, millis());
+        gApp.showFace();
+        Serial.printf("[state] injected title='%s' vol=%d theme=%d\n",
+                      s.track.title.c_str(), s.volume, s.theme.present());
+    });
+    consoleOn("demo", "demo face|pair|search  show a screen with BLE paused",
+              [](const String& a) {
+        gLink = Link::Paused;
+        if (a == "pair") gApp.startPairing("Boombox", [](const String& pin) {
+            Serial.printf("[demo] PIN entered: %s\n", pin.c_str());
+            gApp.pairFailed("Demo - not sent");
+        });
+        else if (a == "search") gApp.showSearching(searchingTitle(), "Scanning over Bluetooth...");
+        else gApp.showFace();
+    });
+    consoleOn("ble", "ble on|off  resume/pause the BLE link state machine",
+              [](const String& a) {
+        if (a == "off") {
+            gLink = Link::Paused;
+        } else {
+            if (gBle && gBle->isConnected()) gBle->disconnect();
+            gPlayingWired = false;
+            gLink = Link::Scan;
+            gNextScanAt = 0;
+            gApp.showSearching(searchingTitle(), "");
+        }
+        Serial.printf("[ble] %s\n", gLink == Link::Paused ? "paused" : "scanning");
+    });
+    consoleOn("testscreen", "colour bars + ring (BLE paused)", [](const String&) {
+        gLink = Link::Paused;
+        gApp.showTest();
+    });
+    consoleOn("unpair", "forget the paired boombox", [](const String&) {
+        PairedBoomboxStore::clear();
+        gHaveSaved = false;
+        Serial.println("[pair] cleared");
+    });
+    consoleOn("wake", "wake the backlight (no other action)", [](const String&) {
+        gApp.wake(millis());
+    });
+    consoleOn("reboot", "restart", [](const String&) { ESP.restart(); });
+    consoleOn("bl", "bl N  backlight 0-255", [](const String& a) {
+        setBacklight((uint8_t)constrain(a.toInt(), 0, 255));
+    });
+    consoleOn("info", "board + link status", [](const String&) {
+        const BoardStatus& s = boardStatus();
+        Serial.printf("[info] expander=%d panel=%d touch=%d psram=%d heap=%u "
+                      "psram_free=%u enc_raw=%ld link=%d connected=%d paired=%d "
+                      "power=%s\n",
+                      s.expander, s.panel, s.touch, s.psram,
+                      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(),
+                      (long)encoderRawCount(), (int)gLink,
+                      gBle ? (int)gBle->isConnected() : 0, (int)gHaveSaved,
+                      gApp.powerName());
+    });
 }
 
-static void onDetents(int32_t d, const char* src) {
-    Serial.printf("[enc] %s detents=%+ld raw=%ld\n", src, (long)d,
-                  (long)encoderRawCount());
-    setTestValue(gTestValue + d * 2, "TURN");
-}
-
-static void onGesture(Gesture g, const char* src) {
-    if (g == Gesture::None) return;
-    Serial.printf("[btn] %s gesture=%s\n", src, gestureName(g));
-    setTestValue(gTestValue, g == Gesture::Click ? "CLICK"
-                           : g == Gesture::DoubleClick ? "DOUBLE" : "LONG");
-}
-
+// ------------------------------------------------------------- setup/loop
 void setup() {
     Serial.setRxBufferSize(4096);
     Serial.setTxBufferSize(4096);
@@ -96,53 +311,30 @@ void setup() {
 
     boardBegin();
     lvglBegin();
-    buildTestScreen();
+    gApp.begin(sendToBoombox);
+    setTouchGate([](int16_t x, int16_t y) { return gApp.onTouchDown(x, y, millis()); });
+
+    gHaveSaved = PairedBoomboxStore::load(gPair);
+    if (gHaveSaved)
+        Serial.printf("[boot] saved pairing: %s (%s)\n", gPair.name.c_str(), gPair.id.c_str());
+    else
+        Serial.println("[boot] no saved pairing");
+    gApp.showSearching(searchingTitle(), "Starting Bluetooth...");
+    lv_timer_handler();
 
     consoleBegin();
-    consoleOn("enc", "enc +N|-N  inject encoder detents", [](const String& a) {
-        onDetents(a.toInt(), "inject");
-    });
-    consoleOn("click", "inject a click", [](const String&) {
-        onGesture(Gesture::Click, "inject");
-    });
-    consoleOn("dclick", "inject a double click", [](const String&) {
-        onGesture(Gesture::DoubleClick, "inject");
-    });
-    consoleOn("long", "inject a long press", [](const String&) {
-        onGesture(Gesture::LongPress, "inject");
-    });
-    consoleOn("tap", "tap X Y  inject a touch tap", [](const String& a) {
-        int sp = a.indexOf(' ');
-        injectTap(a.toInt(), sp > 0 ? a.substring(sp + 1).toInt() : 240);
-    });
-    consoleOn("bl", "bl N  backlight 0-255", [](const String& a) {
-        setBacklight((uint8_t)constrain(a.toInt(), 0, 255));
-    });
-    consoleOn("info", "board status", [](const String&) {
-        const BoardStatus& s = boardStatus();
-        Serial.printf("[info] expander=%d panel=%d touch=%d psram=%d "
-                      "heap=%u psram_free=%u enc_raw=%ld\n",
-                      s.expander, s.panel, s.touch, s.psram,
-                      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(),
-                      (long)encoderRawCount());
-    });
+    registerCommands();
+
+    gBle = new BleClient();
+    // Keep the console, the knob and LVGL alive during the 8 s scans.
+    gBle->setIdleHook([]() { service(millis()); });
     Serial.println("ready.");
 }
 
 void loop() {
     const uint32_t now = millis();
-    consolePoll();
-
-    const int32_t d = encoderTakeDetents();
-    if (d) onDetents(d, "knob");
-
-    bool down;
-    if (buttonPoll(now, down)) {
-        Serial.printf("[btn] %s\n", down ? "press" : "release");
-        onGesture(down ? gGesture.press(now) : gGesture.release(now), "knob");
-    }
-    onGesture(gGesture.tick(now), "knob");
-
-    lv_timer_handler();
+    service(now);
+    if (gBle) gBle->pumpEvents();
+    linkStep(now);
     delay(5);
 }
