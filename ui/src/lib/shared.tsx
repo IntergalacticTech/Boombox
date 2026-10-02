@@ -59,6 +59,7 @@ export function Icon({ name, size = 24, stroke = "currentColor", sw = 2 }: IconP
     case "settings":return <svg {...p}><circle cx="12" cy="12" r="3"/><path d="M12 2 V5 M12 19 V22 M2 12 H5 M19 12 H22 M5 5 L7 7 M17 17 L19 19 M5 19 L7 17 M17 7 L19 5"/></svg>;
     case "eq":      return <svg {...p}><line x1="6" y1="4" x2="6" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="18" y1="4" x2="18" y2="20"/><circle cx="6" cy="9" r="2" fill={stroke}/><circle cx="12" cy="14" r="2" fill={stroke}/><circle cx="18" cy="11" r="2" fill={stroke}/></svg>;
     case "wifi":    return <svg {...p}><path d="M3 9 a14 14 0 0 1 18 0"/><path d="M6 13 a10 10 0 0 1 12 0"/><path d="M9 17 a6 6 0 0 1 6 0"/><circle cx="12" cy="20" r="0.8" fill={stroke}/></svg>;
+    case "menu":    return <svg {...p}><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>;
     case "x":       return <svg {...p}><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>;
     case "check":   return <svg {...p}><path d="M5 12 L10 17 L20 7"/></svg>;
     case "chevron": return <svg {...p}><path d="M9 6 L15 12 L9 18"/></svg>;

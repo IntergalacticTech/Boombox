@@ -54,9 +54,13 @@ describe("Library entry in skin chrome", () => {
   it.each(SKINS.map(s => [s.id, s] as const))("%s: tapping Library calls onOpenLibrary", (_id, skin) => {
     const chrome = makeChrome();
     const { Audio } = skin;
-    const { getAllByRole } = render(
+    const { getAllByRole, queryByRole } = render(
       <Audio track={TRACK} state="paused" elapsed={0} volume={50} chrome={chrome}/>,
     );
+    // Skins with a collapsible nav (Simple) hide it behind a Menu button;
+    // open it first so the Library entry must still be reachable.
+    const menu = queryByRole("button", { name: "Menu" });
+    if (menu) fireEvent.click(menu);
     // Exact name: Simple's Home item shows the source ("Home · LIBRARY") but
     // is labelled "Home", so only the real Library entry matches.
     const [lib] = getAllByRole("button", { name: "Library" });
@@ -65,20 +69,24 @@ describe("Library entry in skin chrome", () => {
     expect(chrome.onOpenQueue).not.toHaveBeenCalled();
   });
 
-  it("Simple: the Library nav item opens the library", () => {
+  it("Simple: Library is reachable via the Menu button, next to Queue", () => {
     const chrome = makeChrome();
-    const { container } = render(
+    const { getByRole, queryAllByRole } = render(
       <SimpleAudio track={TRACK} state="playing" elapsed={10} volume={50} chrome={chrome}/>,
     );
-    // The sidebar nav item sits next to Queue.
-    const nav = container.querySelectorAll("button");
-    const labels = Array.from(nav).map(b => b.textContent ?? "");
-    const libIdx = labels.findIndex(l => /^Library/.test(l));
+    // The nav menu starts hidden; open it with the upper-left Menu button.
+    fireEvent.click(getByRole("button", { name: "Menu" }));
+    const nav = within(getByRole("navigation", { name: "Main menu" }));
+    const labels = nav.getAllByRole("button").map(b => b.getAttribute("aria-label") ?? "");
+    const libIdx = labels.indexOf("Library");
     const queueIdx = labels.findIndex(l => /^Queue/.test(l));
     expect(libIdx).toBeGreaterThanOrEqual(0);
     expect(Math.abs(libIdx - queueIdx)).toBe(1);
-    fireEvent.click(nav[libIdx]);
+    fireEvent.click(nav.getByRole("button", { name: "Library" }));
     expect(chrome.onOpenLibrary).toHaveBeenCalledTimes(1);
+    // Choosing an item closes the menu again.
+    expect(getByRole("button", { name: "Menu" })).toHaveAttribute("aria-expanded", "false");
+    expect(queryAllByRole("button", { name: "Library" })).toHaveLength(0);
   });
 
   it("Block95: the chrome Library button opens the library", () => {
