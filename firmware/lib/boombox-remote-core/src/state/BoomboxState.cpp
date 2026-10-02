@@ -24,7 +24,7 @@ bool parseStateData(JsonVariantConst dataVar, BoomboxState& out) {
     out.source       = str(data["source"]);
     out.playing      = data["playing"].as<bool>();
 
-    if (data["track"].is<JsonObject>()) {
+    if (data["track"].is<JsonObjectConst>()) {
         JsonObjectConst t = data["track"].as<JsonObjectConst>();
         out.track.title      = str(t["title"]);
         out.track.artist     = str(t["artist"]);
@@ -53,7 +53,7 @@ bool parseStateData(JsonVariantConst dataVar, BoomboxState& out) {
     out.repeat   = str(data["repeat"]);
     out.skin     = str(data["skin"]);
     out.theme    = ThemeTokens();
-    if (data["theme"].is<JsonObject>()) {
+    if (data["theme"].is<JsonObjectConst>()) {
         JsonObjectConst th = data["theme"].as<JsonObjectConst>();
         auto tok = [&](const char* k) { return str(th[k]); };
         out.theme.bg      = tok("bg");
