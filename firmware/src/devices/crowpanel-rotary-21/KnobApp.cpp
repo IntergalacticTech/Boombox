@@ -1,12 +1,12 @@
 #include "KnobApp.h"
 #include "board/Board.h"
 #include "TextFold.h"
+#include "VolumeAccel.h"
 
 namespace knob {
 
 namespace {
 
-constexpr int VOLUME_STEP = 2;            // percent per detent
 constexpr uint32_t MENU_IDLE_MS = 5000;
 constexpr uint32_t DIM_AFTER_MS = 30000;
 constexpr uint32_t OFF_AFTER_MS = 120000;
@@ -164,7 +164,9 @@ void KnobApp::onDetents(int32_t d, uint32_t now) {
                 // value near 0 (or 100) and jump the real volume.
                 Serial.println("[vol] boombox volume unknown - turn ignored");
             } else {
-                const int v = _vol.turn((int)d, VOLUME_STEP, now);
+                const uint32_t gap = _last_vol_detent ? now - _last_vol_detent : UINT32_MAX;
+                _last_vol_detent = now;
+                const int v = _vol.turn((int)d, knob::volumeStepForGap(gap), now);
                 Serial.printf("[vol] turn %+ld -> %d\n", (long)d, v);
                 _refreshVolume(now);
             }

@@ -5,6 +5,7 @@
 #include "KnobGesture.h"
 #include "TextFold.h"
 #include "VolumeCoalescer.h"
+#include "VolumeAccel.h"
 
 using namespace knob;
 
@@ -205,6 +206,13 @@ void test_fold_to_ascii() {
     TEST_ASSERT_EQUAL_STRING("", foldToAscii(nullptr).c_str());
 }
 
+void test_volume_step_accelerates_with_speed() {
+    TEST_ASSERT_EQUAL_INT(4,  volumeStepForGap(UINT32_MAX));  // first detent
+    TEST_ASSERT_EQUAL_INT(4,  volumeStepForGap(300));         // slow click
+    TEST_ASSERT_EQUAL_INT(6,  volumeStepForGap(80));          // brisk turn
+    TEST_ASSERT_EQUAL_INT(10, volumeStepForGap(20));          // fast spin
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_hex_forms);
@@ -225,5 +233,6 @@ int main(int, char**) {
     RUN_TEST(test_volume_clamps);
     RUN_TEST(test_volume_unknown_report);
     RUN_TEST(test_fold_to_ascii);
+    RUN_TEST(test_volume_step_accelerates_with_speed);
     return UNITY_END();
 }

@@ -83,6 +83,7 @@ private:
     Mode _mode = Mode::Searching;
     GestureRecognizer _gesture{350, 600};
     VolumeCoalescer _vol{125, 1000};
+    uint32_t _last_vol_detent = 0;   // for turn-speed acceleration
 
     boombox::BoomboxState _state;
     bool _have_state = false;
