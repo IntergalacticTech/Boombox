@@ -1,6 +1,6 @@
 // boombox-remote firmware — CrowPanel 2.1" rotary knob.
 //
-// A themed volume + transport knob for the boombox over BLE:
+// A themed volume + transport knob for the boombox, over USB or BLE:
 //   rotate = volume, click = play/pause, double click = next,
 //   long press = ring menu (previous, next, source, shuffle, repeat, mute).
 //
@@ -10,12 +10,20 @@
 //   Playing: state notifies drive the face; a dropped link goes back to Scan
 //            and the face shows "Reconnecting…".
 //
+// USB host link (UsbHostLink.h): when the knob is plugged into the boombox
+// and the host has sent a valid state in the last 12 s, USB is the active
+// link — state comes from the host, commands go back over USB, BLE scanning
+// and connecting stop and the pairing UI is skipped (the cable is the trust
+// boundary). When the host goes quiet the state machine above resumes at
+// Scan, so the knob still works cordless.
+//
 // All LVGL work happens on this (Arduino loop) task. BLE notifies are
 // buffered by BleClient and drained in pumpEvents(); the pair response is
 // handed over through a small mailbox for the same reason.
 //
 // Serial console (115200, USB-Serial/JTAG) — see DebugConsole.h. Extra
-// commands here: state, demo, ble, testscreen, unpair, reboot, info, bl.
+// commands here: state, demo, ble, usb, testscreen, unpair, reboot, info, bl.
+// `state`/`demo`/`ble off` pause both links (demo mode) until `ble on`.
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -26,6 +34,7 @@
 #include "board/LvglPort.h"
 #include "DebugConsole.h"
 #include "KnobApp.h"
+#include "UsbHostLink.h"
 #include "storage/PairedBoombox.h"
 #include "transport/BleClient.h"
 #include "state/BoomboxState.h"
@@ -38,6 +47,8 @@ using boombox::PairedBoomboxStore;
 
 static KnobApp gApp;
 static BleClient* gBle = nullptr;
+static UsbHostLink gUsb;
+static bool gUsbMode = false;   // USB is the active link (BLE idle)
 
 enum class Link { Scan, Connect, Pair, Playing, Paused };
 static Link gLink = Link::Scan;
@@ -71,6 +82,8 @@ static void pollInputs(uint32_t now) {
 
 static void service(uint32_t now) {
     consolePoll();
+    // A host state arriving mid-scan ends the scan so USB takes over now.
+    if (gBle && !gUsbMode && gUsb.active(now)) gBle->cancelScan();
     pollInputs(now);
     gApp.tick(now);
     lv_timer_handler();
@@ -78,6 +91,7 @@ static void service(uint32_t now) {
 
 // -------------------------------------------------------------------- BLE
 static bool sendToBoombox(const char* action, const String* value) {
+    if (gUsbMode) return gUsb.sendCommand(action, value, millis());
     if (gLink != Link::Playing || !gBle || !gBle->isConnected()) return false;
     return gBle->sendCommand(String(action), value);
 }
@@ -161,6 +175,7 @@ static void linkStep(uint32_t now) {
             gApp.setSearchingStatus("Scanning over Bluetooth...");
             gPendingAddress = gBle->findFirstBoomboxNonBlocking(8000);
             if (gLink != Link::Scan) break;   // console paused/changed us mid-scan
+            if (gUsb.active(millis())) break; // USB took over mid-scan
             if (gPendingAddress.length() == 0) {
                 gApp.setSearchingStatus("No boombox found - retrying");
                 gNextScanAt = millis() + 1500;
@@ -176,6 +191,11 @@ static void linkStep(uint32_t now) {
             if (!gBle->connect(gPendingAddress)) {
                 gApp.setSearchingStatus("Connect failed - rescanning");
                 gNextScanAt = millis() + 800;
+                gLink = Link::Scan;
+                break;
+            }
+            if (gUsb.active(millis())) {      // USB took over mid-connect
+                gBle->disconnect();
                 gLink = Link::Scan;
                 break;
             }
@@ -209,6 +229,30 @@ static void linkStep(uint32_t now) {
     }
 }
 
+// -------------------------------------------------------------------- USB
+static void enterUsbMode() {
+    gUsbMode = true;
+    if (gBle) {
+        gBle->cancelScan();
+        if (gBle->isConnected()) gBle->disconnect();
+    }
+    gPlayingWired = false;
+    gPairPending = false;
+    gLink = Link::Scan;      // where BLE resumes if USB goes quiet
+    gNextScanAt = 0;
+    Serial.println("[usb] host link active - BLE paused");
+    gApp.showFace();
+}
+
+static void leaveUsbMode() {
+    gUsbMode = false;
+    if (gLink == Link::Paused) return;   // demo mode: stay put
+    Serial.println("[usb] host link quiet - falling back to BLE");
+    gLink = Link::Scan;
+    gNextScanAt = 0;
+    gApp.showSearching(searchingTitle(), "USB link lost");
+}
+
 // ---------------------------------------------------------------- console
 static void registerCommands() {
     consoleOn("enc", "enc +N|-N  inject encoder detents", [](const String& a) {
@@ -238,7 +282,7 @@ static void registerCommands() {
             return;
         }
         if (gLink != Link::Paused) {
-            Serial.println("[state] demo mode: BLE paused (ble on to resume)");
+            Serial.println("[state] demo mode: BLE + USB links paused (ble on to resume)");
             gLink = Link::Paused;
         }
         gApp.onState(s, millis());
@@ -256,18 +300,25 @@ static void registerCommands() {
         else if (a == "search") gApp.showSearching(searchingTitle(), "Scanning over Bluetooth...");
         else gApp.showFace();
     });
-    consoleOn("ble", "ble on|off  resume/pause the BLE link state machine",
+    consoleOn("ble", "ble on|off  resume/pause the link state machine (BLE + USB)",
               [](const String& a) {
         if (a == "off") {
             gLink = Link::Paused;
         } else {
             if (gBle && gBle->isConnected()) gBle->disconnect();
+            gUsbMode = false;      // re-evaluated next loop (USB still wins if live)
             gPlayingWired = false;
             gLink = Link::Scan;
             gNextScanAt = 0;
             gApp.showSearching(searchingTitle(), "");
         }
         Serial.printf("[ble] %s\n", gLink == Link::Paused ? "paused" : "scanning");
+    });
+    consoleOn("usb", "USB host link status", [](const String&) {
+        Serial.printf("[usb] mode=%d active=%d states=%u cmds=%u bad=%u\n",
+                      (int)gUsbMode, (int)gUsb.active(millis()),
+                      (unsigned)gUsb.statesReceived(), (unsigned)gUsb.commandsSent(),
+                      (unsigned)gUsb.badLines());
     });
     consoleOn("testscreen", "colour bars + ring (BLE paused)", [](const String&) {
         gLink = Link::Paused;
@@ -289,12 +340,12 @@ static void registerCommands() {
         const BoardStatus& s = boardStatus();
         Serial.printf("[info] expander=%d panel=%d touch=%d psram=%d heap=%u "
                       "psram_free=%u enc_raw=%ld link=%d connected=%d paired=%d "
-                      "power=%s\n",
+                      "usb=%d power=%s\n",
                       s.expander, s.panel, s.touch, s.psram,
                       (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(),
                       (long)encoderRawCount(), (int)gLink,
                       gBle ? (int)gBle->isConnected() : 0, (int)gHaveSaved,
-                      gApp.powerName());
+                      (int)gUsbMode, gApp.powerName());
     });
 }
 
@@ -324,6 +375,10 @@ void setup() {
 
     consoleBegin();
     registerCommands();
+    gUsb.begin([](const BoomboxState& s) {
+        if (gLink == Link::Paused) return;   // demo mode owns the face
+        gApp.onState(s, millis());
+    });
 
     gBle = new BleClient();
     // Keep the console, the knob and LVGL alive during the 8 s scans.
@@ -334,7 +389,12 @@ void setup() {
 void loop() {
     const uint32_t now = millis();
     service(now);
-    if (gBle) gBle->pumpEvents();
-    linkStep(now);
+    const bool usb = gLink != Link::Paused && gUsb.active(now);
+    if (usb && !gUsbMode) enterUsbMode();
+    else if (!usb && gUsbMode) leaveUsbMode();
+    if (!gUsbMode) {
+        if (gBle) gBle->pumpEvents();
+        linkStep(now);
+    }
     delay(5);
 }

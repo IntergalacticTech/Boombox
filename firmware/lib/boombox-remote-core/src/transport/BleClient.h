@@ -42,6 +42,9 @@ public:
     // address of the first boombox seen, or empty string on timeout.
     // Designed to be called from the main loop without freezing the UI.
     String findFirstBoomboxNonBlocking(uint32_t duration_ms = 6000);
+    // Ends a findFirstBoomboxNonBlocking() wait early (it returns ""). Safe
+    // to call from its idle hook, e.g. when another link takes over.
+    void cancelScan() { _scan_cancel = true; }
     void disconnect();
     bool isConnected() const;
 
@@ -88,6 +91,7 @@ private:
     std::function<void()> _idle_hook;
     PairResult _pair_cb;
     bool _pair_pending = false;
+    volatile bool _scan_cancel = false;
     uint32_t _pair_deadline = 0;
 
     static void _stateNotifyTrampoline(void* /*characteristic*/, uint8_t* data,

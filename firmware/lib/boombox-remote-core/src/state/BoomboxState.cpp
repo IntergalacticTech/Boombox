@@ -12,7 +12,11 @@ bool parseStateJson(const String& body, BoomboxState& out) {
     JsonDocument doc;
     if (deserializeJson(doc, body)) return false;
     if (!doc["ok"].as<bool>()) return false;
-    JsonObject data = doc["data"].as<JsonObject>();
+    return parseStateData(doc["data"], out);
+}
+
+bool parseStateData(JsonVariantConst dataVar, BoomboxState& out) {
+    JsonObjectConst data = dataVar.as<JsonObjectConst>();
     if (data.isNull()) return false;
 
     out.boombox_id   = str(data["boombox"]["id"]);
@@ -21,7 +25,7 @@ bool parseStateJson(const String& body, BoomboxState& out) {
     out.playing      = data["playing"].as<bool>();
 
     if (data["track"].is<JsonObject>()) {
-        JsonObject t = data["track"].as<JsonObject>();
+        JsonObjectConst t = data["track"].as<JsonObjectConst>();
         out.track.title      = str(t["title"]);
         out.track.artist     = str(t["artist"]);
         out.track.album      = str(t["album"]);
@@ -35,7 +39,7 @@ bool parseStateJson(const String& body, BoomboxState& out) {
     out.art_url  = str(data["art_url"]);
     // boombox-remote reports volume as PipeWire's 0..1 (float, up to 1.5
     // with boost); accept integer percents too.
-    JsonVariant vol = data["volume"];
+    JsonVariantConst vol = data["volume"];
     if (vol.is<int>() && vol.as<int>() > 1) {
         out.volume = (int16_t)vol.as<int>();
     } else if (vol.is<float>()) {
@@ -50,7 +54,7 @@ bool parseStateJson(const String& body, BoomboxState& out) {
     out.skin     = str(data["skin"]);
     out.theme    = ThemeTokens();
     if (data["theme"].is<JsonObject>()) {
-        JsonObject th = data["theme"].as<JsonObject>();
+        JsonObjectConst th = data["theme"].as<JsonObjectConst>();
         auto tok = [&](const char* k) { return str(th[k]); };
         out.theme.bg      = tok("bg");
         out.theme.panel   = tok("panel");
@@ -62,7 +66,7 @@ bool parseStateJson(const String& body, BoomboxState& out) {
     }
 
     out.sources_available.clear();
-    for (JsonVariant v : data["sources_available"].as<JsonArray>()) {
+    for (JsonVariantConst v : data["sources_available"].as<JsonArrayConst>()) {
         out.sources_available.push_back(v.as<String>());
     }
     out.sleep_timer_s = data["sleep_timer_s"].is<int>()

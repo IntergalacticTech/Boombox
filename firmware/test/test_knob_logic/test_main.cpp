@@ -2,6 +2,7 @@
 #include <unity.h>
 
 #include "CssColor.h"
+#include "HostLink.h"
 #include "KnobGesture.h"
 #include "TextFold.h"
 #include "VolumeCoalescer.h"
@@ -213,6 +214,83 @@ void test_volume_step_accelerates_with_speed() {
     TEST_ASSERT_EQUAL_INT(10, volumeStepForGap(20));          // fast spin
 }
 
+// --------------------------------------------------------------- host link
+static int feedAll(LineAssembler& la, const char* s, const char** last) {
+    int lines = 0;
+    for (; *s; s++) {
+        if (la.feed(*s)) {
+            lines++;
+            if (last) *last = la.line();
+        }
+    }
+    return lines;
+}
+
+void test_line_assembler_splits_lines() {
+    LineAssembler la;
+    const char* last = nullptr;
+    TEST_ASSERT_EQUAL_INT(2, feedAll(la, "info\r\n\n{\"t\":\"hello\"}\n", &last));
+    TEST_ASSERT_EQUAL_STRING("{\"t\":\"hello\"}", last);
+    TEST_ASSERT_EQUAL_INT(0, feedAll(la, "partial", nullptr));
+    TEST_ASSERT_EQUAL_INT(1, feedAll(la, " line\n", &last));
+    TEST_ASSERT_EQUAL_STRING("partial line", last);
+}
+
+void test_line_assembler_drops_overlong_lines_whole() {
+    LineAssembler la;
+    for (size_t i = 0; i < LineAssembler::CAP + 10; i++)
+        TEST_ASSERT_FALSE(la.feed('x'));
+    TEST_ASSERT_FALSE(la.feed('\n'));          // the overlong line is gone
+    TEST_ASSERT_EQUAL_UINT32(1, la.dropped());
+    const char* last = nullptr;
+    TEST_ASSERT_EQUAL_INT(1, feedAll(la, "ok\n", &last));   // next line is clean
+    TEST_ASSERT_EQUAL_STRING("ok", last);
+    // Exactly CAP bytes still fits.
+    for (size_t i = 0; i < LineAssembler::CAP; i++) la.feed('y');
+    TEST_ASSERT_TRUE(la.feed('\n'));
+    TEST_ASSERT_EQUAL_UINT32(LineAssembler::CAP, la.length());
+}
+
+void test_protocol_line_detection() {
+    TEST_ASSERT_TRUE(isProtocolLine("{\"t\":\"state\"}"));
+    TEST_ASSERT_TRUE(isProtocolLine("  {}"));
+    TEST_ASSERT_FALSE(isProtocolLine("state {\"ok\":true}"));
+    TEST_ASSERT_FALSE(isProtocolLine("[usb] host link active"));
+    TEST_ASSERT_FALSE(isProtocolLine(""));
+    TEST_ASSERT_FALSE(isProtocolLine(nullptr));
+}
+
+void test_link_window() {
+    LinkWindow w(12000);
+    TEST_ASSERT_FALSE(w.active(0));
+    w.note(1000);
+    TEST_ASSERT_TRUE(w.active(1000));
+    TEST_ASSERT_TRUE(w.active(12999));
+    TEST_ASSERT_FALSE(w.active(13000));
+    // millis() wrap
+    w.note(UINT32_MAX - 100);
+    TEST_ASSERT_TRUE(w.active(5000));
+    TEST_ASSERT_FALSE(w.active(12000));
+    w.note(50);
+    w.reset();
+    TEST_ASSERT_FALSE(w.active(60));
+}
+
+void test_json_number() {
+    TEST_ASSERT_TRUE(isJsonNumber("0.42"));
+    TEST_ASSERT_TRUE(isJsonNumber("-3"));
+    TEST_ASSERT_TRUE(isJsonNumber("0"));
+    TEST_ASSERT_TRUE(isJsonNumber("1e2"));
+    TEST_ASSERT_TRUE(isJsonNumber("2.5E-3"));
+    TEST_ASSERT_FALSE(isJsonNumber(""));
+    TEST_ASSERT_FALSE(isJsonNumber("mopidy"));
+    TEST_ASSERT_FALSE(isJsonNumber("01"));
+    TEST_ASSERT_FALSE(isJsonNumber("1."));
+    TEST_ASSERT_FALSE(isJsonNumber(".5"));
+    TEST_ASSERT_FALSE(isJsonNumber("nan"));
+    TEST_ASSERT_FALSE(isJsonNumber(nullptr));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_hex_forms);
@@ -234,5 +312,10 @@ int main(int, char**) {
     RUN_TEST(test_volume_unknown_report);
     RUN_TEST(test_fold_to_ascii);
     RUN_TEST(test_volume_step_accelerates_with_speed);
+    RUN_TEST(test_line_assembler_splits_lines);
+    RUN_TEST(test_line_assembler_drops_overlong_lines_whole);
+    RUN_TEST(test_protocol_line_detection);
+    RUN_TEST(test_link_window);
+    RUN_TEST(test_json_number);
     return UNITY_END();
 }

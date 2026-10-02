@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <vector>
 
 namespace boombox {
@@ -51,5 +52,9 @@ struct BoomboxState {
 // Parses the JSON body of /api/remote/state into `out`. Returns true on
 // success, false on malformed input or {"ok": false}.
 bool parseStateJson(const String& body, BoomboxState& out);
+
+// Same, from the already-parsed `data` object (the USB host link carries it
+// as {"t":"state","d":{…}}).
+bool parseStateData(JsonVariantConst data, BoomboxState& out);
 
 } // namespace boombox

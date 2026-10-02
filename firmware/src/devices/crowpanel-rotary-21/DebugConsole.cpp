@@ -3,6 +3,8 @@
 #include <lvgl.h>
 #include <vector>
 
+#include "HostLink.h"
+
 namespace knob {
 
 namespace {
@@ -12,8 +14,8 @@ struct Cmd {
     ConsoleHandler fn;
 };
 std::vector<Cmd> g_cmds;
-String g_line;
-constexpr size_t MAX_LINE = 2048;
+LineAssembler g_line;
+ProtocolHandler g_protocol;
 
 const char B64[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -65,7 +67,6 @@ void dispatch(String line) {
 }  // namespace
 
 void consoleBegin() {
-    g_line.reserve(MAX_LINE);
     consoleOn("snap", "stream an LVGL snapshot (RGB565, base64)",
               [](const String&) { consoleSnapshot(); });
 }
@@ -74,20 +75,20 @@ void consoleOn(const char* name, const char* help, ConsoleHandler handler) {
     g_cmds.push_back(Cmd{String(name), String(help), std::move(handler)});
 }
 
+void consoleOnProtocol(ProtocolHandler handler) { g_protocol = std::move(handler); }
+
 void consolePoll() {
-    // Bounded per call so a flood of input can't starve LVGL.
-    int budget = 512;
+    // Bounded per call so a flood of input can't starve LVGL (a state line
+    // is ~1 KB, so it takes a pass or two).
+    int budget = 1024;
     while (Serial.available() > 0 && budget-- > 0) {
         const int c = Serial.read();
         if (c < 0) break;
-        if (c == '\n' || c == '\r') {
-            if (g_line.length()) {
-                String line = g_line;
-                g_line = "";
-                dispatch(line);
-            }
-        } else if (g_line.length() < MAX_LINE) {
-            g_line += (char)c;
+        if (!g_line.feed((char)c)) continue;
+        if (isProtocolLine(g_line.line())) {
+            if (g_protocol) g_protocol(g_line.line(), g_line.length());
+        } else {
+            dispatch(String(g_line.line()));
         }
     }
 }

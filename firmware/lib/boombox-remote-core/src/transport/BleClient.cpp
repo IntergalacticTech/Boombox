@@ -81,6 +81,7 @@ String BleClient::findFirstBoomboxNonBlocking(uint32_t duration_ms) {
     // which records a hit. The main loop polls + ticks LVGL.
     static String found_address;
     found_address = "";
+    _scan_cancel = false;
     NimBLEScan* scanner = NimBLEDevice::getScan();
     scanner->setActiveScan(true);
     scanner->setInterval(100);
@@ -108,12 +109,16 @@ String BleClient::findFirstBoomboxNonBlocking(uint32_t duration_ms) {
     }
 
     uint32_t deadline = millis() + duration_ms + 500;
-    while (found_address.length() == 0 && millis() < deadline) {
+    while (found_address.length() == 0 && millis() < deadline && !_scan_cancel) {
         if (_idle_hook) _idle_hook();
         else lv_timer_handler();
         delay(15);
     }
     scanner->stop();
+    if (_scan_cancel) {
+        _scan_cancel = false;
+        return "";
+    }
     return found_address;
 }
 
