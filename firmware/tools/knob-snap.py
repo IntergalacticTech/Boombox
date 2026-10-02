@@ -14,6 +14,15 @@ Examples:
 
 Console framing (see src/devices/crowpanel-rotary-21/DebugConsole.h):
   SNAP <w> <h> <bytes> RGB565  /  base64 lines  /  SNAPEND
+
+Sharing the port with boombox-remote: the USB knob bridge (services/
+knob_usb.py) normally holds the knob's port. For the length of a run this
+script creates the bridge's pause file (PI_KNOB_PAUSE, default
+/run/user/1000/boombox-knob.pause), waits until no other process has the tty
+open, and removes the file when done — the bridge then reconnects and the
+knob goes back to its USB link. If the knob sat paused for more than 12 s it
+will have fallen back to BLE in the meantime; it returns to USB as soon as
+the bridge pushes state again.
 """
 from __future__ import annotations
 
@@ -25,22 +34,70 @@ import subprocess
 import sys
 
 PI_HOST = os.environ.get("PI_HOST", "root@192.168.1.81")
-PI_TTY = os.environ.get("PI_TTY", "/dev/ttyACM0")
+# "auto": /dev/boombox-knob (the udev symlink) if present, else /dev/ttyACM0.
+PI_TTY = os.environ.get("PI_TTY", "auto")
+PI_KNOB_PAUSE = os.environ.get("PI_KNOB_PAUSE", "/run/user/1000/boombox-knob.pause")
 PI_PYTHON = os.environ.get("PI_PYTHON", "/home/dietpi/.esptool/bin/python")
 
-# Runs on the Pi. argv: tty, wait_s, log_s, snap(0/1), cmds...
+# Runs on the Pi. argv: tty, pause_file, wait_s, log_s, snap(0/1), cmds...
 REMOTE = r'''
-import sys, time, serial
-tty, wait_s, log_s, snap = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), sys.argv[4] == "1"
-cmds = sys.argv[5:]
+import os, sys, time, serial
+tty, pause = sys.argv[1], sys.argv[2]
+wait_s, log_s, snap = float(sys.argv[3]), float(sys.argv[4]), sys.argv[5] == "1"
+cmds = sys.argv[6:]
 out = sys.stdout
+if tty == "auto":
+    tty = "/dev/boombox-knob" if os.path.exists("/dev/boombox-knob") else "/dev/ttyACM0"
+
+def holders(dev):
+    """PIDs (other than ours) with `dev` open."""
+    real, me, pids = os.path.realpath(dev), os.getpid(), []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == me:
+            continue
+        try:
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                if os.path.realpath(f"/proc/{pid}/fd/{fd}") == real:
+                    pids.append(int(pid))
+                    break
+        except OSError:
+            pass
+    return pids
+
+# Ask boombox-remote's knob bridge to let go of the port (it polls the pause
+# file twice a second) and wait until it has.
+paused = False
+if pause and os.path.isdir(os.path.dirname(pause)):
+    open(pause, "a").close()
+    paused = True
+    end = time.time() + 5
+    while holders(tty) and time.time() < end:
+        time.sleep(0.1)
+    if holders(tty):
+        sys.stderr.write(f"[knob-snap] {tty} still held by pid(s) {holders(tty)}\n")
+last_touch = time.time()
+
+def keep_paused():
+    global last_touch
+    if paused and time.time() - last_touch > 10:
+        try:
+            os.utime(pause)
+        except OSError:
+            pass
+        last_touch = time.time()
 # Default DTR/RTS (both asserted) is what the kernel already does on open,
 # so pyserial changes nothing and the S3's USB-JTAG reset logic isn't poked.
-s = serial.Serial(tty, 115200, timeout=0.02)
+try:
+    s = serial.Serial(tty, 115200, timeout=0.02)
+except Exception:
+    if paused:
+        os.unlink(pause)
+    raise
 def pump(seconds, stop=None):
     end = time.time() + seconds
     buf = b""
     while time.time() < end:
+        keep_paused()
         chunk = s.read(65536)
         if not chunk:
             continue
@@ -68,12 +125,17 @@ try:
         pump(log_s)
 finally:
     s.close()
+    if paused:
+        try:
+            os.unlink(pause)
+        except OSError:
+            pass
 '''
 
 
 def run_remote(cmds: list[str], wait_s: float, log_s: float, snap: bool) -> str:
-    argv = ["ssh", PI_HOST, PI_PYTHON, "-", PI_TTY, str(wait_s), str(log_s),
-            "1" if snap else "0", *cmds]
+    argv = ["ssh", PI_HOST, PI_PYTHON, "-", PI_TTY, PI_KNOB_PAUSE, str(wait_s),
+            str(log_s), "1" if snap else "0", *cmds]
     # ssh joins argv with spaces for the remote shell — quote each command.
     quoted = argv[:4] + [_shq(a) for a in argv[4:]]
     res = subprocess.run(quoted, input=REMOTE, capture_output=True, text=True,

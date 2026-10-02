@@ -6,6 +6,10 @@
 # the Pi as /dev/ttyACM0. Unlike ./pi-flash (CYD) there is no autoflash
 # staging: the CYD udev rule only matches CH340 bridges and is left alone.
 #
+# boombox-remote's USB knob bridge normally holds the port; this script
+# creates its pause file (PI_KNOB_PAUSE) for the flash so the bridge lets go,
+# and removes it afterwards (the bridge then re-finds the rebooted knob).
+#
 # NEVER build on the Pi (it browns out). This script builds locally and only
 # runs esptool remotely. It also refuses to flash while the Pi is hot (it has
 # no fan): it waits for `vcgencmd measure_temp` to read below MAX_TEMP_C.
@@ -21,6 +25,7 @@
 # Env overrides:
 #   PI_HOST=root@192.168.1.81       # ssh target (needs root: dialout)
 #   PI_TTY=/dev/ttyACM0
+#   PI_KNOB_PAUSE=/run/user/1000/boombox-knob.pause
 #   PI_ESPTOOL=/home/dietpi/.esptool/bin/esptool
 #   PI_PYTHON=/home/dietpi/.esptool/bin/python   # has pyserial
 #   ENV_NAME=crowpanel-rotary-21
@@ -35,6 +40,7 @@ PI_PYTHON="${PI_PYTHON:-/home/dietpi/.esptool/bin/python}"
 ENV_NAME="${ENV_NAME:-crowpanel-rotary-21}"
 REMOTE_DIR="${REMOTE_DIR:-/tmp/knob}"
 MAX_TEMP_C="${MAX_TEMP_C:-70}"
+PI_KNOB_PAUSE="${PI_KNOB_PAUSE:-/run/user/1000/boombox-knob.pause}"
 
 BUILD=1
 FLASH_ALL=0
@@ -83,6 +89,13 @@ while :; do
 done
 
 ssh "$PI_HOST" "mkdir -p $REMOTE_DIR"
+
+# Pause the USB knob bridge for the flash (it checks twice a second).
+unpause() { ssh "$PI_HOST" "rm -f $PI_KNOB_PAUSE" || true; }
+if ssh "$PI_HOST" "test -d \$(dirname $PI_KNOB_PAUSE) && touch $PI_KNOB_PAUSE"; then
+  trap unpause EXIT
+  sleep 1.5
+fi
 ESPTOOL="$PI_ESPTOOL --chip esp32s3 --port $PI_TTY --baud 921600"
 if [[ $FLASH_ALL -eq 1 ]]; then
   test -n "$BOOT_APP0" || { echo "boot_app0.bin not found under ~/.platformio" >&2; exit 1; }
