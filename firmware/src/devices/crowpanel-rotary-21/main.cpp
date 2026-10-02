@@ -340,12 +340,12 @@ static void registerCommands() {
         const BoardStatus& s = boardStatus();
         Serial.printf("[info] expander=%d panel=%d touch=%d psram=%d heap=%u "
                       "psram_free=%u enc_raw=%ld link=%d connected=%d paired=%d "
-                      "usb=%d power=%s\n",
+                      "usb=%d power=%s boombox=%s\n",
                       s.expander, s.panel, s.touch, s.psram,
                       (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(),
                       (long)encoderRawCount(), (int)gLink,
                       gBle ? (int)gBle->isConnected() : 0, (int)gHaveSaved,
-                      (int)gUsbMode, gApp.powerName());
+                      (int)gUsbMode, gApp.powerName(), gApp.boomboxPowerName());
     });
 }
 

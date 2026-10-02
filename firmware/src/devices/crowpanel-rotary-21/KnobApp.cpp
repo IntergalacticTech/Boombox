@@ -8,8 +8,6 @@ namespace knob {
 namespace {
 
 constexpr uint32_t MENU_IDLE_MS = 5000;
-constexpr uint32_t DIM_AFTER_MS = 30000;
-constexpr uint32_t OFF_AFTER_MS = 120000;
 constexpr uint32_t OPTIMISTIC_HOLD_MS = 1500;
 constexpr uint8_t BL_AWAKE = 204;
 constexpr uint8_t BL_DIM = 28;
@@ -85,6 +83,7 @@ void KnobApp::showTest() {
 void KnobApp::showSearching(const char* title, const char* status) {
     _closeMenu();
     _mode = Mode::Searching;
+    _state_live = false;   // link (re)starting: input timers until a state
     _ui.showSearching(title, status);
 }
 
@@ -93,6 +92,7 @@ void KnobApp::setSearchingStatus(const char* status) { _ui.setSearchingStatus(st
 void KnobApp::startPairing(const String& name, PinCallback on_pin) {
     _closeMenu();
     _mode = Mode::Pair;
+    _state_live = false;
     _on_pin = std::move(on_pin);
     memset(_pin, 0, sizeof _pin);
     _pin_active = 0;
@@ -129,8 +129,11 @@ void KnobApp::_setPower(Power p) {
     Serial.printf("[power] %s\n", powerName());
 }
 
-const char* KnobApp::powerName() const {
-    return _power == Power::Awake ? "awake" : _power == Power::Dim ? "dim" : "off";
+const char* KnobApp::powerName() const { return screenName(_power); }
+
+const char* KnobApp::boomboxPowerName() const {
+    if (!_state_live) return "?";
+    return _state.asleep ? "asleep" : "awake";
 }
 
 void KnobApp::_activity(uint32_t now) { _last_activity = now; }
@@ -265,8 +268,21 @@ void KnobApp::onGesture(Gesture g, uint32_t now) {
 
 // ------------------------------------------------------------------ state
 void KnobApp::onState(const boombox::BoomboxState& s, uint32_t now) {
+    // The screen wakes by itself when the boombox wakes up or starts playing
+    // (restarting the idle timer; tick() applies the screen policy).
+    const bool was_live = _state_live;
+    const bool woke = was_live && _state.asleep && !s.asleep;
+    const bool started = was_live && !_state.playing && s.playing;
+    if (!was_live || _state.asleep != s.asleep)
+        Serial.printf("[power] boombox %s\n", s.asleep ? "asleep" : "awake");
+    if (woke || started) {
+        Serial.printf("[power] boombox %s - waking the screen\n",
+                      woke ? "woke up" : "started playing");
+        _activity(now);
+    }
     _state = s;
     _have_state = true;
+    _state_live = true;
     _vol.reported(s.volume, now);
 
     if (!_theme_applied || s.theme != _theme_tokens) {
@@ -483,9 +499,9 @@ void KnobApp::tick(uint32_t now) {
         }
     }
 
-    const uint32_t idle = now - _last_activity;
-    if (_power == Power::Awake && idle > DIM_AFTER_MS) _setPower(Power::Dim);
-    else if (_power == Power::Dim && idle > OFF_AFTER_MS) _setPower(Power::Off);
+    const Screen want = screenPolicy(_state_live, _state.playing, _state.asleep,
+                                     now - _last_activity);
+    if (want != _power) _setPower(want);
 }
 
 }  // namespace knob

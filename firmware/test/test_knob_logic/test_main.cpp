@@ -4,6 +4,7 @@
 #include "CssColor.h"
 #include "HostLink.h"
 #include "KnobGesture.h"
+#include "ScreenPolicy.h"
 #include "TextFold.h"
 #include "VolumeCoalescer.h"
 #include "VolumeAccel.h"
@@ -291,6 +292,51 @@ void test_json_number() {
     TEST_ASSERT_FALSE(isJsonNumber(nullptr));
 }
 
+// ---------------------------------------------------------- screen policy
+static const uint32_t DIM = SCREEN_DIM_AFTER_MS, OFF = SCREEN_OFF_AFTER_MS;
+
+void test_screen_no_state_uses_input_timers() {
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(false, false, false, 0));
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(false, false, false, DIM));
+    TEST_ASSERT_EQUAL(Screen::Dim, screenPolicy(false, false, false, DIM + 1));
+    TEST_ASSERT_EQUAL(Screen::Dim, screenPolicy(false, false, false, OFF));
+    TEST_ASSERT_EQUAL(Screen::Off, screenPolicy(false, false, false, OFF + 1));
+    // Stale playing/asleep flags are ignored without a live state.
+    TEST_ASSERT_EQUAL(Screen::Off, screenPolicy(false, true, false, OFF + 1));
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(false, false, true, 0));
+}
+
+void test_screen_stays_awake_while_playing() {
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(true, true, false, 0));
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(true, true, false, DIM + 1));
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(true, true, false, OFF + 1));
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(true, true, false, UINT32_MAX));
+}
+
+void test_screen_idle_boombox_dims_but_never_goes_off() {
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(true, false, false, 0));
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(true, false, false, DIM));
+    TEST_ASSERT_EQUAL(Screen::Dim, screenPolicy(true, false, false, DIM + 1));
+    TEST_ASSERT_EQUAL(Screen::Dim, screenPolicy(true, false, false, OFF + 1));
+    TEST_ASSERT_EQUAL(Screen::Dim, screenPolicy(true, false, false, UINT32_MAX));
+}
+
+void test_screen_off_while_boombox_asleep() {
+    // Asleep wins over a stale playing flag.
+    TEST_ASSERT_EQUAL(Screen::Off, screenPolicy(true, false, true, DIM + 1));
+    TEST_ASSERT_EQUAL(Screen::Off, screenPolicy(true, true, true, DIM + 1));
+    // A knob input lights it for the dim window, then it goes straight off.
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(true, false, true, 0));
+    TEST_ASSERT_EQUAL(Screen::Awake, screenPolicy(true, false, true, DIM));
+    TEST_ASSERT_EQUAL(Screen::Off, screenPolicy(true, false, true, DIM + 1));
+}
+
+void test_screen_names() {
+    TEST_ASSERT_EQUAL_STRING("awake", screenName(Screen::Awake));
+    TEST_ASSERT_EQUAL_STRING("dim", screenName(Screen::Dim));
+    TEST_ASSERT_EQUAL_STRING("off", screenName(Screen::Off));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_hex_forms);
@@ -317,5 +363,10 @@ int main(int, char**) {
     RUN_TEST(test_protocol_line_detection);
     RUN_TEST(test_link_window);
     RUN_TEST(test_json_number);
+    RUN_TEST(test_screen_no_state_uses_input_timers);
+    RUN_TEST(test_screen_stays_awake_while_playing);
+    RUN_TEST(test_screen_idle_boombox_dims_but_never_goes_off);
+    RUN_TEST(test_screen_off_while_boombox_asleep);
+    RUN_TEST(test_screen_names);
     return UNITY_END();
 }

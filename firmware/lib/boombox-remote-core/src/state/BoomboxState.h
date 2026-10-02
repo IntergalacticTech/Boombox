@@ -32,6 +32,9 @@ struct BoomboxState {
     String boombox_name;
     String source;                // "mopidy" | "airplay" | "spotify" | "bluetooth" | "movies" | ""
     bool playing = false;
+    // boombox-state's power state ("power": "awake" | "asleep"). Absent or
+    // anything else reads as awake.
+    bool asleep = false;
     TrackInfo track;
     String art_hash;
     String art_url;

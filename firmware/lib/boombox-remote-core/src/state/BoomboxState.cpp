@@ -23,6 +23,7 @@ bool parseStateData(JsonVariantConst dataVar, BoomboxState& out) {
     out.boombox_name = str(data["boombox"]["name"]);
     out.source       = str(data["source"]);
     out.playing      = data["playing"].as<bool>();
+    out.asleep       = str(data["power"]) == "asleep";
 
     if (data["track"].is<JsonObjectConst>()) {
         JsonObjectConst t = data["track"].as<JsonObjectConst>();

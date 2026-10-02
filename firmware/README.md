@@ -79,8 +79,15 @@ live from the active kiosk skin (`theme` in the state payload).
 | Tap centre | Play / pause (in the menu: back) |
 | Tap a menu chip | Choose it |
 
-The backlight dims after 30 s idle and turns off after 2 min; the input that
-wakes it is not acted on. Pairing: the kiosk shows a 6-digit PIN — turn to
+The screen follows the boombox (`lib/knob-logic/src/ScreenPolicy.h`): while
+it plays the screen stays awake; when it's awake but not playing the screen
+dims after 30 s without input and stays dim; while the boombox is asleep
+(`"power": "asleep"` in the state) the screen is off. It wakes by itself when
+the boombox wakes up or starts playing. Without a live state (link down,
+searching, pairing) it dims after 30 s idle and turns off after 2 min. Any
+input lights the screen, and the input that wakes it is not acted on;
+turning the knob while the boombox is asleep only lights the knob — it does
+not wake the boombox. Pairing: the kiosk shows a 6-digit PIN — turn to
 set each digit, click for the next, long press to go back. The pairing is
 stored in NVS and resumed automatically; "Reconnecting…" shows while the
 link is down.

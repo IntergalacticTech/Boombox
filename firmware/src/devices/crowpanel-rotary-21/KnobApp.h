@@ -8,6 +8,7 @@
 #include <functional>
 
 #include "KnobGesture.h"
+#include "ScreenPolicy.h"
 #include "VolumeCoalescer.h"
 #include "state/BoomboxState.h"
 #include "ui/KnobUI.h"
@@ -48,13 +49,16 @@ public:
     // Wake the backlight / reset the idle timer without acting on anything.
     void wake(uint32_t now) { _wakeIfAsleep(now); }
 
-    // Power state, for diagnostics.
+    // Screen power state ("awake" | "dim" | "off"), for diagnostics.
     const char* powerName() const;
+    // The boombox's own power as last reported ("awake" | "asleep" | "?" if
+    // there is no live state).
+    const char* boomboxPowerName() const;
 
 private:
     enum class Mode { Test, Searching, Pair, Face };
     enum class Menu { None, Main, Source };
-    enum class Power { Awake, Dim, Off };
+    using Power = Screen;
 
     // input helpers
     bool _wakeIfAsleep(uint32_t now);
@@ -87,6 +91,10 @@ private:
 
     boombox::BoomboxState _state;
     bool _have_state = false;
+    // A state arrived since the link (re)started; cleared when main.cpp shows
+    // the searching/pairing screens. Drives the screen policy: without a
+    // live state the knob falls back to plain input timers.
+    bool _state_live = false;
     boombox::ThemeTokens _theme_tokens;
     bool _theme_applied = false;
 
