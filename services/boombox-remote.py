@@ -730,11 +730,33 @@ async def main() -> None:
                 log.warning("BLE peripheral failed to start: %s "
                              "(continuing without BLE)", e)
 
+        # USB knob bridge — the rotary knob plugged into the boombox's USB.
+        # Same aggregator + dispatcher as BLE. Like BLE (and unlike the
+        # phone-facing HTTP routes) it is not gated by the remote_access
+        # flag: that flag guards against phones on the WiFi, and a knob
+        # cabled to the box is part of the box. Hardware-optional: with no
+        # knob it idles, retrying every few seconds.
+        knob_task = None
+        if os.environ.get("BOOMBOX_REMOTE_KNOB_USB", "1") == "1":
+            try:
+                from knob_usb import run_knob_usb
+                knob_task = asyncio.create_task(run_knob_usb(
+                    aggregator=agg,
+                    dispatcher=dispatcher,
+                    fire_cb=actions.fire,
+                ))
+                log.info("USB knob bridge starting")
+            except Exception as e:
+                log.warning("USB knob bridge failed to start: %s "
+                             "(continuing without it)", e)
+
         try:
             await asyncio.Event().wait()
         finally:
             if ble_task is not None:
                 ble_task.cancel()
+            if knob_task is not None:
+                knob_task.cancel()
             # Registration is best-effort above, so unregistration is too.
             with contextlib.suppress(Exception):
                 await azc.async_unregister_service(info)

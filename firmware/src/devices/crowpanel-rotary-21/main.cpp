@@ -379,6 +379,7 @@ void setup() {
         if (gLink == Link::Paused) return;   // demo mode owns the face
         gApp.onState(s, millis());
     });
+    gUsb.announce();
 
     gBle = new BleClient();
     // Keep the console, the knob and LVGL alive during the 8 s scans.

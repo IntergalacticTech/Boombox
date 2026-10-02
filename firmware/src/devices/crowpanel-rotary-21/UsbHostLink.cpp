@@ -20,6 +20,18 @@ void UsbHostLink::_writeLine(const String& json) {
     Serial.write(reinterpret_cast<const uint8_t*>(out.c_str()), out.length());
 }
 
+void UsbHostLink::_sendHello() {
+    JsonDocument reply;
+    reply["t"] = "hello";
+    reply["profile"] = PROFILE_ID;
+    reply["fw"] = BOOMBOX_FW_VERSION;
+    String s;
+    serializeJson(reply, s);
+    _writeLine(s);
+}
+
+void UsbHostLink::announce() { _sendHello(); }
+
 void UsbHostLink::handleLine(const char* line, size_t len, uint32_t now) {
     JsonDocument doc;
     if (deserializeJson(doc, line, len) || !doc.is<JsonObjectConst>()) {
@@ -29,13 +41,7 @@ void UsbHostLink::handleLine(const char* line, size_t len, uint32_t now) {
     }
     const char* t = doc["t"] | "";
     if (strcmp(t, "hello") == 0) {
-        JsonDocument reply;
-        reply["t"] = "hello";
-        reply["profile"] = PROFILE_ID;
-        reply["fw"] = BOOMBOX_FW_VERSION;
-        String s;
-        serializeJson(reply, s);
-        _writeLine(s);
+        _sendHello();
         return;
     }
     if (strcmp(t, "state") == 0) {

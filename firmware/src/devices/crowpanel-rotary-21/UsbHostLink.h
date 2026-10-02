@@ -33,6 +33,10 @@ public:
     // Registers with the debug console; call after consoleBegin().
     void begin(StateCallback on_state);
 
+    // Sends the hello line unprompted (at boot), so a host that is already
+    // listening pushes state straight away.
+    void announce();
+
     // One protocol line from the console.
     void handleLine(const char* line, size_t len, uint32_t now);
 
@@ -47,6 +51,7 @@ public:
 
 private:
     void _writeLine(const String& json);
+    void _sendHello();
 
     StateCallback _on_state;
     LinkWindow _window{ACTIVE_WINDOW_MS};

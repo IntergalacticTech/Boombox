@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 import remote_access
+import remote_wire
 from bless import (
     BlessGATTCharacteristic,
     BlessServer,
@@ -56,12 +57,6 @@ COMMAND_UUID       = "0000bbb4-0000-1000-8000-00805f9b34fb"
 # state (track URI, art URL, the theme's font stacks…) runs ~900 bytes, so the
 # BLE copy is trimmed to what remotes use and capped below the limit.
 BLE_STATE_MAX = 510
-# `boombox` (id/name) is also on the device_info characteristic, which is
-# what remotes pair against.
-_BLE_DROP_KEYS = ("art_hash", "art_url", "sources_available", "boombox")
-# Dropped only when falsy — remotes default them to off/unset.
-_BLE_DROP_IF_FALSY = ("recording", "mic_on", "sleep_timer_s")
-_BLE_THEME_KEYS = ("bg", "panel", "ink", "ink2", "accent", "accent2")
 _ELLIPSIS = "…"
 # bless drops the ReadValue offset, so a state value longer than one ATT read
 # response comes back corrupted on a long read (seen live: the CrowPanel knob's
@@ -75,26 +70,15 @@ def ble_state_payload(data: dict, limit: int = BLE_STATE_MAX) -> bytes:
     """Serialise consolidated state as {"ok":true,"data":…} for the BLE
     state characteristic, guaranteed to fit in `limit` bytes.
 
-    Drops fields no remote reads over BLE (art URLs, the source list, the
-    boombox id/name, the track URI, the theme's rule colour and CSS font
-    stacks, false/unset flags), uses compact
+    Drops fields no remote reads (remote_wire.compact_state), uses compact
     UTF-8 JSON, then shortens the longest of album/artist/title (with an
     ellipsis) until it fits.
     """
-    d = {k: v for k, v in data.items()
-         if k not in _BLE_DROP_KEYS
-         and not (k in _BLE_DROP_IF_FALSY and not v)}
+    d = remote_wire.compact_state(data)
     track = d.get("track")
-    if isinstance(track, dict):
-        track = {k: v for k, v in track.items() if k != "uri"}
-        d["track"] = track
-    theme = d.get("theme")
-    if isinstance(theme, dict):
-        d["theme"] = {k: theme[k] for k in _BLE_THEME_KEYS if k in theme}
 
     def encode() -> bytes:
-        return json.dumps({"ok": True, "data": d}, default=str, sort_keys=True,
-                          separators=(",", ":"), ensure_ascii=False).encode()
+        return remote_wire.dumps_compact({"ok": True, "data": d})
 
     out = encode()
     while len(out) > limit and isinstance(track, dict):
