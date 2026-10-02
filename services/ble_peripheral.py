@@ -63,6 +63,12 @@ _BLE_DROP_KEYS = ("art_hash", "art_url", "sources_available", "boombox")
 _BLE_DROP_IF_FALSY = ("recording", "mic_on", "sleep_timer_s")
 _BLE_THEME_KEYS = ("bg", "panel", "ink", "ink2", "accent", "accent2")
 _ELLIPSIS = "…"
+# bless drops the ReadValue offset, so a state value longer than one ATT read
+# response comes back corrupted on a long read (seen live: the CrowPanel knob's
+# initial read parsed as IncompleteInput after ~275 bytes). Notifies are not
+# affected, so the push loop re-sends unchanged state this often and freshly
+# subscribed remotes get a clean copy within a few seconds.
+STATE_RESEND_S = 5.0
 
 
 def ble_state_payload(data: dict, limit: int = BLE_STATE_MAX) -> bytes:
@@ -230,12 +236,20 @@ class BoomboxBlePeripheral:
             )
 
     # --- state push loop -------------------------------------------------
-    async def _push_state_loop(self, interval_s: float = 0.5):
+    async def _push_state_loop(self, interval_s: float = 0.5,
+                               resend_s: float = STATE_RESEND_S,
+                               clock: Callable[[], float] = time.monotonic):
+        last_sent = float("-inf")
         while True:
             try:
                 data = await self._aggregator.consolidated_state()
                 payload = ble_state_payload(data)
-                if payload != self._last_state_json:
+                now = clock()
+                # Re-notify unchanged state every resend_s: a remote that just
+                # subscribed can't rely on its initial read (see
+                # STATE_RESEND_S), so it waits at most this long for state.
+                if payload != self._last_state_json or now - last_sent >= resend_s:
+                    last_sent = now
                     self._last_state_json = payload
                     try:
                         c = self._server.get_characteristic(STATE_UUID)

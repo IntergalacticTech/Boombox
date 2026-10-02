@@ -271,6 +271,15 @@ void BleClient::pumpEvents() {
                    (unsigned)n, ok ? "ok" : "fail",
                    ok ? (int)s.playing : -1,
                    ok ? s.track.title.c_str() : "");
+    if (!ok) {
+        // Show what arrived so a server/firmware mismatch is diagnosable.
+        JsonDocument probe;
+        DeserializationError err = deserializeJson(probe, local, n);
+        Serial.printf("[ble] unparsed state (%s):\n", err.c_str());
+        for (size_t i = 0; i < n; i += 120) {
+            Serial.printf("[ble]   %.*s\n", (int)(n - i < 120 ? n - i : 120), local + i);
+        }
+    }
     if (!ok || !_on_state) return;
     _on_state(s);
 }

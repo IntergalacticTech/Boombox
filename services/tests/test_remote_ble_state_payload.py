@@ -119,3 +119,52 @@ def test_does_not_mutate_the_input():
     before = json.dumps(s, sort_keys=True)
     ble_peripheral.ble_state_payload(s)
     assert json.dumps(s, sort_keys=True) == before
+
+
+def test_push_loop_resends_unchanged_state(monkeypatch):
+    """A remote's initial read of a long value is unreliable (bless drops the
+    ReadValue offset), so unchanged state is re-notified every STATE_RESEND_S."""
+    import asyncio
+
+    class Agg:
+        async def consolidated_state(self):
+            return _state()
+
+    class Server:
+        def __init__(self):
+            self.pushes = 0
+
+        def get_characteristic(self, uuid):
+            return MagicMock()
+
+        def update_value(self, service, uuid):
+            self.pushes += 1
+
+    p = ble_peripheral.BoomboxBlePeripheral.__new__(ble_peripheral.BoomboxBlePeripheral)
+    p._aggregator = Agg()
+    p._server = Server()
+    p._last_state_json = b'{"ok":false}'
+    now = [0.0]
+    ticks = [0]
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(s):
+        now[0] += s
+        ticks[0] += 1
+        if ticks[0] >= 24:          # 24 polls × 0.5 s = 12 s simulated
+            raise asyncio.CancelledError
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    async def run():
+        try:
+            await p._push_state_loop(interval_s=0.5, resend_s=5.0,
+                                     clock=lambda: now[0])
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(run())
+    # First poll sends (changed), then the unchanged state goes out again at
+    # t=5 s and t=10 s — 3 notifies in 12 s, not 24 and not 1.
+    assert p._server.pushes == 3
