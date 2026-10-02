@@ -50,6 +50,69 @@ STATE_UUID         = "0000bbb3-0000-1000-8000-00805f9b34fb"
 COMMAND_UUID       = "0000bbb4-0000-1000-8000-00805f9b34fb"
 
 
+# A GATT attribute value tops out at 512 bytes, and a notify carries at most
+# MTU-3 (514 at the 517 MTU remotes negotiate) — BlueZ silently truncates
+# anything longer, which the remote then fails to parse. The full consolidated
+# state (track URI, art URL, the theme's font stacks…) runs ~900 bytes, so the
+# BLE copy is trimmed to what remotes use and capped below the limit.
+BLE_STATE_MAX = 510
+# `boombox` (id/name) is also on the device_info characteristic, which is
+# what remotes pair against.
+_BLE_DROP_KEYS = ("art_hash", "art_url", "sources_available", "boombox")
+# Dropped only when falsy — remotes default them to off/unset.
+_BLE_DROP_IF_FALSY = ("recording", "mic_on", "sleep_timer_s")
+_BLE_THEME_KEYS = ("bg", "panel", "ink", "ink2", "accent", "accent2")
+_ELLIPSIS = "…"
+
+
+def ble_state_payload(data: dict, limit: int = BLE_STATE_MAX) -> bytes:
+    """Serialise consolidated state as {"ok":true,"data":…} for the BLE
+    state characteristic, guaranteed to fit in `limit` bytes.
+
+    Drops fields no remote reads over BLE (art URLs, the source list, the
+    boombox id/name, the track URI, the theme's rule colour and CSS font
+    stacks, false/unset flags), uses compact
+    UTF-8 JSON, then shortens the longest of album/artist/title (with an
+    ellipsis) until it fits.
+    """
+    d = {k: v for k, v in data.items()
+         if k not in _BLE_DROP_KEYS
+         and not (k in _BLE_DROP_IF_FALSY and not v)}
+    track = d.get("track")
+    if isinstance(track, dict):
+        track = {k: v for k, v in track.items() if k != "uri"}
+        d["track"] = track
+    theme = d.get("theme")
+    if isinstance(theme, dict):
+        d["theme"] = {k: theme[k] for k in _BLE_THEME_KEYS if k in theme}
+
+    def encode() -> bytes:
+        return json.dumps({"ok": True, "data": d}, default=str, sort_keys=True,
+                          separators=(",", ":"), ensure_ascii=False).encode()
+
+    out = encode()
+    while len(out) > limit and isinstance(track, dict):
+        fields = [k for k in ("album", "artist", "title")
+                  if isinstance(track.get(k), str) and track[k]]
+        if not fields:
+            break
+        # Longest first; on a tie album gives way before artist before title.
+        key = max(fields, key=lambda k: (len(track[k].encode()),
+                                         k == "album", k == "artist"))
+        raw = track[key].encode()
+        keep = len(raw) - (len(out) - limit) - len(_ELLIPSIS.encode())
+        # Never wipe a long field in one go — halve it and let the next
+        # longest share the cut.
+        keep = max(keep, len(raw) // 2 if len(raw) > 32 else 0)
+        track[key] = (raw[:keep].decode("utf-8", "ignore") + _ELLIPSIS
+                      if keep > 0 else "")
+        out = encode()
+    if len(out) > limit:
+        d.pop("theme", None)
+        out = encode()
+    return out
+
+
 class BoomboxBlePeripheral:
     """Wraps a BlessServer for the boombox-remote BLE protocol."""
 
@@ -171,8 +234,7 @@ class BoomboxBlePeripheral:
         while True:
             try:
                 data = await self._aggregator.consolidated_state()
-                payload = json.dumps({"ok": True, "data": data}, default=str,
-                                      sort_keys=True).encode()
+                payload = ble_state_payload(data)
                 if payload != self._last_state_json:
                     self._last_state_json = payload
                     try:
