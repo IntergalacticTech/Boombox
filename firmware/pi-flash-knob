@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# pi-flash-knob — build the CrowPanel 2.1" rotary-knob firmware on the Mac,
+# ship the images to the Pi and flash the knob plugged into the Pi's USB.
+#
+# The knob's ESP32-S3 uses its native USB-Serial/JTAG port, which shows up on
+# the Pi as /dev/ttyACM0. Unlike ./pi-flash (CYD) there is no autoflash
+# staging: the CYD udev rule only matches CH340 bridges and is left alone.
+#
+# NEVER build on the Pi (it browns out). This script builds locally and only
+# runs esptool remotely. It also refuses to flash while the Pi is hot (it has
+# no fan): it waits for `vcgencmd measure_temp` to read below MAX_TEMP_C.
+#
+# Usage:
+#   ./pi-flash-knob                 # build + flash app only (0x10000)
+#   ./pi-flash-knob --all           # build + flash bootloader, partitions,
+#                                   #   boot_app0 and app (first flash, or
+#                                   #   after a partition-table change)
+#   ./pi-flash-knob --no-build      # flash whatever is in .pio/build
+#   ./pi-flash-knob --monitor       # flash, then tail serial for 20 s
+#
+# Env overrides:
+#   PI_HOST=root@192.168.1.81       # ssh target (needs root: dialout)
+#   PI_TTY=/dev/ttyACM0
+#   PI_ESPTOOL=/home/dietpi/.esptool/bin/esptool
+#   PI_PYTHON=/home/dietpi/.esptool/bin/python   # has pyserial
+#   ENV_NAME=crowpanel-rotary-21
+#   MAX_TEMP_C=70
+
+set -euo pipefail
+
+PI_HOST="${PI_HOST:-root@192.168.1.81}"
+PI_TTY="${PI_TTY:-/dev/ttyACM0}"
+PI_ESPTOOL="${PI_ESPTOOL:-/home/dietpi/.esptool/bin/esptool}"
+PI_PYTHON="${PI_PYTHON:-/home/dietpi/.esptool/bin/python}"
+ENV_NAME="${ENV_NAME:-crowpanel-rotary-21}"
+REMOTE_DIR="${REMOTE_DIR:-/tmp/knob}"
+MAX_TEMP_C="${MAX_TEMP_C:-70}"
+
+BUILD=1
+FLASH_ALL=0
+MONITOR=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-build) BUILD=0 ;;
+    --all)      FLASH_ALL=1 ;;
+    --monitor)  MONITOR=1 ;;
+    -h|--help)
+      sed -n '2,/^$/p' "$0" | sed -e 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *) echo "unknown arg: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+
+cd "$(dirname "$0")"
+
+if [[ $BUILD -eq 1 ]]; then
+  echo "[pi-flash-knob] building $ENV_NAME (on this machine)…"
+  # The CYD env (espressif32 6.x) and this one (pioarduino) share package
+  # slots, so the first build after switching envs can fail while PlatformIO
+  # swaps tool-esptoolpy/framework packages. A second run succeeds.
+  pio run -e "$ENV_NAME" || pio run -e "$ENV_NAME"
+fi
+
+BUILD_DIR=".pio/build/$ENV_NAME"
+for f in firmware.bin bootloader.bin partitions.bin; do
+  test -f "$BUILD_DIR/$f" || { echo "missing $BUILD_DIR/$f — build first" >&2; exit 1; }
+done
+
+# boot_app0 selects app0 in otadata; it ships with the Arduino core.
+BOOT_APP0="$(ls ~/.platformio/packages/framework-arduinoespressif32*/tools/partitions/boot_app0.bin 2>/dev/null | head -1 || true)"
+
+# Heat gate — MarkII has no fan.
+while :; do
+  t="$(ssh "$PI_HOST" vcgencmd measure_temp | sed -E 's/[^0-9.]//g')"
+  if awk -v t="$t" -v m="$MAX_TEMP_C" 'BEGIN { exit !(t < m) }'; then
+    echo "[pi-flash-knob] Pi at ${t}°C — ok to flash"
+    break
+  fi
+  echo "[pi-flash-knob] Pi at ${t}°C (≥ ${MAX_TEMP_C}°C) — waiting 30 s…"
+  sleep 30
+done
+
+ssh "$PI_HOST" "mkdir -p $REMOTE_DIR"
+ESPTOOL="$PI_ESPTOOL --chip esp32s3 --port $PI_TTY --baud 921600"
+if [[ $FLASH_ALL -eq 1 ]]; then
+  test -n "$BOOT_APP0" || { echo "boot_app0.bin not found under ~/.platformio" >&2; exit 1; }
+  rsync -az "$BUILD_DIR/bootloader.bin" "$BUILD_DIR/partitions.bin" \
+            "$BUILD_DIR/firmware.bin" "$BOOT_APP0" "$PI_HOST:$REMOTE_DIR/"
+  echo "[pi-flash-knob] flashing bootloader + partitions + boot_app0 + app…"
+  ssh "$PI_HOST" "cd $REMOTE_DIR && $ESPTOOL write-flash \
+      0x0 bootloader.bin 0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 firmware.bin"
+else
+  rsync -az "$BUILD_DIR/firmware.bin" "$PI_HOST:$REMOTE_DIR/"
+  echo "[pi-flash-knob] flashing app at 0x10000…"
+  ssh "$PI_HOST" "cd $REMOTE_DIR && $ESPTOOL write-flash 0x10000 firmware.bin"
+fi
+echo "[pi-flash-knob] done."
+
+if [[ $MONITOR -eq 1 ]]; then
+  echo "[pi-flash-knob] serial for 20 s…"
+  python3 "$(dirname "$0")/tools/knob-snap.py" --log 20 || true
+fi
