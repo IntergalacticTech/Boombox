@@ -11,6 +11,12 @@ import { SimpleAudio } from "../skins/simple/Simple";
 import { MeterAudio } from "../skins/meter/Meter";
 import { SpectrumAudio } from "../skins/spectrum/Spectrum";
 import { TapeshiftAudio } from "../skins/tapeshift/Tapeshift";
+import { DeparturesAudio, DEPARTURES_THEME, DEPARTURES_SWATCH } from "../skins/departures/Departures";
+import { PlacardAudio, PLACARD_THEME, PLACARD_SWATCH } from "../skins/placard/Placard";
+import { PosterAudio, POSTER_THEME, POSTER_SWATCH } from "../skins/poster/Poster";
+import { NightstandAudio, NIGHTSTAND_THEME, NIGHTSTAND_SWATCH } from "../skins/nightstand/Nightstand";
+import { PocketLcdAudio, POCKETLCD_THEME, POCKETLCD_SWATCH } from "../skins/pocketlcd/PocketLcd";
+import { SelectorAudio, SELECTOR_THEME, SELECTOR_SWATCH } from "../skins/selector/Selector";
 
 /** Skin-chrome API: identity + actions a skin needs to integrate its chrome
  * with the rest of the boombox (home, library, queue, skin picker, settings). Each skin renders
@@ -161,6 +167,54 @@ export const SKINS: SkinMeta[] = [
       font: INTER, mono: MONO,
     },
     Audio: TapeshiftAudio,
+  },
+  {
+    id: "departures",
+    name: "Departures",
+    blurb: "Split-flap departure board · black, bone + signal yellow",
+    swatch: DEPARTURES_SWATCH,
+    theme: DEPARTURES_THEME,
+    Audio: DeparturesAudio,
+  },
+  {
+    id: "placard",
+    name: "Placard",
+    blurb: "Gallery wall · the cover hung as a work, the track as its label",
+    swatch: PLACARD_SWATCH,
+    theme: PLACARD_THEME,
+    Audio: PlacardAudio,
+  },
+  {
+    id: "poster",
+    name: "Poster",
+    blurb: "Swiss concert poster · giant type on a red column",
+    swatch: POSTER_SWATCH,
+    theme: POSTER_THEME,
+    Audio: PosterAudio,
+  },
+  {
+    id: "nightstand",
+    name: "Nightstand",
+    blurb: "Bedside face for dark rooms · ember on near-black, one big button",
+    swatch: NIGHTSTAND_SWATCH,
+    theme: NIGHTSTAND_THEME,
+    Audio: NightstandAudio,
+  },
+  {
+    id: "pocketlcd",
+    name: "Pocket LCD",
+    blurb: "Reflective calculator LCD · ghost segments + rubber keys",
+    swatch: POCKETLCD_SWATCH,
+    theme: POCKETLCD_THEME,
+    Audio: PocketLcdAudio,
+  },
+  {
+    id: "selector",
+    name: "Selector",
+    blurb: "Jukebox title strip · 45 rpm label + push buttons",
+    swatch: SELECTOR_SWATCH,
+    theme: SELECTOR_THEME,
+    Audio: SelectorAudio,
   },
 ];
 
