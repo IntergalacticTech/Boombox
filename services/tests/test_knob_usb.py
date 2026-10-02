@@ -157,7 +157,7 @@ def test_state_line_is_compact_one_line_and_uncapped():
     line = knob_usb.usb_state_line({
         "boombox": {"id": "x"}, "art_url": "/a.jpg", "recording": False,
         "track": {"uri": "u", "title": long_title}, "volume": 0.5,
-        "theme": {"bg": "#000", "font": "x"}})
+        "power": "asleep", "theme": {"bg": "#000", "font": "x"}})
     assert line.endswith(b"\n") and line.count(b"\n") == 1
     msg = json.loads(line)
     assert msg["t"] == "state"
@@ -165,6 +165,7 @@ def test_state_line_is_compact_one_line_and_uncapped():
     assert d["track"] == {"title": long_title}        # no 512 B trim
     assert "boombox" not in d and "art_url" not in d and "recording" not in d
     assert d["theme"] == {"bg": "#000"}
+    assert d["power"] == "asleep"                     # the knob follows it
 
 
 # -------------------------------------------------------------- discovery

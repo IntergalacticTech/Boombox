@@ -210,7 +210,7 @@ class StateAggregator:
             else asyncio.sleep(0)
         )
         (source, track_info, state_info, position_info, vol_info, karaoke,
-         theme_payload, random_info, repeat_info, single_info, _) = (
+         theme_payload, random_info, repeat_info, single_info, power, _) = (
             await asyncio.gather(
                 self._state.current_source(),
                 self._mopidy.call("core.playback.get_current_track"),
@@ -222,6 +222,7 @@ class StateAggregator:
                 self._mopidy.call("core.tracklist.get_random"),
                 self._mopidy.call("core.tracklist.get_repeat"),
                 self._mopidy.call("core.tracklist.get_single"),
+                self._state.power(),
                 sleep_refresh,
             )
         )
@@ -265,6 +266,9 @@ class StateAggregator:
             },
             "source": source,
             "playing": playing_state == "playing",
+            # boombox-state's PowerManager ("awake"/"asleep"); remotes
+            # follow it (the knob turns its screen off while asleep).
+            "power": power,
             "track": {
                 "uri":        track.get("uri"),
                 "title":      track.get("name"),

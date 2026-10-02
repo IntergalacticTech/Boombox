@@ -25,7 +25,7 @@ def _state(**track_over) -> dict:
     track.update(track_over)
     return {
         "boombox": {"id": "bb-1234abcd", "name": "MarkII", "version": 1},
-        "source": "mopidy", "playing": True, "track": track,
+        "source": "mopidy", "playing": True, "power": "awake", "track": track,
         "art_hash": None, "art_url": "/local/" + "f" * 64 + ".jpeg",
         "volume": 0.42, "muted": False, "shuffle": True, "repeat": "all",
         "sources_available": ["mopidy", "airplay", "spotify", "bluetooth",
@@ -168,3 +168,17 @@ def test_push_loop_resends_unchanged_state(monkeypatch):
     # First poll sends (changed), then the unchanged state goes out again at
     # t=5 s and t=10 s — 3 notifies in 12 s, not 24 and not 1.
     assert p._server.pushes == 3
+
+
+def test_power_survives_compaction_and_trimming():
+    import remote_wire
+    for power in ("awake", "asleep"):
+        st = _state()
+        st["power"] = power
+        assert remote_wire.compact_state(st)["power"] == power
+        # Even when the track strings have to be cut to fit.
+        long = _state(title="T" * 300, artist="A" * 300, album="B" * 300)
+        long["power"] = power
+        out = ble_peripheral.ble_state_payload(long)
+        assert len(out) <= ble_peripheral.BLE_STATE_MAX
+        assert json.loads(out)["data"]["power"] == power

@@ -96,6 +96,15 @@ class StateApi:
         except Exception as e:
             log.warning("state.control(%s) failed: %s", action, e)
 
+    async def power(self) -> str:
+        """boombox-state's power state as "awake" or "asleep", for the
+        consolidated remote state. Anything unknown (service down, power
+        manager unavailable, odd body) reports "awake" — remotes turn their
+        screen off on asleep, so a wrong "asleep" is the worse failure."""
+        snap = await self.power_state()
+        state = snap.get("state") if isinstance(snap, dict) else None
+        return "asleep" if state == "asleep" else "awake"
+
     async def volume_get(self) -> tuple[float, bool] | None:
         try:
             async with self._sess.get(f"{STATE_BASE}/volume",
