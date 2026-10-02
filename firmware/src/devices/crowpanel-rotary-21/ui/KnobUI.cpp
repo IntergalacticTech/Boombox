@@ -287,6 +287,10 @@ void KnobUI::_restyle() {
     lv_obj_set_style_bg_color(_vol_arc, _muted ? _t.accent_dim : _t.accent,
                               LV_PART_KNOB);
     lv_obj_set_style_border_color(_vol_arc, _t.bg, LV_PART_KNOB);
+    // No thumb until the boombox has told us its volume.
+    const lv_opa_t knob_opa = _vol < 0 ? LV_OPA_TRANSP : LV_OPA_COVER;
+    lv_obj_set_style_bg_opa(_vol_arc, knob_opa, LV_PART_KNOB);
+    lv_obj_set_style_border_opa(_vol_arc, knob_opa, LV_PART_KNOB);
     lv_obj_set_style_arc_color(_prog_arc, _t.track, LV_PART_MAIN);
     lv_obj_set_style_arc_color(_prog_arc, _t.accent2, LV_PART_INDICATOR);
     lv_obj_set_style_text_color(_f_vol_label, _muted ? _t.accent : _t.ink2, 0);
@@ -391,7 +395,7 @@ void KnobUI::setNowPlaying(const NowPlaying& np) {
 
 void KnobUI::setVolume(int v, bool muted) {
     if (v == _vol && muted == _muted) return;
-    const bool restyle = muted != _muted;
+    const bool restyle = muted != _muted || (v < 0) != (_vol < 0);
     _vol = v;
     _muted = muted;
     lv_arc_set_value(_vol_arc, v < 0 ? 0 : (v > 100 ? 100 : v));
