@@ -145,6 +145,11 @@ export function PosterAudio({
   const paused = hasTrack && !playing;
   const isAux = !track && chrome?.sourceLabel === "AUX";
   const idle = !track && !isAux;
+  // Tracks queued but none loaded (paused with no current track): Play
+  // starts the queue, so this is a ready state, not "Nothing queued".
+  const queueCount = chrome?.queueCount ?? 0;
+  const ready = idle && !chrome?.sourceLive && queueCount > 0;
+  const readyLine = `${queueCount} ${queueCount === 1 ? "track" : "tracks"} queued · press play`;
   // LIVE lights only for radio: a length-less track playing through the
   // library (Mopidy). chrome.sourceLive is true for every external source
   // (AirPlay, Spotify, Bluetooth, AUX), which the design never tags LIVE.
@@ -156,8 +161,9 @@ export function PosterAudio({
   const pct = seekable ? Math.min(1, Math.max(0, elapsed / len)) : 0;
   const showTime = hasTrack && (seekable || live);
 
-  const title = track ? track.title : idle ? "Nothing queued" : "Line-in";
-  const artist = track ? track.artist : idle ? "Open the Library to choose music" : "Playing from the AUX jack";
+  const title = track ? track.title : ready ? "Ready to play" : idle ? "Nothing queued" : "Line-in";
+  const artist = track ? track.artist
+    : ready ? readyLine : idle ? "Open the Library to choose music" : "Playing from the AUX jack";
   const album = track?.album ?? "";
   const initial = ((track?.album || track?.title || "?").trim()[0] ?? "?").toUpperCase();
   const ctlOp = hasTrack ? 1 : 0.35;
@@ -225,17 +231,17 @@ export function PosterAudio({
         </div>
 
         <div style={{ position: "absolute", left: 24, top: 576, width: 352, height: 180,
-          display: "flex", alignItems: "center", gap: 8, opacity: ctlOp }}>
-          <button type="button" aria-label="Previous" onClick={onPrev} style={{ ...resetBtn,
+          display: "flex", alignItems: "center", gap: 8 }}>
+          <button type="button" aria-label="Previous" onClick={onPrev} style={{ ...resetBtn, opacity: ctlOp,
             width: 88, height: 160, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <PrevGlyph/>
           </button>
           <button type="button" aria-label={playing ? "Pause" : "Play"} onClick={onToggle} style={{ ...resetBtn,
-            width: 160, height: 160, background: P.white,
+            opacity: hasTrack || ready ? 1 : 0.35, width: 160, height: 160, background: P.white,
             display: "flex", alignItems: "center", justifyContent: "center" }}>
             {playing ? <PauseGlyph/> : <PlayGlyph/>}
           </button>
-          <button type="button" aria-label="Next" onClick={onNext} style={{ ...resetBtn,
+          <button type="button" aria-label="Next" onClick={onNext} style={{ ...resetBtn, opacity: ctlOp,
             width: 88, height: 160, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <NextGlyph/>
           </button>

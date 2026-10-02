@@ -207,4 +207,28 @@ describe("Selector skin", () => {
     );
     expect(getByTestId("selector-fallback-label")).toHaveTextContent("H");
   });
+
+  it("tracks queued but none loaded shows a ready state with Play enabled", () => {
+    const onToggle = vi.fn();
+    const chrome = makeChrome({ sourceLabel: "LIBRARY", sourceLive: false, queueCount: 10 });
+    const { getByRole, container, rerender } = render(
+      <SelectorAudio track={null} state="paused" elapsed={0} volume={50} chrome={chrome} onToggle={onToggle}/>,
+    );
+    const text = container.textContent ?? "";
+    expect(text).toMatch(/ready to play/i);
+    expect(text).toMatch(/10 tracks queued/i);
+    expect(text).not.toMatch(/nothing queued/i);
+    const play = getByRole("button", { name: "Play" });
+    expect(play).toBeEnabled();
+    // Neither Play nor any ancestor is dimmed.
+    for (let el: HTMLElement | null = play; el && el !== container; el = el.parentElement) {
+      expect(Number(el.style.opacity || 1)).toBe(1);
+    }
+    fireEvent.click(play);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+
+    rerender(<SelectorAudio track={null} state="paused" elapsed={0} volume={50}
+      chrome={makeChrome({ sourceLabel: "LIBRARY", sourceLive: false, queueCount: 1 })} onToggle={onToggle}/>);
+    expect(container.textContent).toMatch(/1 track queued/i);
+  });
 });

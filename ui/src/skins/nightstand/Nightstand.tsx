@@ -89,6 +89,12 @@ export function NightstandAudio({
   const srcColor = chrome?.sourceColor ?? UNKNOWN_SRC;
   const aux = !hasTrack && source === "AUX";
   const idle = !hasTrack && !aux;
+  // Tracks queued but none loaded (paused with no current track): Play
+  // starts the queue, so this is a ready state, not "Nothing queued".
+  const queueCount = chrome?.queueCount ?? 0;
+  const ready = idle && !chrome?.sourceLive && queueCount > 0;
+  const readyLine = `${queueCount} ${queueCount === 1 ? "track" : "tracks"} queued · press play`;
+  const canPlay = hasTrack || ready;
   const len = track && track.len > 0 ? track.len : 0;
   // LIVE is radio only: a length-less stream playing through Mopidy (the
   // LIBRARY source). External sources (AirPlay, Spotify, Bluetooth) set
@@ -99,8 +105,9 @@ export function NightstandAudio({
   const pct = len ? el / len : 0;
   const showTime = hasTrack && (len > 0 || live);
 
-  const title = track ? track.title : idle ? "Nothing queued" : "Line-in";
-  const artist = track ? track.artist : idle ? "Open the Library to choose music" : "Playing from the AUX jack";
+  const title = track ? track.title : ready ? "Ready to play" : idle ? "Nothing queued" : "Line-in";
+  const artist = track ? track.artist
+    : ready ? readyLine : idle ? "Open the Library to choose music" : "Playing from the AUX jack";
   const album = track?.album ?? "";
   const initial = ((track?.album || track?.title || "?").trim()[0] ?? "?").toUpperCase();
   const word = playing ? "PLAYING" : paused ? "PAUSED" : idle ? "" : "LINE-IN";
@@ -123,13 +130,13 @@ export function NightstandAudio({
       <button
         aria-label={playing ? "Pause" : "Play"}
         onClick={onToggle}
-        disabled={!hasTrack}
+        disabled={!canPlay}
         style={{
           ...resetBtn,
           position: "absolute", left: 110, top: 150, width: 300, height: 300,
           boxSizing: "border-box", borderRadius: "50%", border: `4px solid ${C.ember}`,
           display: "flex", alignItems: "center", justifyContent: "center",
-          opacity: ctlOp, cursor: hasTrack ? "pointer" : "default",
+          opacity: canPlay ? 1 : 0.35, cursor: canPlay ? "pointer" : "default",
         }}
       >
         <span aria-hidden="true" style={{

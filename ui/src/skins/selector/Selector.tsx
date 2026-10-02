@@ -150,6 +150,11 @@ export function SelectorAudio({
   const paused = !!track && !playing;
   const isAux = !track && chrome?.sourceLabel === "AUX";
   const idle = !track && !isAux;
+  // Tracks queued but none loaded (paused with no current track): Play
+  // starts the queue, so this is a ready state, not "Nothing queued".
+  const queueCount = chrome?.queueCount ?? 0;
+  const ready = idle && !chrome?.sourceLive && queueCount > 0;
+  const readyLine = `${queueCount} ${queueCount === 1 ? "track" : "tracks"} queued · press play`;
   const len = track && track.len > 0 ? track.len : 0;
   // Radio = a library (Mopidy) stream with no length. Only radio is LIVE;
   // external sources (AirPlay, Spotify, Bluetooth, AUX) have no meaningful
@@ -161,8 +166,9 @@ export function SelectorAudio({
   const pct = len ? Math.min(1, el / len) : 0;
   const seekable = len > 0 && !!onSeek;
 
-  const title = track ? track.title : idle ? "Nothing queued" : "Line-in";
-  const artist = track ? track.artist : idle ? "Open the Library to choose music" : "Playing from the AUX jack";
+  const title = track ? track.title : ready ? "Ready to play" : idle ? "Nothing queued" : "Line-in";
+  const artist = track ? track.artist
+    : ready ? readyLine : idle ? "Open the Library to choose music" : "Playing from the AUX jack";
   const album = track?.album ?? "";
   const srcColor = chrome?.sourceColor ?? C.idle;
 
@@ -276,7 +282,7 @@ export function SelectorAudio({
         <Key label="Previous" w={156} h={126} bg={C.panel} fg={C.ink} onClick={onPrev}
           disabled={!track} dim={!track}><Glyph d={ICONS.prev} size={48} fill={C.ink} /></Key>
         <Key label={playing ? "Pause" : "Play"} w={266} h={134} bg={C.red} fg={C.panel} onClick={onToggle}
-          disabled={!track} dim={!track}>
+          disabled={!track && !ready} dim={!track && !ready}>
           <Glyph d={playing ? ICONS.pause : ICONS.play} size={72} fill={C.panel} />
         </Key>
         <Key label="Next" w={156} h={126} bg={C.panel} fg={C.ink} onClick={onNext}

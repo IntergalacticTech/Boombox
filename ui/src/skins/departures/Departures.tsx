@@ -158,6 +158,11 @@ export function DeparturesAudio({
   // "Idle" = nothing loaded and no external source feeding the speakers.
   const isIdle = !track && !isAux && (!chrome || !chrome.sourceLive || source === "IDLE" || source === "LIBRARY");
   const external = !track && !isAux && !isIdle; // e.g. Bluetooth with no metadata
+  // Tracks sit in the queue but none is loaded (e.g. paused with no current
+  // track): Play starts the queue, so offer it instead of "Nothing queued".
+  const queueCount = chrome?.queueCount ?? 0;
+  const ready = isIdle && queueCount > 0;
+  const readyLine = `${queueCount} ${queueCount === 1 ? "track" : "tracks"} queued · press play`;
   // LIVE marks radio only: a length-less track playing from the library
   // source (our own player). chrome.sourceLive is true for every external
   // source (AirPlay, Spotify, Bluetooth, AUX), which never shows LIVE.
@@ -167,9 +172,10 @@ export function DeparturesAudio({
 
   const prettySource = source ? source.charAt(0) + source.slice(1).toLowerCase() : "";
   const title = track ? track.title
-    : isAux ? "Line-in" : external ? prettySource : "Nothing queued";
+    : isAux ? "Line-in" : external ? prettySource : ready ? "Ready to play" : "Nothing queued";
   const artist = track ? track.artist
-    : isAux ? "Playing from the AUX jack" : external ? `Playing via ${prettySource}` : "Open the Library to choose music";
+    : isAux ? "Playing from the AUX jack" : external ? `Playing via ${prettySource}`
+    : ready ? readyLine : "Open the Library to choose music";
   const album = track?.album ?? "";
 
   // Elapsed shows for timed tracks and counts up for radio streams.
@@ -188,7 +194,7 @@ export function DeparturesAudio({
   const statusFg = paused || stateWord === "PLAYING" ? C.bg : C.ink2;
 
   const ctlDisabled = !track;
-  const queueCount = chrome?.queueCount ?? 0;
+  const playDisabled = !track && !ready;
   const skinName = (chrome?.skinName ?? "Departures").toUpperCase();
 
   const toggleStyle = (on: boolean): React.CSSProperties => ({
@@ -319,15 +325,15 @@ export function DeparturesAudio({
           }}>VOL {Math.round(volume)}</div>
         )}
         <div style={{ flex: 1 }}/>
-        <div style={{ display: "flex", gap: 12, opacity: ctlDisabled ? 0.35 : 1 }}>
+        <div style={{ display: "flex", gap: 12 }}>
           <button aria-label="Previous" disabled={ctlDisabled} onClick={onPrev}
-            style={{ ...BTN, width: 112, height: 112, background: C.panel, cursor: ctlDisabled ? "default" : "pointer" }}><PrevIcon/></button>
-          <button aria-label={playing ? "Pause" : "Play"} disabled={ctlDisabled} onClick={onToggle}
-            style={{ ...BTN, width: 180, height: 112, background: C.yellow, cursor: ctlDisabled ? "default" : "pointer" }}>
+            style={{ ...BTN, width: 112, height: 112, background: C.panel, opacity: ctlDisabled ? 0.35 : 1, cursor: ctlDisabled ? "default" : "pointer" }}><PrevIcon/></button>
+          <button aria-label={playing ? "Pause" : "Play"} disabled={playDisabled} onClick={onToggle}
+            style={{ ...BTN, width: 180, height: 112, background: C.yellow, opacity: playDisabled ? 0.35 : 1, cursor: playDisabled ? "default" : "pointer" }}>
             <PlayPauseIcon playing={playing && !!track}/>
           </button>
           <button aria-label="Next" disabled={ctlDisabled} onClick={onNext}
-            style={{ ...BTN, width: 112, height: 112, background: C.panel, cursor: ctlDisabled ? "default" : "pointer" }}><NextIcon/></button>
+            style={{ ...BTN, width: 112, height: 112, background: C.panel, opacity: ctlDisabled ? 0.35 : 1, cursor: ctlDisabled ? "default" : "pointer" }}><NextIcon/></button>
         </div>
       </div>
 

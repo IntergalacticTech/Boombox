@@ -219,6 +219,11 @@ export function PocketLcdAudio({
   const source = chrome?.sourceLabel ?? "";
   const isAux = !track && source === "AUX";
   const isIdle = !track && !isAux;
+  // Tracks queued but none loaded (paused with no current track): Play
+  // starts the queue, so this is a ready state, not "Nothing queued".
+  const queueCount = chrome?.queueCount ?? 0;
+  const ready = isIdle && !chrome?.sourceLive && queueCount > 0;
+  const readyLine = `${queueCount} ${queueCount === 1 ? "track" : "tracks"} queued · press play`;
   const len = track && track.len > 0 ? track.len : 0;
   // Radio: a length-less stream playing from the library. External sources
   // (AirPlay, Spotify, Bluetooth) are never "live" here, as in the design.
@@ -228,8 +233,9 @@ export function PocketLcdAudio({
   const ghostTime = time ? time.replace(/\d/g, "8") : "88:88";
   const fraction = len > 0 ? Math.max(0, Math.min(1, elapsed / len)) : 0;
 
-  const title = track ? track.title : isAux ? "Line-in" : "Nothing queued";
-  const artist = track ? track.artist : isAux ? "Playing from the AUX jack" : "Open the Library to choose music";
+  const title = track ? track.title : isAux ? "Line-in" : ready ? "Ready to play" : "Nothing queued";
+  const artist = track ? track.artist
+    : isAux ? "Playing from the AUX jack" : ready ? readyLine : "Open the Library to choose music";
   const knownSource = SOURCES.some(s => s.id === source);
   const extraSource = chrome && !knownSource && source && source !== "IDLE" ? source : null;
   const volStr = volume != null ? `VOL ${String(Math.round(volume)).padStart(3, " ")}` : "VOL";
@@ -343,7 +349,7 @@ export function PocketLcdAudio({
           <svg width="40" height="40" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2.5v14H6zM20 5v14L9 12z" fill={LCD.keyInk}/></svg>
         </Key>
         <Key label={playing ? "Pause" : "Play"} onClick={onToggle} width={176} height={136} radius={18}
-          bg={LCD.accent} hi={LCD.accentHi} dim={!track}>
+          bg={LCD.accent} hi={LCD.accentHi} dim={!track && !ready}>
           {playing
             ? <svg width="64" height="64" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h4v16H6zM14 4h4v16h-4z" fill="#FFFFFF"/></svg>
             : <svg width="64" height="64" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z" fill="#FFFFFF"/></svg>}

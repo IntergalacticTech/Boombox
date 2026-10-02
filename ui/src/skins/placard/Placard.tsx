@@ -148,6 +148,11 @@ export function PlacardAudio({
   const isAux = !track && source === "AUX";
   // No track and no external source feeding the speakers: nothing queued.
   const isIdle = !track && !isAux && (!external || source === "IDLE");
+  // Tracks queued but none loaded (paused with no current track): Play
+  // starts the queue, so this is a ready state, not "Nothing queued".
+  const queueCount = chrome?.queueCount ?? 0;
+  const ready = isIdle && queueCount > 0;
+  const readyLine = `${queueCount} ${queueCount === 1 ? "track" : "tracks"} queued · press play`;
   // A Mopidy stream with no length is radio: live, counting up, not seekable.
   // External sources (AirPlay etc.) also report len 0 but aren't "LIVE".
   const live = !!track && track.len === 0 && !external;
@@ -157,9 +162,10 @@ export function PlacardAudio({
   const pct = len > 0 ? Math.min(1, Math.max(0, elapsed / len)) : 0;
 
   const srcName = titleCase(source);
-  const title = track ? track.title : isIdle ? "Nothing queued" : isAux ? "Line-in" : srcName;
+  const title = track ? track.title : ready ? "Ready to play" : isIdle ? "Nothing queued" : isAux ? "Line-in" : srcName;
   const artist = track
     ? track.artist
+    : ready ? readyLine
     : isIdle ? "Open the Library to choose music"
     : isAux ? "Playing from the AUX jack" : `Playing from ${srcName}`;
   const album = track?.album ?? "";
@@ -193,7 +199,7 @@ export function PlacardAudio({
           ) : (
             <EmptyMat
               label={isIdle ? "Open Library" : isAux ? "AUX in" : srcName}
-              sub={isIdle ? "Nothing queued" : "No track data"}
+              sub={ready ? "Ready to play" : isIdle ? "Nothing queued" : "No track data"}
               onClick={isIdle ? chrome?.onOpenLibrary : undefined}
             />
           )}
@@ -286,17 +292,18 @@ export function PlacardAudio({
           </div>
         )}
         <div style={{ flex: 1 }}/>
-        <div style={{ display: "flex", alignItems: "center", gap: 20, opacity: track ? 1 : 0.35 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
           <button type="button" aria-label="Previous" onClick={onPrev} style={{
-            ...BTN_RESET, width: 92, height: 92, borderRadius: "50%", boxSizing: "border-box",
+            ...BTN_RESET, opacity: track ? 1 : 0.35, width: 92, height: 92, borderRadius: "50%", boxSizing: "border-box",
             border: `2px solid ${C.ink}`, display: "flex", alignItems: "center", justifyContent: "center",
           }}><PrevGlyph/></button>
           <button type="button" aria-label={playing ? "Pause" : "Play"} onClick={onToggle} style={{
-            ...BTN_RESET, width: 112, height: 112, borderRadius: "50%", background: C.ink,
+            ...BTN_RESET, opacity: track || ready ? 1 : 0.35,
+            width: 112, height: 112, borderRadius: "50%", background: C.ink,
             display: "flex", alignItems: "center", justifyContent: "center",
           }}>{playing ? <PauseGlyph/> : <PlayGlyph/>}</button>
           <button type="button" aria-label="Next" onClick={onNext} style={{
-            ...BTN_RESET, width: 92, height: 92, borderRadius: "50%", boxSizing: "border-box",
+            ...BTN_RESET, opacity: track ? 1 : 0.35, width: 92, height: 92, borderRadius: "50%", boxSizing: "border-box",
             border: `2px solid ${C.ink}`, display: "flex", alignItems: "center", justifyContent: "center",
           }}><NextGlyph/></button>
         </div>
