@@ -32,7 +32,7 @@ from typing import Protocol
 
 from aiohttp import web
 
-from . import __version__, accounts
+from . import __version__, accounts, storage
 from .session import REOPEN_TTL_S, TOKEN_TTL_S, SetupSession
 
 log = logging.getLogger("boombox-setup.api")
@@ -50,6 +50,8 @@ class Context(Protocol):
     def lan_host(self) -> str: ...
     def get_skin(self) -> str | None: ...
     def set_skin(self, skin_id: str) -> bool: ...
+    # the boombox web password (Admin unlock), read fresh; None when unset
+    def web_password(self) -> str | None: ...
 
     # privileged helper (sudo) + post-apply user-unit restarts
     async def apply(self, payload: dict) -> dict: ...
@@ -62,6 +64,9 @@ class Context(Protocol):
     async def remote_status(self) -> dict: ...
     async def remote_enable(self) -> dict: ...
     async def remote_pair_start(self) -> dict: ...
+    # one JSON call to boombox-library: (status, body); (0, None) = no answer
+    async def library_call(self, method: str, path: str,
+                           body: dict | None = None) -> tuple[int, dict | None]: ...
 
 
 def _client_is_localhost(req: web.Request) -> bool:
@@ -155,6 +160,7 @@ def build_app(ctx: Context) -> web.Application:
     r.add_put("/api/setup/video", _video_put)
     r.add_post("/api/setup/complete", _complete)
     accounts.add_routes(app)
+    storage.add_routes(app)
     return app
 
 

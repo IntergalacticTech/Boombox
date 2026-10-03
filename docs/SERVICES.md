@@ -223,6 +223,12 @@ failure flip `current` back to `previous` and restart.
 - **Runtime state:** `/opt/boombox/state/updater.json` (installed/available
   versions, last attempt) and per-attempt logs under
   `/opt/boombox/state/logs/`
+- **No auto-retry of a failed release:** if the last attempt at the
+  available ref ended `rolled_back` / `smoke_failed` / `fetch_failed` /
+  `build_failed` / `broken`, the window scheduler skips it
+  (`previously_failed`) instead of re-installing every minute. `POST
+  /api/update/install` (or the UI's Install) still retries it by hand; a
+  newer ref is attempted normally.
 - **Logs:** `journalctl --user -u boombox-updater -f`
 - **Disable auto-updates:** `systemctl --user disable --now
   boombox-updater.service`. `bin/boombox-update` still works with the
@@ -298,8 +304,8 @@ on boombox-state, which signals wvkbd.
 (`auth_basic off`). Boot-enabled.**
 
 The single phone-facing backend: the HTTP/WS API for the CYD hardware
-remote, the phone web app at `/remote/`, and any other HTTP client on the
-LAN. It exposes consolidated state, a command endpoint, a push-on-change
+remote, the LAN app at `/` on the LAN port (phone + desktop), and any
+other HTTP client on the LAN. It exposes consolidated state, a command endpoint, a push-on-change
 WebSocket, resized album art, a file surface (browse / download / upload /
 delete), a library/playlist/queue surface over Mopidy, and a Jellyfin
 video-transport proxy. Commands flow through the shared `actions.fire()`
@@ -307,10 +313,12 @@ dispatcher, so GPIO buttons and remotes share one code path. A BLE
 peripheral runs alongside the HTTP server as the primary transport for the
 CYD hardware remote.
 
-The PWA itself is a separate static bundle, not part of this service: nginx
-serves it from `current/remote-ui/dist/` at the `/remote/` location, built
-in place by `install.sh` / `apply-release.sh` (same pattern as the kiosk
-SPA). The bundle talks to `/api/remote/` here, optionally over a BLE
+The PWA itself is a separate static bundle, not part of this service:
+nginx's LAN server block serves it from `current/remote-ui/dist/` at `/`
+(bundles under `/app-assets/`; `/remote/*` redirects to `/?from=remote`,
+`/accounts/*` to `/#/accounts`); the kiosk's loopback server keeps the
+kiosk UI at `/`. It is built in place by `install.sh` /
+`apply-release.sh` (same pattern as the kiosk SPA). The bundle talks to `/api/remote/` here, optionally over a BLE
 GATT transport for off-network Android phones.
 
 | Endpoint | Used by |
@@ -332,7 +340,17 @@ GATT transport for off-network Android phones.
 | `GET  /api/remote/playlists`, `POST /api/remote/playlists` | Bearer: list / create M3U playlists |
 | `GET  /api/remote/playlists/{uri}/items` | Bearer: track URIs in a playlist |
 | `POST /api/remote/queue` | Bearer: replace the tracklist and (optionally) play |
-| `GET  /api/remote/video/state`, `POST /api/remote/video/command` | Bearer: Jellyfin video-transport proxy |
+| `GET  /api/remote/video/state`, `POST /api/remote/video/command` | Bearer: Jellyfin transport — state has audio/subtitle streams + indexes; commands `play_pause`, `stop`, `seek`, `volume`, `mute`, `set_audio`, `set_subtitle` (-1 = off) |
+| `GET  /api/remote/home/browse?type=artists\|albums\|playlists` | Bearer: Home Library lists (boombox-library pass-through, ETag kept) |
+| `GET  /api/remote/home/search?q=`, `GET /api/remote/home/{artist\|album\|playlist}/{id}` | Bearer: Home Library search / drill-down |
+| `GET  /api/remote/home/art/{art_id}?size=` | Bearer: cover art via the library art proxy |
+| `POST /api/remote/home/play` | Bearer: `{ids, mode: play\|queue}` → resolve, drop offline misses, first track now + rest in background chunks |
+| `POST` / `DELETE /api/remote/home/keep` | Bearer: `{kind: album\|artist\|playlist, id}` → keep offline / stop keeping (boombox-library `/api/library/keep`) |
+| `GET  /api/remote/home/status` | Bearer: `{online, internal_storage}` — the app's Offline banner |
+| `GET  /api/remote/home/offline` | Bearer: `{album_ids, artist_ids, playlist_ids}` with music on the boombox (dimming while offline) |
+| `GET  /api/remote/video/views`, `/resume`, `/items?parent_id=&type=&search=&start=&limit=` | Bearer: Jellyfin browse as the kiosk's signed-in user (API key server-side only) |
+| `GET  /api/remote/video/image/{id}?max_width=` | Bearer: poster, cached on disk |
+| `POST /api/remote/video/play` | Bearer: `{item_id, start_ticks?}` → WATCH the kiosk if needed, wait ≤ 20 s for its session, PlayNow |
 
 **The `remote_enabled` flag.** The phone-facing surface is gated by a
 single on/off flag, **default off**, persisted in
@@ -416,16 +434,35 @@ reference — see [ACCESS.md](./ACCESS.md).
 
 **Listens on `127.0.0.1:6689`, proxied by nginx as `/api/setup/`
 (`auth_basic off`; the wizard's own token/code gate) and `/api/accounts/`
-(keeps the LAN Basic auth). Boot-enabled.**
+(`auth_basic off`; admin-session gated). Boot-enabled.**
 
-Backend for the first-run setup wizard (`/setup/`) and the LAN **Accounts**
-page (`http://<boombox>:8090/accounts/`, served from the `setup-ui` build).
+Backend for the first-run setup wizard (`/setup/`) and **Admin → Accounts**
+in the LAN app (`http://<boombox>:8090/#/accounts`).
 Privileged writes go through the `boombox-setup-apply` helper via `sudo -n`.
+
+The same root helper also owns the nginx config: its `nginx-sync` action
+(called by `apply-release.sh` on every swap / revert) renders the active
+release's site file with the port from the root-owned
+`/etc/boombox/web-auth.env`, installs it **together with** the shared
+snippet, runs `nginx -t` and restores both previous files on failure. It
+only installs allow-listed directives from regular files. The helper is
+root-owned and refreshed only by `install.sh`, so **re-run `install.sh` on
+every device before its first OTA to this release**. It refreshes both
+`/usr/local/sbin/boombox-setup-apply` *and* `/etc/sudoers.d/boombox`;
+reinstalling only the helper (the old `sudo install … boombox-setup-apply`
+one-liner) leaves the previous sudoers fragment's snippet-only nginx grant
+in place. With an old helper the update stops at **preflight** ("reinstall
+the root helper — re-run install.sh") before anything is swapped or
+restarted, and the scheduler will not auto-retry that release (see
+`boombox-updater`: a ref whose last attempt failed is only re-attempted
+manually or superseded by a newer one) — the kiosk keeps working either way.
 
 Accounts routes (`services/boombox_setup/accounts.py`):
 
 | Method + path | What it does |
 |---|---|
+| `POST /api/accounts/session` | `{password}` → `{token, expires_at}`; the web password from `web-auth.env`; 5 failures in 5 min lock logins for 5 min; refused from loopback |
+| `DELETE /api/accounts/session` | Log out (forget the token) |
 | `GET /api/accounts/summary` | Per-card state (`ok` / `unset` / `problem`) for the page header |
 | `GET` / `PUT /api/accounts/music` | Navidrome URL / user / password (blank password keeps the stored one only for the same server) + sync status |
 | `POST /api/accounts/music/test` | Try the credentials without saving |
@@ -439,18 +476,19 @@ Accounts routes (`services/boombox_setup/accounts.py`):
 
 Auth rules:
 
-- nginx forwards `X-Boombox-User: $remote_user`, `X-Real-IP: $remote_addr`
-  and `X-Boombox-Host: $http_host`, and strips `Authorization`.
-- A request is accepted only if `X-Boombox-User` is non-empty **and**
-  `X-Real-IP` is not loopback (`127.0.0.1`, `::1`, `localhost`; missing
-  counts as loopback). The loopback check is what refuses the kiosk — a page
-  open in the kiosk can send its own Basic credentials, so the user header
-  alone is not a gate.
+- nginx forwards `X-Real-IP: $remote_addr` and `X-Boombox-Host: $http_host`
+  and passes `Authorization` through (it carries the admin token).
+- Every request must come from a non-loopback `X-Real-IP` (`127.0.0.1`,
+  `::1`, `localhost`; missing counts as loopback) — the kiosk can never log
+  in or use a token. All routes but `/session` also need
+  `Authorization: Bearer <admin token>`: 32 random bytes, in memory only
+  (a service restart logs everyone out), 12 h idle expiry refreshed on use.
 - Mutations (POST/PUT/PATCH/DELETE) need `Content-Type: application/json`
   and, when `Origin` is present, its host:port must equal `X-Boombox-Host`.
-- Secrets are write-only: no response carries a password, API key or token,
-  and none are logged. Upstream failures come back as an error message
-  (400/502) or a card status, never a 500.
+- Every login attempt is logged with the client IP and outcome, never the
+  password. Secrets are write-only: no response carries a password, API key
+  or token (other than a fresh admin token), and none are logged. Upstream
+  failures come back as an error message (400/502) or a card status, never a 500.
 
 ### `boombox-library` — Navidrome catalog sync + USB offline cache
 
@@ -467,6 +505,21 @@ service: restarting it cuts a streamed track (in-flight relays are
 aborted on shutdown so the stop is fast), and `boombox-rfid` /
 `boombox-resume` are ordered after it.
 
+Kept-offline music lives on the internal drive at `cache.internal_path`
+(default `/opt/boombox/storage/music`, adopted automatically and preferred
+over `/media` drives; `""` restores the USB-drive behaviour). Downloads keep
+`cache.reserve_bytes` (default 20 GiB) free, run ≤ `sync.max_concurrent_downloads`
+at a time, and pause while Mopidy streams from the proxy, while the SoC is
+≥ 70 °C (re-checked every 60 s) and while Navidrome is unreachable.
+
+Reachability comes from a short Subsonic ping (5 s timeout) every 30 s,
+independent of the hourly sync — every 10 s while it fails in the first
+two minutes after start. A stream relay or download that loses the link
+marks Navidrome offline at once; the next successful ping flips it back
+and starts a sync, unless a sync reached the server in the last 10 minutes. Until the first ping answers, reachability is unknown
+and reported as reachable (`navidrome_reachable: true`,
+`reachability_known: false`) so a card tapped right after boot streams.
+
 The kiosk's **Settings → Home Library** + **Settings → Offline Cache**
 panels are the user surface; the touchscreen also gets a sync-status
 chip in the chrome, a per-track "source badge" on the NowPlayingBar,
@@ -475,7 +528,7 @@ buttons and offline-miss CTAs.
 
 | Endpoint | Used by |
 |----------|---------|
-| `GET  /api/library/health` | UI: sync indicator (`navidrome_reachable`, `cache_present`, `last_sync_ts`, `syncing`, `prune_deferred` — a large album removal the prune guard is holding off, or `null`) |
+| `GET  /api/library/health` | UI: sync indicator (`navidrome_reachable` — true while still unknown, `reachability_known`, `cache_present`, `last_sync_ts`, `syncing`, `internal_storage` — music lives on the internal drive, `prune_deferred` — a large album removal the prune guard is holding off, or `null`) |
 | `GET  /api/library/source` / `PUT` / `POST /source/test` | Settings → Home Library: source config + Test/Save |
 | `GET  /api/library/browse?type=artists\|albums\|playlists` | LibraryDrawer Home Library root; served from precomputed ETag-tagged JSON snapshots when present, falls back to SQLite |
 | `GET  /api/library/search?q=` | Search bar; FTS5-backed |
@@ -489,6 +542,12 @@ buttons and offline-miss CTAs.
 | `POST /api/library/cache/streamed?id=` | UI: enqueue an opportunistic streamed-cache download |
 | `POST /api/library/cache/clear` | CachePanel: delete every cache_state row whose track is NOT pin-protected, plus the matching files |
 | `GET  /api/library/art/{art_id}` | Album-art proxy with on-disk cache at `/opt/boombox/state/art-cache/` |
+| `POST` / `DELETE /api/library/keep` | LAN app "Keep offline": `{kind: album\|artist\|playlist, id}` → user pin + enqueue / unpin (a starred or card-bound target falls back to that pin) + cancel queued orphans → `{ok, queued\|cancelled, keep: {state, tracks_total, tracks_present}}` |
+| `GET  /api/library/offline` | `{album_ids, artist_ids, playlist_ids}` with ≥ 1 track on disk (LAN app dims the rest while offline) |
+| — | The mutating routes `POST /pin`, `POST /cache/clear`, `POST`/`DELETE /keep`, `POST /storage/remove` and `POST /storage/retry` take `Content-Type: application/json` only; anything else is 415 `{"ok": false, "error": "expected application/json"}` (no cross-site "simple" POST) |
+| `GET  /api/library/storage` | Admin → Storage: `{drive, kept, downloads}` (reserve, kept items with progress — `source` is `user`, `starred` or `card` (bound to an RFID card), with aggregate rows `starred_tracks` / `card_tracks` for single songs — queue / in-flight / paused reason / failed / no_space). `music_bytes` is every track file on disk; `kept_tracks`, `failed` and `no_space` count pinned tracks only (what Retry can act on) |
+| `POST /api/library/storage/remove` | `{kind, id}` → unkeep + delete the now-unprotected files at once (only paths inside the adopted music drive; none without one); starred-only → 409 "unstar in Navidrome to remove"; card-only (and `card_tracks`) → 409 "bound to an RFID card — unbind the card to remove" |
+| `POST /api/library/storage/retry` | Re-enqueue pinned `error` / `no_space` tracks (otherwise retried by the hourly sync only) |
 
 **Sync semantics.** `sync_full` is the cold-boot path: full catalog
 upsert + FTS5 index rebuild. Hourly resyncs use the same path but skip

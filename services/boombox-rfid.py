@@ -26,6 +26,7 @@ from boombox_rfid.db import connect, migrate
 from boombox_rfid.mopidy_client import MopidyClient, PendingTail
 from boombox_rfid.playback import (
     expand_to_track_ids,
+    library_online,
     resolve_uris,
     wait_for_stream_proxy,
 )
@@ -116,9 +117,12 @@ class ServiceContext:
         # Re-read library config every tap so freshly-saved creds take
         # effect without restarting boombox-rfid.
         lib_cfg = load_library_config()
+        online = await library_online()
+        if not online:
+            log.info("uid %s: Home Library unreachable — playing kept tracks only", uid)
         try:
             uris = resolve_uris(
-                self.conn, track_ids, online=True,
+                self.conn, track_ids, online=online,
                 source_url=lib_cfg.source.url,
                 source_username=lib_cfg.source.username,
                 source_password=lib_cfg.source.password,

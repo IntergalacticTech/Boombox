@@ -24,9 +24,9 @@ repo organises itself in your head.
           │            │  │ /api/update/  :6686 │  │
           │            │  │ /api/library/ :6687 │  │
           │            │  │ /api/rfid/    :6688 │  │
-          │            │  │ /remote/   (PWA)    │  │
+          │            │  │ :8090 / (LAN app)   │  │
           │            │  └─────────────────────┘  │
-          │            │  LAN :8090 → Basic auth   │
+          │            │  LAN :8090 → app + auth   │
           │            └───────────────────────────┘
           ▼                       │       │      │ │
    ┌──────────────┐               ▼       ▼      │ ▼

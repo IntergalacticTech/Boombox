@@ -231,8 +231,4 @@ ls -la /opt/boombox/cache-mount/audio/ | head
   another boombox, and that boombox can play your pinned content
   offline. The pin sidecar at `<drive>/meta/pins.json` carries the
   pin set forward.
-- **No PWA browse parity yet.** The phone PWA at `/remote/` doesn't
-  yet have a Home Library browse view (that's roadmap). For now the
-  phone gets state, queue, library search, and playlist editing
-  through `/api/remote/`; pinning + browsing the Subsonic catalog
-  happen on the touchscreen.
+- **Phone / desktop browse.** The LAN app at `http://<boombox>:8090/` → Music → Home Library browses artists, albums and playlists and plays or queues them on the boombox; pinning still happens on the touchscreen.

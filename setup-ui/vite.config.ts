@@ -1,22 +1,15 @@
 /// <reference types="vitest/config" />
-import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  // Assets for both pages live under /setup/assets/; nginx serves
-  // dist/accounts.html at /accounts/.
+  // The setup wizard, served by nginx at /setup/. (The old Accounts page
+  // entry moved into the LAN app — remote-ui, Admin → Accounts.)
   base: "/setup/",
   plugins: [react()],
   build: {
     outDir: "dist",
     sourcemap: false,
-    rollupOptions: {
-      input: {
-        setup: resolve(__dirname, "index.html"),
-        accounts: resolve(__dirname, "accounts.html"),
-      },
-    },
   },
   test: {
     environment: "jsdom",

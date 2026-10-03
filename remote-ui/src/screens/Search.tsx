@@ -53,7 +53,7 @@ function pushHistory(entry: HistoryEntry, prev: HistoryEntry[]): HistoryEntry[] 
  *  plus a "Play all" that queues the whole result set + starts playback.
  *  Multi-select + "Save as playlist" lets the user build a playlist from
  *  the current result set in one tap. */
-export function Search() {
+export function Search({ autoFocus = false }: { autoFocus?: boolean } = {}) {
   const api = useApi();
   const [q, setQ] = useState("");
   const [field, setField] = useState<SearchField>("any");
@@ -189,7 +189,7 @@ export function Search() {
     <div style={{ padding: 16, paddingBottom: 96 }}>
       <form onSubmit={submit} style={{ display: "flex", gap: 8,
                                        marginBottom: 8 }}>
-        <input type="search" aria-label="Search query"
+        <input type="search" aria-label="Search query" autoFocus={autoFocus}
                value={q} onChange={(e) => setQ(e.target.value)}
                placeholder={`Search ${FIELD_LABELS[field].toLowerCase()}…`}
                style={searchInput} />

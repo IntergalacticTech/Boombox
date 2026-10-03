@@ -24,3 +24,6 @@ body {
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
 }
+
+/* Nothing may push the page sideways at any width >= 320 px. */
+img, video, canvas { max-width: 100%; }

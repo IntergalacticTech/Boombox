@@ -3,7 +3,9 @@
 Migrated from the retired boombox-uploader. The path-safety helpers are
 unchanged from that service (security-reviewed); only the auth model
 changed — these routes sit behind boombox-remote's bearer-token middleware
-instead of the old PIN cookie.
+instead of the old PIN cookie. Upload and delete are served on the admin tier
+(boombox_setup/storage.py, `/api/accounts/storage/files/*`); the household
+tier keeps browse + download and answers 403 for the old upload/delete routes.
 """
 from __future__ import annotations
 
@@ -43,6 +45,8 @@ MAX_FILE_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB cap per file (movies)
 # request.multipart() does NOT consult aiohttp's client_max_size, so the
 # size limit lives here, not on the web.Application.
 SCAN_TRIGGER_URL = "http://127.0.0.1:6681/library/scan"
+MOVED = "uploading and deleting moved to Admin → Storage"
+DISK_FULL = "the boombox's disk is full or not writable"
 
 
 def safe_filename(name: str) -> str:
@@ -198,10 +202,17 @@ async def download(request: web.Request) -> web.StreamResponse:
 
 
 async def upload(request: web.Request) -> web.Response:
+    if request.content_type != "multipart/form-data":
+        return web.json_response(
+            {"error": "expected a multipart/form-data upload"}, status=400)
     music_uploads = _music_root() / "uploads"
     video_uploads = _video_root() / "uploads"
-    music_uploads.mkdir(parents=True, exist_ok=True)
-    video_uploads.mkdir(parents=True, exist_ok=True)
+    try:
+        music_uploads.mkdir(parents=True, exist_ok=True)
+        video_uploads.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log.warning("upload folders unavailable: %s", e)
+        return web.json_response({"error": DISK_FULL}, status=507)
     saved_audio: list[str] = []
     saved_video: list[str] = []
     reader = await request.multipart()
@@ -223,18 +234,26 @@ async def upload(request: web.Request) -> web.Response:
         if not under_root(target, dest_root):
             return web.json_response({"error": "bad path"}, status=400)
         size = 0
-        with open(target, "wb") as f:
-            while True:
-                chunk = await part.read_chunk(64 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > MAX_FILE_BYTES:
-                    f.close()
-                    target.unlink(missing_ok=True)
-                    return web.json_response(
-                        {"error": "file too large"}, status=413)
-                f.write(chunk)
+        try:
+            with open(target, "wb") as f:
+                while True:
+                    chunk = await part.read_chunk(64 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_FILE_BYTES:
+                        f.close()
+                        target.unlink(missing_ok=True)
+                        return web.json_response(
+                            {"error": "file too large"}, status=413)
+                    f.write(chunk)
+        except OSError as e:
+            log.warning("upload of %s failed: %s", target, e)
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return web.json_response({"error": DISK_FULL}, status=507)
         log.info("uploaded %s (%d bytes)", target, size)
         bucket.append(str(target.relative_to(dest_root)))
     if saved_audio:
@@ -249,6 +268,8 @@ async def delete(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:
         return web.json_response({"error": "bad json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "expected a JSON object"}, status=400)
     rel = str(body.get("path", "") or "").strip("/").replace("\\", "/")
     root = _music_root()
     target = safe_compose(root, rel)
@@ -263,14 +284,20 @@ async def delete(request: web.Request) -> web.Response:
     try:
         target.unlink()
     except OSError as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response(
+            {"error": f"could not delete: {e.strerror or type(e).__name__}"}, status=409)
     asyncio.create_task(_trigger_scan())
     return web.json_response({"deleted": rel})
 
 
+async def moved(request: web.Request) -> web.Response:
+    return web.json_response({"error": MOVED}, status=403)
+
+
 def add_routes(app: web.Application) -> None:
-    """Register /api/remote/files/* on the given app."""
+    """Household /api/remote/files/*: browse + download. Upload and delete
+    moved to the admin tier (boombox_setup/storage.py)."""
     app.router.add_get("/api/remote/files/browse", browse)
     app.router.add_get("/api/remote/files/download/{path:.+}", download)
-    app.router.add_post("/api/remote/files/upload", upload)
-    app.router.add_post("/api/remote/files/delete", delete)
+    app.router.add_post("/api/remote/files/upload", moved)
+    app.router.add_post("/api/remote/files/delete", moved)

@@ -12,7 +12,22 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from .config import UpdaterConfig
+from .state import AttemptResult, LastAttempt
 from .version import compare_edge, compare_stable
+
+# Attempt results that mean "this ref did not install". The scheduler never
+# AUTO-retries a ref whose last attempt ended in one of these — otherwise a
+# device that can't take a release (e.g. an un-refreshed root helper) would
+# re-clone, rebuild and restart everything every minute of the window. A
+# manual install (API/UI) of the same ref is still allowed, and a NEWER ref
+# is attempted normally.
+FAILED_RESULTS = frozenset({
+    AttemptResult.ROLLED_BACK,
+    AttemptResult.SMOKE_FAILED,
+    AttemptResult.FETCH_FAILED,
+    AttemptResult.BUILD_FAILED,
+    AttemptResult.BROKEN,
+})
 
 
 class SkipReason(str, enum.Enum):
@@ -20,6 +35,7 @@ class SkipReason(str, enum.Enum):
     UP_TO_DATE = "up_to_date"
     OUTSIDE_WINDOW = "outside_window"
     PLAYBACK_ACTIVE = "playback_active"
+    PREVIOUSLY_FAILED = "previously_failed"
 
 
 @dataclass(frozen=True)
@@ -52,6 +68,7 @@ def should_attempt_install(
     installed_version: str,
     available_version: str,
     playback_status: str,  # "playing" | "paused" | "stopped"
+    last_attempt: Optional[LastAttempt] = None,
 ) -> InstallDecision:
     if not config.auto:
         return InstallDecision(install=False, reason=SkipReason.AUTO_DISABLED)
@@ -65,6 +82,10 @@ def should_attempt_install(
         return InstallDecision(install=False, reason=SkipReason.UP_TO_DATE)
     if diff is None:
         return InstallDecision(install=False, reason=SkipReason.UP_TO_DATE)
+    if (last_attempt is not None
+            and last_attempt.ref == available_version
+            and last_attempt.result in FAILED_RESULTS):
+        return InstallDecision(install=False, reason=SkipReason.PREVIOUSLY_FAILED)
     if not _in_window(now, config.window_start, config.window_duration_min):
         return InstallDecision(install=False, reason=SkipReason.OUTSIDE_WINDOW)
     if playback_status == "playing":

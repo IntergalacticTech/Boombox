@@ -1,17 +1,20 @@
-"""/api/accounts/* — the LAN Accounts page backend.
+"""/api/accounts/* — Admin → Accounts in the LAN app (served at / on :8090).
 
-Auth is NOT the wizard's token/code: nginx Basic auth on the LAN port is the
-admin gate. nginx forwards `X-Boombox-User: $remote_user` and `X-Real-IP`;
-we require a user AND a non-loopback client. The loopback `X-Real-IP` check is
-what refuses the kiosk: `$remote_user` is not a reliable gate there, since any
-client that sends Basic credentials (including a page open in the kiosk, on the
-unauthenticated loopback server) populates it. Mutations also need JSON and, when the browser sends Origin, a
-same-origin match against `X-Boombox-Host` ($http_host). Secrets are
-write-only: no response ever carries a password, API key or token.
+Auth is the admin session (admin_session.py), not nginx Basic auth: the app
+POSTs the boombox web password to /api/accounts/session and sends the
+returned bearer token on every other call. Every request must also come from
+a non-loopback client — nginx's `X-Real-IP`; a missing header is a direct
+on-box call and counts as loopback — so the kiosk (or any page open in it)
+can neither log in nor use a token. Mutations also need JSON and, when the
+browser sends Origin, a same-origin match against `X-Boombox-Host`
+($http_host). Secrets are write-only: no response carries a password, API
+key or token other than the caller's own new admin token, and no log line
+contains one.
 """
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import time
@@ -21,12 +24,20 @@ from urllib.parse import urlsplit
 from aiohttp import web
 
 from . import jellyfin_signin as jf
+from .admin_session import AdminSessions, password_matches
 
 log = logging.getLogger("boombox-setup.accounts")
 
 PREFIX = "/api/accounts/"
+SESSION_PATH = "/api/accounts/session"
+ADMIN_KEY = "admin"
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+STORAGE_UPLOAD_PATH = "/api/accounts/storage/files/upload"
+# Multipart bodies are accepted on these paths only. They still need the
+# admin bearer token (a cross-site form can't send one) and pass the
+# Origin check below.
+MULTIPART_PATHS = frozenset({STORAGE_UPLOAD_PATH})
 _BASE_RE = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+(/[A-Za-z0-9._~%/+-]*)?$")
 _KEY_RE = re.compile(r"^[A-Za-z0-9]+$")
 _BUILTIN_BASE = "http://127.0.0.1:8096"
@@ -36,15 +47,33 @@ _VIDEO_UNITS = ["boombox-remote.service", "boombox-kiosk-guard.service",
                 "boombox-buttons.service"]
 
 
+def _client_ip(req: web.Request) -> str:
+    return req.headers.get("X-Real-IP", "").strip()
+
+
+def _bearer(req: web.Request) -> str:
+    auth = req.headers.get("Authorization", "")
+    return auth[7:].strip() if auth.startswith("Bearer ") else ""
+
+
 def check_auth(req: web.Request) -> web.Response | None:
-    """None when the request may proceed, else the refusal response."""
-    if not req.headers.get("X-Boombox-User", "").strip():
-        return web.json_response({"error": "sign in to the boombox web UI"}, status=401)
-    if req.headers.get("X-Real-IP", "127.0.0.1") in _LOOPBACK:
+    """None when the request may proceed, else the refusal response.
+
+    Order: loopback first (the kiosk is refused whatever it sends), then the
+    admin token (not needed to log in or out), then the JSON/Origin checks
+    for writes — which also cover the login POST."""
+    ip = _client_ip(req)
+    if not ip or ip in _LOOPBACK:
         return web.json_response(
             {"error": "accounts can only be changed from another device"}, status=403)
+    if req.path != SESSION_PATH:
+        admin: AdminSessions = req.app[ADMIN_KEY]
+        if not admin.verify(_bearer(req)):
+            return web.json_response({"error": "admin session required"}, status=401)
     if req.method in _MUTATING:
-        if req.content_type != "application/json":
+        multipart_ok = (req.path in MULTIPART_PATHS
+                        and req.content_type == "multipart/form-data")
+        if req.content_type != "application/json" and not multipart_ok:
             return web.json_response(
                 {"error": "Content-Type must be application/json"}, status=415)
         origin = req.headers.get("Origin")
@@ -453,8 +482,53 @@ async def _web_login_put(req: web.Request) -> web.Response:
     return web.json_response({"ok": True, "updated": r.get("updated", [])})
 
 
+async def _session_login(req: web.Request) -> web.Response:
+    """Exchange the web password for an admin token. check_auth has already
+    refused loopback clients and non-JSON / cross-origin posts. Every attempt
+    is logged with the client IP and outcome — never the password."""
+    ctx: Any = req.app["ctx"]
+    admin: AdminSessions = req.app[ADMIN_KEY]
+    ip = _client_ip(req)
+    wait = admin.locked_for()
+    if wait > 0:
+        log.warning("admin login from %s: refused, locked out", ip)
+        return web.json_response(
+            {"ok": False, "error": "too many wrong passwords — try again later",
+             "retry_after": math.ceil(wait)}, status=429)
+    b = await _json_body(req)
+    if b is None:
+        log.warning("admin login from %s: malformed request", ip)
+        return _bad_body()
+    try:
+        expected = ctx.web_password()
+    except Exception:
+        log.exception("admin login: web password unreadable")
+        expected = None
+    if not expected:
+        log.warning("admin login from %s: no web password configured", ip)
+        return _err("no web password is set on this boombox", 503)
+    if not password_matches(b.get("password"), expected):
+        locked = admin.record_failure()
+        log.warning("admin login from %s: wrong password%s", ip,
+                    " — logins locked for 5 minutes" if locked else "")
+        return _err("wrong password", 401)
+    token, expires_at = admin.issue()
+    log.info("admin login from %s: ok", ip)
+    return web.json_response({"ok": True, "token": token, "expires_at": expires_at})
+
+
+async def _session_logout(req: web.Request) -> web.Response:
+    admin: AdminSessions = req.app[ADMIN_KEY]
+    admin.revoke(_bearer(req))
+    log.info("admin logout from %s", _client_ip(req))
+    return web.json_response({"ok": True})
+
+
 def add_routes(app: web.Application) -> None:
+    app[ADMIN_KEY] = AdminSessions()
     r = app.router
+    r.add_post("/api/accounts/session", _session_login)
+    r.add_delete("/api/accounts/session", _session_logout)
     r.add_get("/api/accounts/summary", _summary)
     r.add_get("/api/accounts/music", _music_get)
     r.add_post("/api/accounts/music/test", _music_test)

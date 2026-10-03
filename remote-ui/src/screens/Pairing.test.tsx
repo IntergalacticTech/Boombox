@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { Pairing } from "./Pairing";
+import { Pairing, defaultHost } from "./Pairing";
 
 beforeEach(() => {
   localStorage.clear();
@@ -65,5 +65,12 @@ describe("Pairing screen", () => {
     fireEvent.click(screen.getByRole("button", { name: /pair/i }));
     await waitFor(() =>
       expect(screen.getByText(/incorrect pin/i)).toBeTruthy());
+  });
+});
+
+describe("defaultHost", () => {
+  it("prefills the page's own host when served by a boombox, nothing in dev", () => {
+    expect(defaultHost(false)).toBe(window.location.host);
+    expect(defaultHost(true)).toBe("");
   });
 });

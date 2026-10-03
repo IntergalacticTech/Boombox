@@ -1,17 +1,22 @@
-import type { ReactNode } from "react";
+import type { Route } from "../lib/route";
 
-export type Tab = "now" | "library" | "playlists" | "search" | "files";
+export type Tab = "now" | "music" | "video" | "search" | "more";
 
-const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
-  { id: "now",       label: "Now",       icon: "▶" },
-  { id: "library",   label: "Library",   icon: "💿" },
-  { id: "playlists", label: "Playlists", icon: "≡" },
-  { id: "search",    label: "Search",    icon: "⌕" },
-  { id: "files",     label: "Files",     icon: "📁" },
+const TABS: { id: Tab; label: string; icon: string }[] = [
+  { id: "now",    label: "Now",    icon: "▶" },
+  { id: "music",  label: "Music",  icon: "♫" },
+  { id: "video",  label: "Video",  icon: "🎬" },
+  { id: "search", label: "Search", icon: "⌕" },
+  { id: "more",   label: "More",   icon: "⋯" },
 ];
 
-/** Fixed-position bottom nav. Phones with home-indicator safe-area get
- *  the env() padding from index.css. */
+/** Which tab lights up for a route: Playlists, Files and Admin live under More. */
+export function tabForRoute(route: Route): Tab {
+  return route === "now" || route === "music" || route === "video" || route === "search"
+    ? route : "more";
+}
+
+/** Phone bottom nav (< 900 px). Home-indicator phones get the safe-area inset. */
 export function TabBar(
   { active, onChange }: { active: Tab; onChange: (t: Tab) => void },
 ) {
@@ -36,7 +41,7 @@ export function TabBar(
             aria-label={t.label}
             onClick={() => onChange(t.id)}
             style={{
-              flex: 1, display: "flex", flexDirection: "column",
+              flex: 1, minWidth: 0, display: "flex", flexDirection: "column",
               alignItems: "center", gap: 2,
               padding: "6px 4px", border: 0, background: "transparent",
               color: selected ? "var(--accent)" : "var(--ink2)",

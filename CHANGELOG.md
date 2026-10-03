@@ -5,6 +5,85 @@ prefixes in `git log`.
 
 ---
 
+## Unreleased — offline music (LAN app 2A)
+
+The boombox keeps music for the road on its own drive.
+
+### Migration
+
+`install.sh` now creates `/opt/boombox/storage/music` (boombox user, 0755);
+`boombox-library` also creates it on start when it can. A `library.yml`
+still carrying the old 1 GiB `reserve_bytes` default is read as 20 GiB.
+nginx gains `location = /api/accounts/storage/files/upload` (synced by
+`apply-release.sh swap` like the rest of the site).
+
+### Added
+
+- **Keep offline** on Home Library albums / artists / playlists in the LAN
+  app, with "N / M on the boombox" progress; everything starred in Navidrome
+  is kept automatically. Originals download to `/opt/boombox/storage/music`
+  (`cache.internal_path`), ≤ 2 at a time, paused while a stream plays, while
+  the SoC is ≥ 70 °C and while the homelab is unreachable; 20 GiB is always
+  kept free.
+- **Offline mode**: with the homelab unreachable the Music section says
+  "Offline — showing kept music", dims what isn't on the boombox and plays
+  only kept tracks; RFID cards do the same.
+- **Admin → Storage** (`#/storage`): drive size / free / reserve, kept items
+  with Remove, the download queue with its pause reason, Retry failed, and
+  the music-folder uploader.
+
+### Changed
+
+- Uploading and deleting files moved from the household Files tab to
+  Admin → Storage (`/api/accounts/storage/files/*`, admin session);
+  `POST /api/remote/files/upload|delete` now answer 403. Paired phones
+  browse and download only.
+
+## Unreleased — LAN app
+
+The phone/laptop remote grows into the **LAN app** at `http://<boombox>:8090/`.
+
+### Migration — do this first
+
+**Re-run `install.sh` on every device before its first OTA to this
+release.** It refreshes the root-owned `/usr/local/sbin/boombox-setup-apply`
+(new `nginx-sync` action — `apply-release.sh` now installs the nginx site +
+shared snippet through it) **and** `/etc/sudoers.d/boombox` (drops the old
+snippet-only install grant). Reinstalling only the helper is not enough. A
+device that skips this stops the update at preflight with "reinstall the
+root helper — re-run install.sh"; the kiosk keeps running the old release.
+
+### Added
+
+- **LAN app at `:8090/`** (remote-ui, no Basic auth — PIN pairing gates the
+  APIs): Now playing, Music (Home Library browse, play / queue on the
+  boombox via `/api/remote/home/*`), Video (Jellyfin browse, play on the
+  boombox, seek / track / volume), Playlists, Search, More.
+- **Admin → Accounts** (`#/accounts`): the four Accounts cards moved from
+  setup-ui, unlocked by the web password as a short-lived **admin session**
+  (`POST/DELETE /api/accounts/session`); `/api/accounts/*` now checks that
+  session instead of nginx Basic auth.
+
+### Changed
+
+- `/remote/` and `/accounts/` **301** to `/` and `/#/accounts`; installed
+  `/remote/` PWAs are handed over by a kill-switch service worker with a
+  one-time hint. Everything else on `:8090` keeps Basic auth.
+- `apply-release.sh` syncs the nginx site + snippet together on every swap /
+  revert, and verify probes the LAN app.
+
+### Fixed
+
+- **Updater:** the window scheduler no longer auto-retries a ref whose last
+  attempt failed (rolled back, smoke / fetch / build failed, broken) — it
+  used to re-clone, rebuild and restart everything every minute of the
+  window. Manual installs of that ref still work; newer refs install
+  normally.
+- **Home Library:** a new Play cancels background "Queue all" appends and
+  the previous play's tail, and plays are serialised, so queues can't mix.
+
+---
+
 ## Unreleased — First-run setup wizard
 
 A fresh boombox now walks itself through setup. On first boot the kiosk

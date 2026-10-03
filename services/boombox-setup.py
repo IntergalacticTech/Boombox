@@ -29,6 +29,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 from boombox_setup import __version__
+from boombox_setup.admin_session import read_web_password
 from boombox_setup.api import build_app
 
 logging.basicConfig(level=logging.INFO,
@@ -41,6 +42,7 @@ REMOTE_BASE = os.environ.get("BOOMBOX_REMOTE_BASE", "http://127.0.0.1:6685")
 SETUP_APPLY = os.environ.get("BOOMBOX_SETUP_APPLY", "/usr/local/sbin/boombox-setup-apply")
 BOOMBOX_ENV = Path(os.environ.get("BOOMBOX_ENV_FILE", "/etc/boombox/boombox.env"))
 JELLYFIN_ENV = Path(os.environ.get("BOOMBOX_JELLYFIN_ENV", "/etc/boombox/jellyfin.env"))
+WEB_AUTH_ENV = Path(os.environ.get("BOOMBOX_WEB_AUTH_ENV", "/etc/boombox/web-auth.env"))
 COMPLETE_MARKER = Path(os.environ.get("BOOMBOX_SETUP_MARKER",
                                       "/opt/boombox/state/setup-complete"))
 SKIN_FILE = Path(os.environ.get("BOOMBOX_SETUP_SKIN",
@@ -125,6 +127,11 @@ class ServiceContext:
 
     def jellyfin_env(self) -> dict[str, str]:
         return _read_env_file(JELLYFIN_ENV)
+
+    def web_password(self) -> str | None:
+        # Read the file, not os.environ: the unit's EnvironmentFile copy goes
+        # stale when the Accounts page changes the password.
+        return read_web_password(WEB_AUTH_ENV)
 
     async def http(self) -> aiohttp.ClientSession:
         return await self._http()
@@ -251,6 +258,21 @@ class ServiceContext:
                 return await self._json_or_none(r) or {}
         except Exception:
             return {}
+
+    _STORAGE_TIMEOUT = aiohttp.ClientTimeout(total=15)
+
+    async def library_call(self, method: str, path: str,
+                           body: dict | None = None) -> tuple[int, dict | None]:
+        """One JSON call to boombox-library (Admin → Storage); (0, None)
+        when it doesn't answer — the route turns that into a 502."""
+        try:
+            s = await self._http()
+            async with s.request(method, f"{LIBRARY_BASE}{path}", json=body,
+                                 timeout=self._STORAGE_TIMEOUT) as r:
+                return r.status, await self._json_or_none(r)
+        except Exception as e:
+            log.warning("library %s %s failed: %s", method, path, type(e).__name__)
+            return 0, None
 
     async def music_test(self, url, username, password) -> tuple[bool, str]:
         s = await self._http()

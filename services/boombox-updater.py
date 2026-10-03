@@ -238,6 +238,7 @@ async def _scheduler_loop(runner: UpdaterRunner) -> None:
                 installed_version=state.installed_version,
                 available_version=state.available_version,
                 playback_status="playing" if await _playback_active() else "paused",
+                last_attempt=state.last_attempt,
             )
             if decision.install:
                 log.info("scheduler: window open, installing %s",

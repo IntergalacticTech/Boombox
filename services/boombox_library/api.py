@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from aiohttp import web
 
 from . import __version__, stream_proxy
+from . import keep as keep_mod
 from .art import fetch_art
 from .catalog import prune_deferred_status, request_forced_prune
 from .config import LibraryConfig
@@ -47,7 +48,10 @@ class Context(Protocol):
     # SQLite on every browse.
     snapshot_dir: Path
 
+    # True while reachability is unknown (before the first probe answers):
+    # callers treat unknown as online. reachability_known says which it is.
     async def is_online(self) -> bool: ...
+    def reachability_known(self) -> bool: ...
     async def trigger_sync(self) -> None: ...
     def cache_drive_state(self): ...
     def save_config(self, cfg: LibraryConfig) -> None: ...
@@ -56,6 +60,8 @@ class Context(Protocol):
     def enqueue_streamed_download(self, track_id: str) -> None: ...
     async def clear_streamed_cache(self) -> int: ...
     def cache_candidates(self) -> list[dict]: ...
+    # The live DownloadQueue (keep / storage routes), None without storage or source.
+    def download_queue(self) -> keep_mod.QueueLike | None: ...
 
 
 def build_app(ctx: Context) -> web.Application:
@@ -81,6 +87,12 @@ def build_app(ctx: Context) -> web.Application:
     app.router.add_post("/api/library/cache/clear", _cache_clear)
     app.router.add_get("/api/library/cache/candidates", _cache_candidates)
     app.router.add_get("/api/library/art/{art_id}", _art)
+    app.router.add_post("/api/library/keep", _keep_post)
+    app.router.add_delete("/api/library/keep", _keep_delete)
+    app.router.add_get("/api/library/offline", _offline)
+    app.router.add_get("/api/library/storage", _storage)
+    app.router.add_post("/api/library/storage/remove", _storage_remove)
+    app.router.add_post("/api/library/storage/retry", _storage_retry)
     stream_proxy.setup(app)  # GET/HEAD /api/library/stream/{track_id}
     return app
 
@@ -90,9 +102,14 @@ async def _health(req: web.Request) -> web.Response:
     drive = ctx.cache_drive_state()
     return web.json_response({
         "service_version": __version__,
+        # Boolean-compatible: true until the first probe answers (unknown
+        # counts as online for RFID and the apps); reachability_known
+        # tells the two apart.
         "navidrome_reachable": await ctx.is_online(),
+        "reachability_known": ctx.reachability_known(),
         "cache_present": bool(drive and drive.present) if drive else False,
         "cache_mount": str(drive.mount_path) if drive and drive.mount_path else None,
+        "internal_storage": bool(drive and getattr(drive, "internal", False)),
         "last_sync_ts": ctx.last_sync_ts,
         "syncing": ctx.syncing,
         # A large album removal the prune guard is holding off, or null.
@@ -262,11 +279,14 @@ async def _search(req: web.Request) -> web.Response:
         # a malformed MATCH must never surface as a 500 while typing.
         log.warning("search query rejected by FTS5: %r", match)
         rows = []
-    return web.json_response({"results": [dict(r) for r in rows]})
+    return web.json_response(
+        {"results": keep_mod.offline_flags(ctx.conn, [dict(r) for r in rows])})
 
 
 async def _pin(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
     body = await req.json()
     try:
         kind = PinKind(body["kind"])
@@ -412,6 +432,14 @@ def _not_found(what: str) -> web.Response:
     return web.json_response({"error": f"{what} not found"}, status=404)
 
 
+def _with_offline(rows) -> list[dict]:
+    """Track rows + "offline": the file is on the boombox."""
+    out = [dict(t) for t in rows]
+    for t in out:
+        t["offline"] = t.get("cache_status") == "present"
+    return out
+
+
 async def _artist_detail(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
     artist_id = req.match_info["artist_id"]
@@ -426,9 +454,15 @@ async def _artist_detail(req: web.Request) -> web.Response:
         "WHERE artist_id=? ORDER BY year IS NULL, year, sort_name",
         (artist_id,),
     )
+    album_rows = [dict(a) for a in albums]
+    flags = keep_mod.offline_flags(
+        ctx.conn, [{"content_type": "album", "id": a["id"]} for a in album_rows])
+    for a, f in zip(album_rows, flags):
+        a["offline"] = f["offline"]
     return web.json_response({
         "artist": dict(row),
-        "albums": [dict(a) for a in albums],
+        "albums": album_rows,
+        "keep": keep_mod.keep_state(ctx.conn, PinKind.ARTIST, artist_id),
     })
 
 
@@ -447,9 +481,11 @@ async def _album_detail(req: web.Request) -> web.Response:
         "WHERE t.album_id=? ORDER BY t.disc_no, t.track_no, t.title",
         (album_id,),
     )
+    track_rows = _with_offline(tracks)
     return web.json_response({
         "album": dict(row),
-        "tracks": [dict(t) for t in tracks],
+        "tracks": track_rows,
+        "keep": keep_mod.keep_state(ctx.conn, PinKind.ALBUM, album_id),
     })
 
 
@@ -469,10 +505,118 @@ async def _playlist_detail(req: web.Request) -> web.Response:
         "WHERE pt.playlist_id=? ORDER BY pt.position",
         (playlist_id,),
     )
+    track_rows = _with_offline(tracks)
     return web.json_response({
         "playlist": dict(row),
-        "tracks": [dict(t) for t in tracks],
+        "tracks": track_rows,
+        "keep": keep_mod.keep_state(ctx.conn, PinKind.PLAYLIST, playlist_id),
     })
+
+
+def _bad(error: str, status: int = 400) -> web.Response:
+    return web.json_response({"ok": False, "error": error}, status=status)
+
+
+def _not_json(req: web.Request) -> web.Response | None:
+    """415 unless the request says Content-Type: application/json. The
+    mutating routes are reachable with only the web password (LAN) or no
+    credential (kiosk loopback); requiring JSON makes a cross-site "simple"
+    POST (text/plain, form) fail instead of running — browsers preflight a
+    JSON one."""
+    if req.content_type != "application/json":
+        return _bad("expected application/json", 415)
+    return None
+
+
+async def _keep_target(req: web.Request) -> tuple[PinKind, str] | web.Response:
+    """(kind, id) from a {kind, id} JSON body, or the 400 to answer."""
+    try:
+        body = await req.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        return _bad("expected a JSON object")
+    try:
+        kind = PinKind(body.get("kind"))
+    except ValueError:
+        return _bad("kind must be album, artist or playlist")
+    if kind not in keep_mod.KEEP_KINDS:
+        return _bad("kind must be album, artist or playlist")
+    target_id = body.get("id")
+    if not isinstance(target_id, str) or not target_id:
+        return _bad("missing id")
+    return kind, target_id
+
+
+async def _keep_post(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
+    t = await _keep_target(req)
+    if isinstance(t, web.Response):
+        return t
+    kind, target_id = t
+    if not keep_mod.target_exists(ctx.conn, kind, target_id):
+        return _bad(f"{kind.value} not found", 404)
+    return web.json_response(keep_mod.keep(ctx.conn, ctx.download_queue(), kind, target_id))
+
+
+async def _keep_delete(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
+    t = await _keep_target(req)
+    if isinstance(t, web.Response):
+        return t
+    kind, target_id = t
+    return web.json_response(keep_mod.unkeep(
+        ctx.conn, ctx.download_queue(), kind, target_id,
+        starred_auto_pin=ctx.cfg.sync.starred_auto_pin))
+
+
+async def _offline(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    return web.json_response(keep_mod.offline_ids(ctx.conn))
+
+
+async def _storage(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    return web.json_response(keep_mod.storage_overview(
+        ctx.conn, ctx.cache_drive_state(), ctx.cfg.cache.reserve_bytes, ctx.download_queue()))
+
+
+async def _storage_remove(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
+    try:
+        body = await req.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and body.get("kind") == "starred_tracks":
+        return _bad(keep_mod.STARRED_ONLY, 409)
+    if isinstance(body, dict) and body.get("kind") == "card_tracks":
+        return _bad(keep_mod.CARD_ONLY, 409)
+    t = await _keep_target(req)
+    if isinstance(t, web.Response):
+        return t
+    kind, target_id = t
+    drive = ctx.cache_drive_state()
+    root = drive.mount_path if drive is not None and drive.present else None
+    status, out = keep_mod.remove_kept(
+        ctx.conn, ctx.download_queue(), kind, target_id,
+        starred_auto_pin=ctx.cfg.sync.starred_auto_pin, cache_root=root)
+    return web.json_response(out, status=status)
+
+
+async def _storage_retry(req: web.Request) -> web.Response:
+    ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
+    queue = ctx.download_queue()
+    if queue is None:
+        return _bad("downloads aren't running — no music storage or no music server set up", 409)
+    return web.json_response({"ok": True, "retried": keep_mod.retry_failed(ctx.conn, queue)})
 
 
 async def _cache_stats(req: web.Request) -> web.Response:
@@ -527,6 +671,8 @@ async def _cache_streamed(req: web.Request) -> web.Response:
 
 async def _cache_clear(req: web.Request) -> web.Response:
     ctx: Context = req.app["ctx"]
+    if (refused := _not_json(req)) is not None:
+        return refused
     cleared = await ctx.clear_streamed_cache()
     return web.json_response({"ok": True, "cleared": cleared})
 

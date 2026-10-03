@@ -18,7 +18,6 @@ function mockApi(overrides: Partial<RemoteApi> = {}): RemoteApi {
     base: "http://localhost/",
     get: vi.fn().mockResolvedValue(sample),
     post: vi.fn().mockResolvedValue({ ok: true }),
-    uploadFiles: vi.fn(),
     ...overrides,
   };
 }
@@ -91,5 +90,13 @@ describe("Search", () => {
                      { target: { value: "obscure" } });
     fireEvent.click(screen.getByRole("button", { name: /go/i }));
     await waitFor(() => expect(screen.getByText(/no results/i)).toBeTruthy());
+  });
+});
+
+describe("Search autofocus", () => {
+  it("focuses the query box when asked (desktop)", () => {
+    const api: RemoteApi = { base: "http://pi/", get: vi.fn(), post: vi.fn() };
+    render(<ApiProvider api={api}><Search autoFocus /></ApiProvider>);
+    expect(document.activeElement).toBe(screen.getByLabelText("Search query"));
   });
 });

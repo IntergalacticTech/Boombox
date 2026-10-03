@@ -13,6 +13,8 @@ Jellyfin API reference used here:
   POST /Sessions/{id}/Playing/Seek?seekPositionTicks=<100ns ticks>
   POST /Sessions/{id}/Command  body {"Name": "SetVolume", "Arguments": {...}}
   POST /Sessions/{id}/Command  body {"Name": "ToggleMute"}
+  POST /Sessions/{id}/Command  body {"Name": "SetAudioStreamIndex"|
+                                     "SetSubtitleStreamIndex", "Arguments": {"Index": "<n>"}}
 
 Which session is "ours"? A Jellyfin server lists every client in the
 household, so picking the wrong one means the phone remote pauses somebody
@@ -44,6 +46,8 @@ from jellyfin_env import jellyfin_base, jellyfin_token
 log = logging.getLogger("boombox-remote")
 
 _TICKS_PER_SECOND = 10_000_000
+# Upstream timeout for every Jellyfin call (spec: proxies time out at 15 s).
+_TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 # action → (HTTP path suffix under /Sessions/{id}/Playing, or "Command")
 _PLAYING_ACTIONS = {
@@ -52,7 +56,38 @@ _PLAYING_ACTIONS = {
     "next": "NextTrack",
     "previous": "PreviousTrack",
 }
-_VALID_ACTIONS = set(_PLAYING_ACTIONS) | {"seek", "volume", "mute"}
+_STREAM_COMMANDS = {"set_audio": "SetAudioStreamIndex",
+                    "set_subtitle": "SetSubtitleStreamIndex"}
+_VALID_ACTIONS = set(_PLAYING_ACTIONS) | {"seek", "volume", "mute"} | set(_STREAM_COMMANDS)
+
+
+def _num(v: object) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def value_ok(action: str, value: object) -> bool:
+    """Per-action value check, done before any Jellyfin call. Subtitle -1
+    turns subtitles off (Jellyfin's convention)."""
+    n = _num(value)
+    if action == "seek":
+        return n is not None and n >= 0
+    if action == "volume":
+        return n is not None and 0 <= n <= 100
+    if action == "set_audio":
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    if action == "set_subtitle":
+        return isinstance(value, int) and not isinstance(value, bool) and value >= -1
+    return True
+
+
+def _streams(item: dict, kind: str) -> list[dict]:
+    out: list[dict] = []
+    for s in item.get("MediaStreams") or []:
+        if isinstance(s, dict) and s.get("Type") == kind and isinstance(s.get("Index"), int):
+            label = s.get("DisplayTitle") or s.get("Language") or f"Track {s['Index']}"
+            out.append({"index": s["Index"], "label": str(label)})
+    return out
+
 
 DEVICE_ID_ENV = "BOOMBOX_JELLYFIN_DEVICE_ID"
 DEVICE_NAME_ENV = "BOOMBOX_JELLYFIN_DEVICE_NAME"
@@ -130,7 +165,7 @@ class JellyfinClient:
         try:
             async with self._sess.get(
                     f"{jellyfin_base()}/Sessions", headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=2)) as r:
+                    timeout=_TIMEOUT) as r:
                 if r.status != 200:
                     return None
                 sessions = await r.json()
@@ -197,23 +232,30 @@ class JellyfinClient:
             "active": True,
             "playing": not play.get("IsPaused", False),
             "title": item.get("Name"),
+            "item_id": item.get("Id"),
             "position_s": position_ticks // _TICKS_PER_SECOND,
             "duration_s": runtime_ticks // _TICKS_PER_SECOND,
             "volume": play.get("VolumeLevel"),
             "muted": bool(play.get("IsMuted", False)),
+            "audio_streams": _streams(item, "Audio"),
+            "subtitle_streams": _streams(item, "Subtitle"),
+            "audio_index": play.get("AudioStreamIndex"),
+            "subtitle_index": play.get("SubtitleStreamIndex"),
         }
 
     async def _post(self, url: str, headers: dict,
                     body: dict | None = None) -> int:
         """POST and release the response; returns the HTTP status."""
         async with self._sess.post(url, headers=headers, json=body,
-                                   timeout=aiohttp.ClientTimeout(total=2)) as r:
+                                   timeout=_TIMEOUT) as r:
             return r.status
 
     async def command(self, action: str, value=None) -> dict:
         """Map a remote command onto the Jellyfin session API."""
         if action not in _VALID_ACTIONS:
             return {"ok": False, "error": f"unknown_action:{action}"}
+        if not value_ok(action, value):
+            return {"ok": False, "error": "bad_value"}
         headers = self._headers()
         if headers is None:
             return {"ok": False, "error": "jellyfin_unconfigured"}
@@ -227,14 +269,17 @@ class JellyfinClient:
                 status = await self._post(
                     f"{base}/Playing/{_PLAYING_ACTIONS[action]}", headers)
             elif action == "seek":
-                ticks = int(float(value or 0) * _TICKS_PER_SECOND)
+                ticks = int(float(value) * _TICKS_PER_SECOND)
                 status = await self._post(
                     f"{base}/Playing/Seek?seekPositionTicks={ticks}", headers)
             elif action == "volume":
                 status = await self._post(
                     f"{base}/Command", headers,
-                    {"Name": "SetVolume",
-                     "Arguments": {"Volume": str(int(value or 0))}})
+                    {"Name": "SetVolume", "Arguments": {"Volume": str(int(value))}})
+            elif action in _STREAM_COMMANDS:
+                status = await self._post(
+                    f"{base}/Command", headers,
+                    {"Name": _STREAM_COMMANDS[action], "Arguments": {"Index": str(int(value))}})
             else:  # mute
                 status = await self._post(
                     f"{base}/Command", headers, {"Name": "ToggleMute"})
@@ -261,7 +306,10 @@ def _make_handlers(client):
         if action not in _VALID_ACTIONS:
             return web.json_response(
                 {"ok": False, "error": "bad_action"}, status=400)
-        result = await client.command(action, (body or {}).get("value"))
+        value = (body or {}).get("value")
+        if not value_ok(action, value):
+            return web.json_response({"ok": False, "error": "bad_value"}, status=400)
+        result = await client.command(action, value)
         status = 200 if result.get("ok") else 502
         return web.json_response(result, status=status)
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useIsDesktop } from "../lib/useIsDesktop";
 
 const DISMISS_KEY = "boombox.remote.install_dismissed_at";
 const DISMISS_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -33,6 +34,7 @@ export function InstallBanner() {
   const [evt, setEvt] = useState<BeforeInstallPromptEvent | null>(null);
   const [dismissed, setDismissed] = useState(wasDismissedRecently());
   const [showIos, setShowIos] = useState(false);
+  const desktop = useIsDesktop();
 
   useEffect(() => {
     if (isStandalone() || dismissed) return;
@@ -69,15 +71,18 @@ export function InstallBanner() {
   return (
     <div role="region" aria-label="Install"
          style={{
-           position: "fixed", top: 12, left: 12, right: 60, zIndex: 18,
+           // Phone: edge to edge. Desktop: over the centre column only, clear
+           // of the 220 px sidebar and the 360 px Now Playing panel.
+           position: "fixed", top: 12, zIndex: 18,
+           left: desktop ? 232 : 12, right: desktop ? 372 : 12,
            padding: "10px 12px", borderRadius: 12,
            background: "var(--panel)", border: "1px solid var(--rule)",
            display: "flex", alignItems: "center", gap: 10, fontSize: 12,
          }}>
       <span style={{ flex: 1, color: "var(--ink2)" }}>
         {evt
-          ? "Install the Boombox Remote on your phone for full-screen access."
-          : "Add to Home Screen via Share → Add to Home Screen for a full-screen remote."}
+          ? "Install Boombox on this device for full-screen access."
+          : "Add Boombox to your Home Screen via Share → Add to Home Screen for full-screen access."}
       </span>
       {evt && (
         <button type="button" onClick={install} style={{

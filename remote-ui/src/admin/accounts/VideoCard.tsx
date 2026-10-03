@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { accountsApi } from "./api";
 import type { VideoInfo, JfUser, OkResult } from "./types";
-import { VideoServerForm, type VideoValues, type VideoTestResult } from "../shared/VideoServerForm";
-import { ErrorText, SecondaryButton } from "../components/ui";
+import { VideoServerForm, type VideoValues, type VideoTestResult } from "../forms/VideoServerForm";
+import { ErrorText, SecondaryButton } from "../ui";
 
 const BUILTIN_BASE = "http://127.0.0.1:8096";
 type SaveResult = OkResult & { can_force?: boolean };

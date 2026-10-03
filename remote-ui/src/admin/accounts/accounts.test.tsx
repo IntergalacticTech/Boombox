@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { AccountsApp } from "./AccountsApp";
+import { AccountsSection, ACCOUNTS_DESKTOP_COLUMNS } from "../AccountsSection";
+import { adminSession } from "../session";
 
 const BASE_R: Record<string, unknown> = {
   "GET /api/accounts/summary": {
@@ -24,6 +25,7 @@ let once: Record<string, { status: number; body: unknown }[]>;
 let calls: { method: string; url: string; body?: unknown; headers?: Record<string, string> }[];
 
 beforeEach(() => {
+  adminSession.set("tok");
   calls = [];
   R = { ...BASE_R };
   once = {};
@@ -44,7 +46,7 @@ beforeEach(() => {
 
 describe("AccountsApp", () => {
   it("renders the four cards with status", async () => {
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     expect(await screen.findByText("Music server")).toBeTruthy();
     expect(screen.getByText("Video server")).toBeTruthy();
     expect(screen.getByText("Streaming receivers")).toBeTruthy();
@@ -53,13 +55,13 @@ describe("AccountsApp", () => {
   });
 
   it("never renders stored secrets", async () => {
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     await screen.findByText("Music server");
     expect(document.body.innerHTML).not.toMatch(/apikey|s3cret/);
   });
 
   it("signs the kiosk in as the picked Jellyfin user", async () => {
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     fireEvent.click(await screen.findByRole("button", { name: /sign kiosk in as jwc/i }));
     await waitFor(() => expect(calls.some(c => c.url === "/api/accounts/video/kiosk-signin"
       && (c.body as { user_id: string }).user_id === "u1")).toBe(true));
@@ -67,12 +69,12 @@ describe("AccountsApp", () => {
   });
 
   it("shows Spotify as not installed", async () => {
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     expect(await screen.findByText(/spotify connect.*not installed/i)).toBeTruthy();
   });
 
   it("sends JSON content type on writes and shows web-login errors", async () => {
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     await screen.findByText("Boombox web login");
     fireEvent.change(screen.getByLabelText(/current password/i), { target: { value: "x" } });
     fireEvent.change(screen.getByLabelText(/^new password/i), { target: { value: "correct horse battery" } });
@@ -85,7 +87,7 @@ describe("AccountsApp", () => {
   });
 
   it("blocks mismatched or short new passwords client-side", async () => {
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     await screen.findByText("Boombox web login");
     const btn = () => screen.getByRole("button", { name: /change password/i }) as HTMLButtonElement;
     fireEvent.change(screen.getByLabelText(/current password/i), { target: { value: "x" } });
@@ -99,7 +101,7 @@ describe("AccountsApp", () => {
   });
 
   it("reloads the music card and resets the form after a successful save", async () => {
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     const url = await screen.findByLabelText("Server URL") as HTMLInputElement;
     expect(url.value).toBe("https://m");
     fireEvent.change(url, { target: { value: "https://m2" } });
@@ -122,7 +124,7 @@ describe("AccountsApp", () => {
   it("offers Save anyway when the video server is unreachable and resends with force", async () => {
     once["PUT /api/accounts/video"] = [{ status: 400,
       body: { ok: false, error: "couldn't reach https://v", can_force: true } }];
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     await screen.findByLabelText("Base URL");
     const saves = screen.getAllByRole("button", { name: /^save$/i });
     fireEvent.click(saves[1]);
@@ -139,7 +141,7 @@ describe("AccountsApp", () => {
 
   it("does not offer Save anyway for plain validation errors", async () => {
     once["PUT /api/accounts/video"] = [{ status: 400, body: { ok: false, error: "bad base" } }];
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     await screen.findByLabelText("Base URL");
     fireEvent.click(screen.getAllByRole("button", { name: /^save$/i })[1]);
     expect(await screen.findByText(/bad base/)).toBeTruthy();
@@ -149,7 +151,7 @@ describe("AccountsApp", () => {
   it("shows a problem message when the streaming helper fails", async () => {
     once["GET /api/accounts/streaming"] = [{ status: 502,
       body: { error: "receiver helper failed" } }];
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     expect(await screen.findByText(/receiver helper failed/)).toBeTruthy();
     expect(screen.getByText("Boombox web login")).toBeTruthy();
   });
@@ -158,7 +160,7 @@ describe("AccountsApp", () => {
     R["GET /api/accounts/streaming"] = {
       airplay: { installed: true, active: true, name: "MarkII", password_set: true },
       spotify: { installed: true, active: true, name: "MarkII" } };
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     const name = await screen.findByLabelText("AirPlay name") as HTMLInputElement;
     expect((screen.getByLabelText("AirPlay password") as HTMLInputElement).placeholder)
       .toMatch(/saved — leave blank to keep/i);
@@ -174,7 +176,7 @@ describe("AccountsApp", () => {
     R["GET /api/accounts/streaming"] = {
       airplay: { installed: true, active: true, name: "MarkII", password_set: true },
       spotify: { installed: false, active: false, name: "" } };
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     fireEvent.click(await screen.findByLabelText(/remove password/i));
     fireEvent.click(screen.getByRole("button", { name: /save airplay/i }));
     await waitFor(() => expect(calls.some(c => c.method === "PUT"
@@ -188,7 +190,7 @@ describe("AccountsApp", () => {
       airplay: { installed: false, active: false, name: "" },
       spotify: { installed: true, active: true, name: "MarkII" } };
     R["PUT /api/accounts/streaming"] = { ok: false, error: "name contains a quote" };
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     expect(await screen.findByText(/airplay.*not installed/i)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Spotify name"), { target: { value: "Den\"" } });
     fireEvent.click(screen.getByRole("button", { name: /save spotify/i }));
@@ -200,7 +202,7 @@ describe("AccountsApp", () => {
   it("hides kiosk sign-in until an API key is stored", async () => {
     R["GET /api/accounts/video"] = { mode: "builtin", base: "", key_set: false,
       kiosk_device_id: "boombox-markii-kiosk", kiosk_user: null };
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     await screen.findByText("Video server");
     await waitFor(() => expect(calls.some(c => c.url === "/api/accounts/video")).toBe(true));
     expect(screen.queryByText(/kiosk sign-in/i)).toBeNull();
@@ -210,7 +212,7 @@ describe("AccountsApp", () => {
   it("hides kiosk sign-in for the built-in server", async () => {
     R["GET /api/accounts/video"] = { mode: "builtin", base: "http://127.0.0.1:8096",
       key_set: true, kiosk_device_id: "boombox-markii-kiosk", kiosk_user: null };
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     await screen.findByText("Video server");
     await waitFor(() => expect(calls.some(c => c.url === "/api/accounts/video")).toBe(true));
     expect(screen.queryByText(/kiosk sign-in/i)).toBeNull();
@@ -221,7 +223,7 @@ describe("AccountsApp", () => {
   it("signs the kiosk out", async () => {
     R["GET /api/accounts/video"] = { ...(BASE_R["GET /api/accounts/video"] as object),
       kiosk_user: "jwc" };
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     fireEvent.click(await screen.findByRole("button", { name: /sign out/i }));
     expect(await screen.findByRole("button", { name: /sign kiosk in as jwc/i })).toBeTruthy();
     expect(calls.some(c => c.method === "POST"
@@ -230,14 +232,90 @@ describe("AccountsApp", () => {
 
   it("shows a kiosk sign-in failure", async () => {
     R["POST /api/accounts/video/kiosk-signin"] = { ok: false, error: "kiosk browser unreachable" };
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     fireEvent.click(await screen.findByRole("button", { name: /sign kiosk in as jwc/i }));
     expect(await screen.findByText(/kiosk browser unreachable/)).toBeTruthy();
   });
 
   it("shows a banner when the Boombox can't be reached", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("offline"))));
-    render(<AccountsApp />);
+    render(<AccountsSection desktop />);
     expect((await screen.findAllByText(/couldn't reach the boombox/i)).length).toBeGreaterThan(0);
+  });
+});
+
+describe("Admin gate", () => {
+  it("sends the admin bearer token on every call", async () => {
+    render(<AccountsSection desktop />);
+    await screen.findByText("Music server");
+    await waitFor(() => expect(calls.length).toBeGreaterThan(3));
+    expect(calls.every((c) => c.headers?.Authorization === "Bearer tok")).toBe(true);
+  });
+
+  it("locked: shows the lock screen, unlocks with the web password", async () => {
+    adminSession.clear("logout");
+    once["POST /api/accounts/session"] = [{ status: 200,
+      body: { ok: true, token: "fresh", expires_at: 1 } }];
+    render(<AccountsSection desktop />);
+    expect(screen.queryByText("Music server")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Web password"),
+      { target: { value: "correct horse battery" } });
+    fireEvent.click(screen.getByRole("button", { name: /unlock/i }));
+    expect(await screen.findByText("Music server")).toBeTruthy();
+    expect(calls.find((c) => c.url === "/api/accounts/session")!.body)
+      .toEqual({ password: "correct horse battery" });
+    expect(adminSession.token()).toBe("fresh");
+  });
+
+  it("explains a lockout", async () => {
+    adminSession.clear("logout");
+    once["POST /api/accounts/session"] = [{ status: 429,
+      body: { ok: false, error: "too many wrong passwords — try again later", retry_after: 240 } }];
+    render(<AccountsSection desktop />);
+    fireEvent.change(screen.getByLabelText("Web password"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: /unlock/i }));
+    expect(await screen.findByText(/try again in 4 minutes/i)).toBeTruthy();
+  });
+
+  it("an expired session drops back to the lock screen", async () => {
+    once["GET /api/accounts/summary"] = [{ status: 401, body: { error: "admin session required" } }];
+    render(<AccountsSection desktop />);
+    expect(await screen.findByText(/session expired/i)).toBeTruthy();
+    expect(adminSession.token()).toBeNull();
+  });
+
+  it("Lock logs out", async () => {
+    render(<AccountsSection desktop />);
+    await screen.findByText("Music server");
+    fireEvent.click(screen.getByRole("button", { name: /lock admin/i }));
+    expect(await screen.findByLabelText("Web password")).toBeTruthy();
+    expect(calls.some((c) => c.method === "DELETE" && c.url === "/api/accounts/session"
+      && c.headers?.Authorization === "Bearer tok")).toBe(true);
+  });
+
+  it("changing the web password keeps you unlocked", async () => {
+    R["PUT /api/accounts/web-login"] = { ok: true, updated: ["web", "samba"] };
+    render(<AccountsSection desktop />);
+    await screen.findByText("Boombox web login");
+    fireEvent.change(screen.getByLabelText(/current password/i), { target: { value: "old password 1" } });
+    fireEvent.change(screen.getByLabelText(/^new password/i), { target: { value: "correct horse battery" } });
+    fireEvent.change(screen.getByLabelText(/repeat new password/i), { target: { value: "correct horse battery" } });
+    fireEvent.click(screen.getByRole("button", { name: /change password/i }));
+    expect(await screen.findByText(/password changed/i)).toBeTruthy();
+    expect(adminSession.token()).toBe("tok");
+  });
+
+  it("desktop fits as many >= 320 px cards as the column allows; phones get one", async () => {
+    const { unmount } = render(<AccountsSection desktop />);
+    const grid = await screen.findByTestId("accounts-grid");
+    expect(grid.dataset.columns).toBe("auto");
+    expect(ACCOUNTS_DESKTOP_COLUMNS).toBe("repeat(auto-fit, minmax(min(320px, 100%), 1fr))");
+    expect(grid.style.gridTemplateColumns).toContain("auto-fit");
+    expect(grid.style.gridTemplateColumns).not.toContain("repeat(2");
+    unmount();
+    render(<AccountsSection desktop={false} />);
+    const phone = await screen.findByTestId("accounts-grid");
+    expect(phone.dataset.columns).toBe("1");
+    expect(phone.style.gridTemplateColumns).toBe("minmax(0, 1fr)");
   });
 });

@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from boombox_library.config import DEFAULT_CONFIG, LibraryConfig, SourceConfig
+from boombox_library.config import DEFAULT_CONFIG, CacheConfig, LibraryConfig, SourceConfig
 from boombox_library.subsonic import (
     SubsonicAuthError,
     SubsonicError,
@@ -60,7 +61,7 @@ def ctx(tmp_path: Path, monkeypatch):
     cfg = LibraryConfig(
         source=SourceConfig(url="https://music.example", username="u", password="p"),
         sync=DEFAULT_CONFIG.sync,
-        cache=DEFAULT_CONFIG.cache.__class__(search_paths=(str(tmp_path / "media"),)),
+        cache=CacheConfig(search_paths=(str(tmp_path / "media"),), internal_path=""),
     )
     (tmp_path / "media").mkdir()
     monkeypatch.setattr(svc, "load_config", lambda: cfg)
@@ -393,3 +394,604 @@ def test_save_config_restarts_mopidy_only_when_block_removed(ctx, tmp_path, monk
     conf.unlink()  # no mopidy.conf at all: no restart
     ctx.save_config(ctx.cfg)
     assert restarts == [True]
+
+
+class FakeQueue:
+    def __init__(self) -> None:
+        self.enqueued: list[str] = []
+        self.stopped = False
+
+    def enqueue(self, tid):
+        self.enqueued.append(tid)
+        return True
+
+    def cancel(self, ids):
+        return 0
+
+    def snapshot(self):
+        return {"queued": 0, "in_flight": [], "paused": None}
+
+    def stop(self):
+        self.stopped = True
+
+    async def aclose(self):
+        self.stop()
+
+    def set_client(self, client):
+        self.client = client
+
+
+def _seed_pinned_album(conn):
+    conn.execute("INSERT INTO artists(id,name,sort_name,album_count,updated_at) VALUES('ar','X','x',1,0)")
+    conn.execute("INSERT INTO albums(id,name,sort_name,artist_id,song_count,duration_s,"
+                 "is_compilation,navidrome_starred,updated_at) VALUES('al1','A','a','ar',2,60,0,0,0)")
+    for tid in ("t1", "t2"):
+        conn.execute("INSERT INTO tracks(id,album_id,title,duration_s,suffix,size_bytes,content_type,"
+                     "navidrome_starred,updated_at) VALUES(?,'al1','T',30,'mp3',10,'audio/mpeg',0,0)", (tid,))
+    conn.execute("INSERT INTO pins(target_kind,target_id,source,added_at) VALUES('album','al1','user',0)")
+
+
+@pytest.mark.asyncio
+async def test_internal_storage_is_adopted_with_a_gated_queue(ctx, tmp_path, monkeypatch):
+    music = tmp_path / "storage" / "music"
+    ctx.cfg = replace(ctx.cfg, cache=replace(ctx.cfg.cache, internal_path=str(music)))
+    (tmp_path / "media" / "usb0").mkdir()          # unmarked, writable: would be a candidate
+    await _poll_once(ctx, monkeypatch)
+    assert ctx.cache_state.internal and ctx.cache_state.mount_path == music
+    assert (tmp_path / "cache-mount").resolve() == music.resolve()
+    q = ctx.download_queue()
+    assert q is not None
+    assert q.reserve_bytes == ctx.cfg.cache.reserve_bytes == 21474836480
+    assert q.max_concurrent == ctx.cfg.sync.max_concurrent_downloads == 2
+    assert ctx.cache_candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_queue_appears_once_a_source_is_configured(ctx, tmp_path, monkeypatch):
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig(),
+                      cache=replace(ctx.cfg.cache, internal_path=str(tmp_path / "music")))
+    await _poll_once(ctx, monkeypatch)
+    assert ctx.download_queue() is None
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig(url="https://music.example", username="u", password="p"))
+    assert ctx.download_queue() is not None
+
+
+@pytest.mark.asyncio
+async def test_losing_the_drive_stops_its_queue(ctx, tmp_path, monkeypatch):
+    drive = tmp_path / "media" / "usb0"
+    drive.mkdir()
+    (drive / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    fake = FakeQueue()
+    ctx._download_queue = fake
+    (drive / ".boombox-cache").unlink()
+    await _poll_once(ctx, monkeypatch)
+    assert fake.stopped and ctx._download_queue is None
+
+
+@pytest.mark.asyncio
+async def test_drive_swap_stops_the_old_queue_before_building_the_new_one(
+        ctx, tmp_path, monkeypatch):
+    first = tmp_path / "media" / "usb0"
+    first.mkdir()
+    (first / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    events: list[str] = []
+
+    class OldQueue(FakeQueue):
+        async def aclose(self):
+            # still unwinding for a loop turn: the build must wait for it
+            # (asyncio.sleep is patched by _poll_once, so yield by hand)
+            fut = asyncio.get_running_loop().create_future()
+            asyncio.get_running_loop().call_soon(fut.set_result, None)
+            await fut
+            events.append("stop old")
+            self.stop()
+
+    old = OldQueue()
+    ctx._download_queue = old
+    ctx._queue_key = (str(first), "https://music.example", "u", "p")
+
+    real_queue = svc.DownloadQueue
+
+    def building(*args, **kwargs):
+        events.append(f"build {kwargs['cache_root'].name}")
+        return real_queue(*args, **kwargs)
+    monkeypatch.setattr(svc, "DownloadQueue", building)
+
+    (first / ".boombox-cache").unlink()
+    second = tmp_path / "media" / "usb1"
+    second.mkdir()
+    (second / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    assert ctx.cache_state.mount_path == second
+    assert old.stopped
+    assert events[:2] == ["stop old", "build usb1"]
+    assert ctx._download_queue is not old and ctx._download_queue is not None
+    assert ctx._download_queue.cache_root == second
+
+
+def test_credentials_change_updates_the_client_in_place(ctx, tmp_path):
+    ctx.cache_state = svc.CacheDriveState(present=True, mount_path=tmp_path / "m",
+                                          free_bytes=None, total_bytes=None)
+    (tmp_path / "m").mkdir()
+    first = ctx.download_queue()
+    assert first is not None and ctx.download_queue() is first
+    old_client = first.client
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig(url="https://music.example",
+                                                   username="u", password="new"))
+    assert ctx.download_queue() is first and first.client is not old_client
+    assert ctx._queue_key == (str(tmp_path / "m"), "https://music.example", "u", "new")
+
+
+@pytest.mark.asyncio
+async def test_close_stops_the_queue_and_the_probe(ctx):
+    fake = FakeQueue()
+    ctx._download_queue = fake
+    closed: list[bool] = []
+
+    async def close():
+        closed.append(True)
+    ctx._stream_probe.close = close
+    await ctx.close()
+    assert fake.stopped and ctx._download_queue is None and closed == [True]
+    ctx.cache_state = svc.CacheDriveState(present=True, mount_path=Path("/nonexistent"),
+                                          free_bytes=None, total_bytes=None)
+    assert ctx.download_queue() is None          # never rebuilt after close
+
+
+def test_failed_downloads_are_retried_on_the_hourly_cadence_only(ctx):
+    _seed_pinned_album(ctx.conn)
+    ctx.conn.execute("INSERT INTO cache_state(track_id,status,error_message) VALUES('t1','error','boom')")
+    fake = FakeQueue()
+    ctx._ensure_download_queue = lambda: fake
+    ctx._enqueue_pinned_downloads(now=10_000.0)              # first sync: retry failed
+    assert sorted(fake.enqueued) == ["t1", "t2"]
+    fake.enqueued.clear()
+    ctx._enqueue_pinned_downloads(now=10_000.0 + 120)        # backoff retry / "Sync now"
+    assert fake.enqueued == ["t2"]
+    fake.enqueued.clear()
+    ctx._enqueue_pinned_downloads(now=10_000.0 + 3600)       # an hour later
+    assert sorted(fake.enqueued) == ["t1", "t2"]
+
+
+def test_admin_retry_bypasses_the_hourly_gate(ctx):
+    _seed_pinned_album(ctx.conn)
+    ctx.conn.execute("INSERT INTO cache_state(track_id,status,error_message) VALUES('t1','error','boom')")
+    fake = FakeQueue()
+    ctx._ensure_download_queue = lambda: fake
+    ctx._enqueue_pinned_downloads(now=10_000.0)
+    fake.enqueued.clear()
+    ctx._enqueue_pinned_downloads(now=10_000.0 + 60, force_failed=True)
+    assert sorted(fake.enqueued) == ["t1", "t2"]
+    fake.enqueued.clear()
+    ctx._enqueue_pinned_downloads(now=10_000.0 + 120)       # gate restarts from the forced retry
+    assert fake.enqueued == ["t2"]
+    ctx.reset_failed_retry()
+    fake.enqueued.clear()
+    ctx._enqueue_pinned_downloads(now=10_000.0 + 180)
+    assert sorted(fake.enqueued) == ["t1", "t2"]
+
+
+def test_failed_retry_gate_defaults_to_the_monotonic_clock(ctx, monkeypatch):
+    _seed_pinned_album(ctx.conn)
+    ctx.conn.execute("INSERT INTO cache_state(track_id,status,error_message) VALUES('t1','error','boom')")
+    fake = FakeQueue()
+    ctx._ensure_download_queue = lambda: fake
+    monkeypatch.setattr(svc.time, "monotonic", lambda: 5.0)   # small: early boot
+    monkeypatch.setattr(svc.time, "time", lambda: 0.0)        # a wall clock that is no help
+    ctx._enqueue_pinned_downloads()
+    assert sorted(fake.enqueued) == ["t1", "t2"]               # first sync still retries
+    assert ctx._last_failed_retry == 5.0
+
+
+# ---- real DownloadQueue: teardown is awaited, creds change keeps downloads ----
+
+class _BlockedFetch:
+    """fetch that writes a partial, records which password it was handed,
+    then blocks until released."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.passwords: list[str] = []
+        self.unwound: list[str] = []
+
+    async def __call__(self, url, params, dest):
+        self.passwords.append(params["p"])
+        dest.write_bytes(b"partial")
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.unwound.append(dest.name)
+            raise
+        dest.write_bytes(b"whole track")
+
+
+class _PwClient:
+    def __init__(self, url, user, password) -> None:
+        self.password = password
+
+    def download_url(self, track_id):
+        return ("http://x/rest/download.view", {"id": track_id, "p": self.password})
+
+
+def _real_queue_setup(ctx, monkeypatch, fetch):
+    ctx.cfg = replace(ctx.cfg, cache=replace(ctx.cfg.cache, reserve_bytes=0))
+    ctx._online = True
+
+    async def not_streaming():
+        return False
+    ctx._stream_probe.is_streaming = not_streaming
+    monkeypatch.setattr(svc, "SubsonicClient", _PwClient)
+    real = svc.DownloadQueue
+    built: list = []
+
+    def build(*args, **kwargs):
+        q = real(*args, fetch=fetch, **kwargs)
+        built.append(q)
+        return q
+    monkeypatch.setattr(svc, "DownloadQueue", build)
+    return built
+
+
+def _drive(path: Path) -> Path:
+    for d in ("audio", "tmp"):
+        (path / d).mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@pytest.mark.asyncio
+async def test_credentials_change_keeps_the_in_flight_download(ctx, tmp_path, monkeypatch):
+    _seed_pinned_album(ctx.conn)
+    fetch = _BlockedFetch()
+    built = _real_queue_setup(ctx, monkeypatch, fetch)
+    root = _drive(tmp_path / "m")
+    ctx.cache_state = svc.CacheDriveState(present=True, mount_path=root,
+                                          free_bytes=None, total_bytes=None)
+    q = ctx.download_queue()
+    assert q is not None and q.enqueue("t1")
+    await asyncio.wait_for(fetch.started.wait(), 2)
+    part = root / "tmp" / "t1.part"
+    assert part.exists()
+
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig(url="https://music.example",
+                                                   username="u", password="new"))
+    assert ctx.download_queue() is q and len(built) == 1     # no rebuild, no sweep
+    await asyncio.sleep(0)
+    assert part.exists() and _status(ctx.conn, "t1") == "downloading"
+
+    fetch.release.set()
+    await asyncio.wait_for(q.drain(), 2)
+    assert _status(ctx.conn, "t1") == "present"
+    assert (root / "audio" / "t1.mp3").read_bytes() == b"whole track"
+
+    assert ctx.download_queue().enqueue("t2")
+    await asyncio.wait_for(q.drain(), 2)
+    assert fetch.passwords == ["p", "new"]                    # next download, new client
+    assert _status(ctx.conn, "t2") == "present"
+
+
+@pytest.mark.asyncio
+async def test_drive_swap_waits_for_the_old_download_to_unwind(ctx, tmp_path, monkeypatch):
+    _seed_pinned_album(ctx.conn)
+    fetch = _BlockedFetch()
+    built = _real_queue_setup(ctx, monkeypatch, fetch)
+    first = _drive(tmp_path / "media" / "usb0")
+    (first / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    old = ctx.download_queue()
+    assert old is not None and old.enqueue("t1")
+    await asyncio.wait_for(fetch.started.wait(), 2)
+    old_task = old._in_flight["t1"]
+    assert (first / "tmp" / "t1.part").exists()
+
+    seen: list = []
+    building = svc.DownloadQueue
+
+    def build(*args, **kwargs):
+        seen.append((old_task.done(), list(fetch.unwound),
+                     (first / "tmp" / "t1.part").exists(), _status(ctx.conn, "t1")))
+        return building(*args, **kwargs)
+    monkeypatch.setattr(svc, "DownloadQueue", build)
+
+    (first / ".boombox-cache").unlink()
+    second = _drive(tmp_path / "media" / "usb1")
+    (second / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+
+    assert ctx.cache_state.mount_path == second
+    # When the new queue was constructed, the old download had already run
+    # its cancel cleanup: task finished, .part removed, row reset.
+    assert seen == [(True, ["t1.part"], False, "absent")]
+    assert ctx._download_queue is built[-1] and built[-1].cache_root == second
+    assert old_task.cancelled()
+
+
+# ---- reachability probe (independent of the full sync) ----
+
+class _CountingClient(FakeClient):
+    made: list[dict] = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        _CountingClient.made.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_reachability_is_unknown_and_treated_online_until_the_first_probe(ctx):
+    assert ctx.reachability_known() is False
+    assert await ctx.is_online() is True          # boot: RFID / app still stream
+    assert ctx._online is False                   # the download gate stays idle
+
+
+@pytest.mark.asyncio
+async def test_probe_sets_reachability_from_a_short_ping(ctx, monkeypatch):
+    _CountingClient.made = []
+    monkeypatch.setattr(svc, "SubsonicClient", _CountingClient)
+    FakeClient.ping_exc = SubsonicUnreachable("timeout")
+    assert await ctx._probe_once() is False
+    assert ctx.reachability_known() is True
+    assert await ctx.is_online() is False
+    FakeClient.ping_exc = None
+    assert await ctx._probe_once() is True
+    assert await ctx.is_online() is True
+    assert _CountingClient.made[0]["timeout_seconds"] == svc.PROBE_TIMEOUT_S == 5
+
+
+@pytest.mark.asyncio
+async def test_probe_offline_to_online_edge_kicks_one_sync(ctx, monkeypatch):
+    kicks: list[bool] = []
+
+    async def fake_trigger():
+        kicks.append(True)
+    monkeypatch.setattr(ctx, "trigger_sync", fake_trigger)
+    assert await ctx._probe_once() is True        # unknown → online: no kick
+    assert kicks == []                            # (sync_timer's boot sync covers it)
+    FakeClient.ping_exc = SubsonicUnreachable("down")
+    await ctx._probe_once()
+    FakeClient.ping_exc = None
+    await ctx._probe_once()                       # offline → online
+    await ctx._probe_once()                       # still online
+    assert kicks == [True]
+
+
+@pytest.mark.asyncio
+async def test_probe_edge_does_not_start_a_second_sync(ctx):
+    running = asyncio.get_running_loop().create_future()
+    ctx._sync_task = running                      # a sync is already going
+    ctx._set_reachable(False)
+    assert await ctx._probe_once() is True
+    assert ctx._sync_task is running
+    running.cancel()
+
+
+@pytest.mark.asyncio
+async def test_probe_loop_retries_fast_at_boot_then_every_30s(ctx):
+    FakeClient.ping_exc = SubsonicUnreachable("wifi not up yet")
+    now = {"t": 1000.0}
+    delays: list[float] = []
+
+    async def fake_sleep(d):
+        delays.append(d)
+        now["t"] += d
+        if len(delays) == 15:
+            raise asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await ctx.reachability_probe(sleep=fake_sleep, clock=lambda: now["t"])
+    # 10 s retries for the first two minutes, then the regular 30 s cadence
+    assert delays[:12] == [10.0] * 12
+    assert delays[12:] == [30.0] * 3
+
+
+@pytest.mark.asyncio
+async def test_probe_loop_settles_to_30s_once_reachable(ctx):
+    delays: list[float] = []
+
+    async def fake_sleep(d):
+        delays.append(d)
+        if len(delays) == 3:
+            raise asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await ctx.reachability_probe(sleep=fake_sleep, clock=lambda: 0.0)
+    assert delays == [30.0, 30.0, 30.0]
+    assert await ctx.is_online() is True
+
+
+@pytest.mark.asyncio
+async def test_probe_does_nothing_without_a_music_server(ctx, monkeypatch):
+    _CountingClient.made = []
+    monkeypatch.setattr(svc, "SubsonicClient", _CountingClient)
+    ctx.cfg = replace(ctx.cfg, source=SourceConfig())
+    delays: list[float] = []
+
+    async def fake_sleep(d):
+        delays.append(d)
+        if len(delays) == 2:
+            raise asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await ctx.reachability_probe(sleep=fake_sleep, clock=lambda: 0.0)
+    assert _CountingClient.made == []
+    assert delays == [30.0, 30.0]
+    assert await ctx.is_online() is False         # nothing to stream from
+
+
+@pytest.mark.asyncio
+async def test_link_failure_marks_offline_at_once(ctx):
+    await ctx._probe_once()
+    assert await ctx.is_online() is True
+    ctx.mark_offline()
+    assert await ctx.is_online() is False and ctx.reachability_known()
+
+
+@pytest.mark.asyncio
+async def test_sync_outcome_still_sets_reachability(ctx):
+    assert await ctx._sync_once() is True
+    assert ctx.reachability_known() and await ctx.is_online()
+    FakeClient.ping_exc = SubsonicUnreachable("down")
+    assert await ctx._sync_once() is False
+    assert await ctx.is_online() is False
+
+
+@pytest.mark.asyncio
+async def test_close_stops_the_reachability_probe(ctx):
+    ctx.start_reachability_probe()
+    task = ctx._probe_task
+    assert task is not None and not task.done()
+    await asyncio.sleep(0)
+    await ctx.close()
+    assert task.done()
+    assert ctx._probe_task is None
+
+
+@pytest.mark.asyncio
+async def test_queue_gate_reports_link_failures(ctx, tmp_path):
+    await ctx._probe_once()
+    ctx.cache_state = svc.CacheDriveState(present=True, mount_path=_drive(tmp_path / "m"),
+                                          free_bytes=None, total_bytes=None)
+    q = ctx.download_queue()
+    assert q is not None
+    q._gates.report_offline()
+    assert await ctx.is_online() is False
+
+
+# ---- drive change: no queue is built on the old mount mid-transition ----
+
+@pytest.mark.asyncio
+async def test_no_queue_is_built_on_the_old_mount_while_the_drive_changes(
+        ctx, tmp_path, monkeypatch):
+    first = _drive(tmp_path / "media" / "usb0")
+    (first / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    assert ctx.download_queue() is not None
+
+    seen: list = []
+    real_retire = ctx._retire_download_queue
+
+    async def retire_then_request():
+        await real_retire()
+        # a request lands after the old queue's teardown, before cache_state moves
+        seen.append(ctx.download_queue())
+    monkeypatch.setattr(ctx, "_retire_download_queue", retire_then_request)
+
+    (first / ".boombox-cache").unlink()
+    second = _drive(tmp_path / "media" / "usb1")
+    (second / ".boombox-cache").touch()
+    await _poll_once(ctx, monkeypatch)
+    assert seen == [None]
+    assert ctx._download_queue is not None
+    assert ctx._download_queue.cache_root == second
+
+
+def test_init_download_queue_refuses_while_switching(ctx, tmp_path):
+    ctx.cache_state = svc.CacheDriveState(present=True, mount_path=_drive(tmp_path / "m"),
+                                          free_bytes=None, total_bytes=None)
+    ctx._switching = True
+    assert ctx.download_queue() is None
+    ctx._switching = False
+    assert ctx.download_queue() is not None
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_retire_wait_does_not_cancel_the_teardown(ctx):
+    release = asyncio.Event()
+    finished: list[bool] = []
+
+    class SlowQueue(FakeQueue):
+        async def aclose(self):
+            await release.wait()
+            finished.append(True)
+
+    ctx._download_queue = SlowQueue()
+    waiter = asyncio.create_task(ctx._retire_download_queue())
+    await asyncio.sleep(0)
+    waiter.cancel()                       # e.g. cache_poll cancelled at shutdown
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    pending = list(ctx._retiring)
+    assert pending and not pending[0].cancelled()
+    release.set()
+    await asyncio.gather(*pending)
+    assert finished == [True]
+
+
+# ---- M1: adopting the internal drive retires rows on an old USB cache ----
+
+@pytest.mark.asyncio
+async def test_internal_adoption_marks_usb_rows_missing_so_pins_redownload(
+        ctx, tmp_path, monkeypatch):
+    _seed_pinned_album(ctx.conn)
+    usb = _drive(tmp_path / "media" / "usb0")     # still mounted, files intact
+    (usb / "audio" / "t1.mp3").write_bytes(b"x")
+    music = tmp_path / "storage" / "music"
+    kept = music / "audio" / "t2.mp3"
+    ctx.conn.executemany(
+        "INSERT INTO cache_state(track_id, status, local_path) VALUES (?,?,?)",
+        [("t1", "present", str(usb / "audio" / "t1.mp3")),
+         ("t2", "present", str(kept))])
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b"y")
+    ctx.cfg = replace(ctx.cfg, cache=replace(ctx.cfg.cache, internal_path=str(music)))
+    await _poll_once(ctx, monkeypatch)
+    assert ctx.cache_state.internal and ctx.cache_state.mount_path == music
+    assert _status(ctx.conn, "t1") == "missing"
+    assert _status(ctx.conn, "t2") == "present"
+    fake = FakeQueue()
+    ctx._ensure_download_queue = lambda: fake
+    ctx._enqueue_pinned_downloads(now=10_000.0)
+    assert fake.enqueued == ["t1"]               # re-downloaded to internal storage
+
+
+# ---- edge syncs are rate-limited (a blip must not cost a full sync) ----
+
+@pytest.mark.asyncio
+async def test_edge_sync_waits_out_the_min_gap_after_a_sync_started(ctx, monkeypatch):
+    now = {"t": 5000.0}
+    ctx._clock = lambda: now["t"]
+    kicks: list[float] = []
+    real_trigger = ctx.trigger_sync
+
+    async def counting_trigger():
+        kicks.append(now["t"])
+        await real_trigger()
+    monkeypatch.setattr(ctx, "trigger_sync", counting_trigger)
+
+    async def blip():
+        ctx.mark_offline()
+        await ctx._probe_once()
+
+    assert svc.EDGE_SYNC_MIN_GAP_S == 600
+    await blip()                                  # first edge after boot: syncs
+    assert kicks == [5000.0]
+    await ctx._sync_task
+    now["t"] += 120
+    await blip()                                  # 2 min after that sync started: skipped
+    assert kicks == [5000.0]
+    assert await ctx.is_online() is True          # still flips back online
+    now["t"] += 481                               # > 10 min since the sync started
+    await blip()
+    assert kicks == [5000.0, 5601.0]
+
+
+@pytest.mark.asyncio
+async def test_failed_sync_attempts_do_not_hold_off_the_edge_sync(ctx, monkeypatch):
+    now = {"t": 5000.0}
+    ctx._clock = lambda: now["t"]
+    FakeClient.ping_exc = SubsonicUnreachable("down")
+    assert await ctx._sync_once() is False        # backoff retry while offline
+    FakeClient.ping_exc = None
+    now["t"] += 60
+    kicks: list[bool] = []
+
+    async def fake_trigger():
+        kicks.append(True)
+    monkeypatch.setattr(ctx, "trigger_sync", fake_trigger)
+    await ctx._probe_once()                       # offline → online
+    assert kicks == [True]
+
+
+@pytest.mark.asyncio
+async def test_sync_records_its_start_on_the_injected_clock(ctx):
+    ctx._clock = lambda: 42.0
+    assert await ctx._sync_once() is True
+    assert ctx._last_sync_started == 42.0

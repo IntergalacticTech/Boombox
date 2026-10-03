@@ -46,3 +46,19 @@ const _ctxStub = {
 (HTMLCanvasElement.prototype as unknown as {
   getContext: () => unknown;
 }).getContext = () => _ctxStub;
+
+// sessionStorage gets the same treatment (the admin token lives there).
+const session = new MemoryStorage();
+Object.defineProperty(globalThis, "sessionStorage", {
+  value: session, writable: true, configurable: true,
+});
+Object.defineProperty(window, "sessionStorage", {
+  value: session, writable: true, configurable: true,
+});
+
+// jsdom's window is 1024 px wide — the desktop side of the 900 px
+// breakpoint. Default every test to a phone; use setViewport() to switch.
+beforeEach(() => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 390 });
+  Object.defineProperty(window, "innerHeight", { configurable: true, writable: true, value: 844 });
+});

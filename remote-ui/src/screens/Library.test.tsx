@@ -35,7 +35,6 @@ function mockApi(): RemoteApi {
       throw new Error(`unmocked: ${path}`);
     }),
     post: vi.fn().mockResolvedValue({ ok: true }),
-    uploadFiles: vi.fn(),
   };
 }
 

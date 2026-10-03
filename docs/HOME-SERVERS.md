@@ -249,7 +249,7 @@ things:
 
 To use an **off-device** Jellyfin:
 
-The LAN **Accounts** page (`http://<boombox>:8090/accounts/` → **Video
+The LAN app's **Admin → Accounts** (`http://<boombox>:8090/#/accounts` → **Video
 server**) does all three steps below from a browser; the manual steps are
 here for reference and recovery.
 
@@ -281,7 +281,7 @@ doesn't falls back to reading the file, so the value reaches every consumer.)
    logs a one-time hint).
 
    The easy way: from a phone or computer on the LAN, open
-   `http://<boombox>:8090/accounts/` (the boombox web login) → **Video
+   `http://<boombox>:8090/#/accounts` (unlock Admin with the boombox web password) → **Video
    server** → **Kiosk sign-in** → **Sign kiosk in as …** (pick a Jellyfin
    user).
    The boombox signs the touchscreen in via server-side Quick Connect with the

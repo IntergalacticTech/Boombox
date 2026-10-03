@@ -1,30 +1,39 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { loadPairing, clearPairing } from "./lib/pairing";
 import type { Pairing } from "./lib/pairing";
 import { makeHttpTransport } from "./transport/select";
 import { TransportProvider, useRemote } from "./state/store";
 import { ApiProvider, makeApi } from "./lib/api";
 import { Pairing as PairingScreen } from "./screens/Pairing";
-import { NowPlaying } from "./screens/NowPlaying";
-import { Files } from "./screens/Files";
-import { Library } from "./screens/Library";
-import { Playlists } from "./screens/Playlists";
-import { Search } from "./screens/Search";
-import { TabBar, type Tab } from "./components/TabBar";
+import { AppShell } from "./components/AppShell";
 import { SettingsSheet } from "./components/SettingsSheet";
-import { MiniPlayer } from "./components/MiniPlayer";
 import { InstallBanner } from "./components/InstallBanner";
+import { MovedHint } from "./components/MovedHint";
 
-/** Inside the provider: routes on connection status, then on selected tab. */
-function Remote(
-  { base, onUnpair }: { base: string; onUnpair: () => void },
-) {
+/** Where the API lives. Served by a boombox, the app always talks to its own
+ *  origin (same-origin: no CORS, and an IP-vs-.local choice made at pairing
+ *  can't strand it); the stored pairing base only matters under `vite dev`. */
+export function apiBase(pairing: Pairing, dev: boolean = import.meta.env.DEV): string {
+  return dev ? pairing.base : window.location.origin;
+}
+
+function NoLongerPaired({ onUnpair }: { onUnpair: () => void }) {
+  return (
+    <Centered>
+      <h2>This phone is no longer paired</h2>
+      <p style={{ color: "var(--ink2)" }}>
+        It was unpaired from the boombox. Pair again to reconnect.
+      </p>
+      <button onClick={onUnpair} style={linkBtn}>Pair again</button>
+    </Centered>
+  );
+}
+
+/** Inside the providers: connection status first, then the app shell. */
+function Remote({ base, onUnpair }: { base: string; onUnpair: () => void }) {
   const { state, status } = useRemote();
-  const [tab, setTab] = useState<Tab>("now");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Terminal states always take over — the user has to act before the app
-  // is usable again.
   if (status === "disabled") {
     return (
       <Centered>
@@ -36,21 +45,8 @@ function Remote(
       </Centered>
     );
   }
-  if (status === "unauthorized") {
-    return (
-      <Centered>
-        <h2>This phone is no longer paired</h2>
-        <p style={{ color: "var(--ink2)" }}>
-          It was unpaired from the boombox. Pair again to reconnect.
-        </p>
-        <button onClick={onUnpair} style={linkBtn}>Pair again</button>
-      </Centered>
-    );
-  }
+  if (status === "unauthorized") return <NoLongerPaired onUnpair={onUnpair} />;
 
-  // Transient states: if we already have rendered state, keep showing it
-  // and overlay a thin banner instead of full-screen replacing the UI.
-  // The initial-load case (no state yet) still gets the centered message.
   const hasState = state !== null;
   if (!hasState && (status === "connecting" || status === "error" ||
                     status === "unavailable")) {
@@ -81,22 +77,7 @@ function Remote(
         </div>
       )}
       <InstallBanner />
-      <button type="button" aria-label="Settings"
-              onClick={() => setSettingsOpen(true)}
-              style={{
-                position: "fixed", top: 12, right: 12, zIndex: 15,
-                width: 36, height: 36, borderRadius: 18,
-                border: "1px solid var(--rule)", background: "var(--panel)",
-                color: "var(--ink2)", fontSize: 18, cursor: "pointer",
-                lineHeight: 1,
-              }}>⚙</button>
-      {tab === "now" && <NowPlaying onOpenLibrary={() => setTab("library")} />}
-      {tab === "library" && <Library />}
-      {tab === "playlists" && <Playlists />}
-      {tab === "search" && <Search />}
-      {tab === "files" && <Files />}
-      {tab !== "now" && <MiniPlayer onOpenNow={() => setTab("now")} />}
-      <TabBar active={tab} onChange={setTab} />
+      <AppShell onOpenSettings={() => setSettingsOpen(true)} />
       {settingsOpen && (
         <SettingsSheet base={base}
                        onClose={() => setSettingsOpen(false)}
@@ -106,27 +87,32 @@ function Remote(
   );
 }
 
-export default function App() {
+function Main() {
   const [pairing, setPairing] = useState<Pairing | null>(() => loadPairing());
-
-  if (!pairing) {
-    return <PairingScreen onPaired={setPairing} />;
-  }
-
-  const unpair = () => {
+  // Any API call answering 401 = this device was unpaired on the boombox.
+  const [revoked, setRevoked] = useState(false);
+  const unpair = useCallback(() => {
     clearPairing();
+    setRevoked(false);
     setPairing(null);
-  };
+  }, []);
+  const base = pairing ? apiBase(pairing) : "";
+  const api = useMemo(
+    () => (pairing ? makeApi(base, pairing.token, () => setRevoked(true)) : null),
+    [base, pairing]);
+  const transport = useMemo(
+    () => (pairing ? makeHttpTransport(base, pairing.token) : null), [base, pairing]);
 
-  // `key` forces a fresh TransportProvider (new transport) when the pairing
-  // changes — e.g. after re-pairing.
+  if (!pairing || !api || !transport) {
+    return <PairingScreen onPaired={(p) => { setRevoked(false); setPairing(p); }} />;
+  }
+  if (revoked) return <NoLongerPaired onUnpair={unpair} />;
+
+  // `key` forces a fresh TransportProvider when the pairing changes.
   return (
-    <ApiProvider api={makeApi(pairing.base, pairing.token)}>
-      <TransportProvider
-        key={pairing.token}
-        transport={makeHttpTransport(pairing.base, pairing.token)}
-      >
-        <Remote base={pairing.base} onUnpair={unpair} />
+    <ApiProvider api={api}>
+      <TransportProvider key={pairing.token} transport={transport}>
+        <Remote base={base} onUnpair={unpair} />
       </TransportProvider>
     </ApiProvider>
   );
@@ -148,3 +134,12 @@ const linkBtn: React.CSSProperties = {
   border: "1px solid var(--rule)", background: "var(--panel)",
   color: "var(--ink)", fontSize: 15, cursor: "pointer",
 };
+
+export default function App() {
+  return (
+    <>
+      <MovedHint />
+      <Main />
+    </>
+  );
+}

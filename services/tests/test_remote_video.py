@@ -107,3 +107,23 @@ async def test_command_returns_502_when_jellyfin_fails(video_app, aiohttp_client
                              headers={"Authorization": "Bearer t"})
     assert resp.status == 502
     assert (await resp.json())["error"] == "no_session"
+
+
+@pytest.mark.asyncio
+async def test_command_handler_validates_values(video_app, aiohttp_client):
+    import jellyfin_client
+    fake = FakeJellyfin()
+    jellyfin_client.add_routes(video_app, fake)
+    client = await aiohttp_client(video_app)
+    for body in ({"action": "set_subtitle", "value": -2},
+                 {"action": "set_audio", "value": "1"},
+                 {"action": "seek", "value": -1}):
+        resp = await client.post("/api/remote/video/command", json=body,
+                                 headers={"Authorization": "Bearer t"})
+        assert resp.status == 400, body
+        assert (await resp.json())["error"] == "bad_value"
+    resp = await client.post("/api/remote/video/command",
+                             json={"action": "set_subtitle", "value": -1},
+                             headers={"Authorization": "Bearer t"})
+    assert resp.status == 200
+    assert fake.commands == [("set_subtitle", -1)]

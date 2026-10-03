@@ -2,8 +2,13 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
+import subprocess
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from boombox_library.config import (
     DEFAULT_CONFIG,
     LibraryConfig,
@@ -20,7 +25,8 @@ def test_default_config_shape():
     assert c.sync.starred_auto_pin is True
     assert c.sync.max_concurrent_downloads == 2
     assert c.cache.marker_filename == ".boombox-cache"
-    assert c.cache.reserve_bytes == 1073741824  # 1 GB
+    assert c.cache.reserve_bytes == 20 * 1024 ** 3  # 20 GiB
+    assert c.cache.internal_path == "/opt/boombox/storage/music"
 
 
 def test_round_trip_no_password(tmp_path: Path, monkeypatch):
@@ -163,3 +169,82 @@ def test_max_bitrate_missing_or_junk_parses_as_zero(tmp_path: Path):
     assert load_config(path=path).source.max_bitrate_kbps == 0
     path.write_text("source:\n  max_bitrate_kbps: '320'\n")
     assert load_config(path=path).source.max_bitrate_kbps == 320
+
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def test_legacy_1gib_reserve_is_upgraded_to_20gib(tmp_path: Path):
+    p = tmp_path / "library.yml"
+    p.write_text("cache:\n  reserve_bytes: 1073741824\n")
+    assert load_config(path=p).cache.reserve_bytes == 21474836480
+
+
+def test_chosen_reserve_is_kept_and_junk_falls_back(tmp_path: Path):
+    p = tmp_path / "library.yml"
+    p.write_text("cache:\n  reserve_bytes: 5368709120\n")
+    assert load_config(path=p).cache.reserve_bytes == 5368709120
+    for junk in ("lots", "-1"):
+        p.write_text(f"cache:\n  reserve_bytes: {junk}\n")
+        assert load_config(path=p).cache.reserve_bytes == 21474836480
+
+
+def test_internal_path_default_disable_and_round_trip(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("boombox_library.config._machine_id", lambda: "deadbeef" * 4)
+    p = tmp_path / "library.yml"
+    p.write_text("cache:\n  search_paths: [/media]\n")
+    assert load_config(path=p).cache.internal_path == "/opt/boombox/storage/music"
+    p.write_text('cache:\n  internal_path: ""\n')
+    assert load_config(path=p).cache.internal_path == ""
+    p.write_text("cache:\n  internal_path:\n")
+    assert load_config(path=p).cache.internal_path == ""
+    cfg = replace(DEFAULT_CONFIG, cache=replace(DEFAULT_CONFIG.cache, internal_path="/srv/music"))
+    save_config(cfg, path=p)
+    assert load_config(path=p).cache.internal_path == "/srv/music"
+
+
+def test_template_carries_the_new_defaults():
+    cfg = load_config(path=REPO / "install" / "config" / "library.yml.template")
+    assert cfg.cache.internal_path == "/opt/boombox/storage/music"
+    assert cfg.cache.reserve_bytes == 21474836480
+
+
+def test_install_creates_internal_storage_owned_by_the_service_user():
+    sh = (REPO / "install" / "install.sh").read_text()
+    assert ('sudo install -d -o "$BOOMBOX_USER" -g "$BOOMBOX_USER" -m 0755 '
+            '/opt/boombox/storage /opt/boombox/storage/music') in sh
+
+
+def test_legacy_migration_never_moves_internal_storage_into_a_release(tmp_path: Path):
+    """migrate_legacy_layout moves the old checkout into releases/legacy-<sha>/,
+    which later auto-update prunes delete — so /opt/boombox/storage (kept
+    music, created by install.sh) must stay put, like state/."""
+    if not shutil.which("git") or not shutil.which("bash"):
+        pytest.skip("needs git and bash")
+    sh = (REPO / "install" / "install.sh").read_text()
+    fn = re.search(r"^migrate_legacy_layout\(\) \{\n.*?^\}\n", sh, re.S | re.M)
+    assert fn, "migrate_legacy_layout not found in install.sh"
+    root = tmp_path / "boombox"
+    (root / "services").mkdir(parents=True)
+    (root / "storage" / "music" / "audio").mkdir(parents=True)
+    (root / "storage" / "music" / "audio" / "t1.flac").write_bytes(b"x")
+    (root / "state").mkdir()
+    git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    (root / "services" / "a.py").write_text("x\n")
+    subprocess.run([*git, "add", "services"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "init"], check=True)
+    script = (
+        "set -euo pipefail\n"
+        f'BOOMBOX_ROOT="{root}"\n'
+        'RELEASES_DIR="$BOOMBOX_ROOT/releases"\n'
+        'CURRENT_LINK="$BOOMBOX_ROOT/current"\n'
+        'STATE_DIR="$BOOMBOX_ROOT/state"\n'
+        "log() { :; }\n" + fn.group(0) + "migrate_legacy_layout\n"
+    )
+    subprocess.run(["bash", "-c", script], check=True)
+    assert (root / "storage" / "music" / "audio" / "t1.flac").read_bytes() == b"x"
+    (release,) = (root / "releases").iterdir()
+    assert (release / "services" / "a.py").exists()  # the checkout did move
+    assert not (release / "storage").exists()
+    assert (root / "state").is_dir()

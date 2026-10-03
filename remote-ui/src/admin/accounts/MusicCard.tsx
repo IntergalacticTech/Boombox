@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { ErrorText } from "../components/ui";
+import { ErrorText } from "../ui";
 import { accountsApi } from "./api";
 import type { MusicInfo, OkResult } from "./types";
-import { MusicForm, type MusicValues } from "../shared/MusicForm";
+import { MusicForm, type MusicValues } from "../forms/MusicForm";
 
 export function MusicCard({ onChanged }: { onChanged: () => void }) {
   const [info, setInfo] = useState<MusicInfo | null>(null);

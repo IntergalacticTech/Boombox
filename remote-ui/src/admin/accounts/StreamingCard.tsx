@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { accountsApi } from "./api";
 import type { OkResult, Receiver, StreamingInfo } from "./types";
-import { ErrorText, Field, PrimaryButton, inputStyle } from "../components/ui";
+import { ErrorText, Field, PrimaryButton, inputStyle } from "../ui";
 
 type SaveFn = (body: Record<string, unknown>) => Promise<OkResult>;
 
