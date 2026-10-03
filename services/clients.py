@@ -46,6 +46,35 @@ class MopidyRpc:
             return {}
 
 
+# boombox-state's friendly MPRIS labels (SOURCE_LABELS in boombox-state.py,
+# lowercased) → the source ids remotes use (`sources_available`, the
+# dispatcher's `source` action values). The kiosk only plays video in the
+# browser — Jellyfin in Chromium — so "browser" is the Movies source.
+EXTERNAL_SOURCE_KIND = {
+    "browser": "movies",
+    "airplay": "airplay",
+    "spotify": "spotify",
+    "bluetooth": "bluetooth",
+}
+
+
+def external_label(body: dict) -> str | None:
+    """The lowercased label of boombox-state's player when it is playing or
+    paused, else None — the one definition of "an external player is
+    active" (the SPA's isExternalActive())."""
+    label = (body.get("label") or "").lower()
+    status = (body.get("status") or "").lower()
+    if not label or status not in ("playing", "paused"):
+        return None
+    return label
+
+
+def external_kind(label: str) -> str:
+    """Map a boombox-state label to the remote-facing source id. Unknown
+    players (e.g. VLC) keep their lowercased label."""
+    return EXTERNAL_SOURCE_KIND.get(label.lower(), label.lower())
+
+
 class StateApi:
     """Thin client for the boombox-state aggregator at :6681.
 
@@ -57,7 +86,10 @@ class StateApi:
     def __init__(self, session: aiohttp.ClientSession):
         self._sess = session
 
-    async def current_source(self) -> str | None:
+    async def snapshot(self) -> dict | None:
+        """boombox-state's raw GET /state body (the active non-Mopidy MPRIS
+        player: label, status, track, position_ms, length_ms…), or None
+        when the service is down or answers oddly."""
         try:
             async with self._sess.get(f"{STATE_BASE}/state",
                                       timeout=aiohttp.ClientTimeout(total=1)) as r:
@@ -65,6 +97,12 @@ class StateApi:
                     return None
                 body = await r.json()
         except Exception:
+            return None
+        return body if isinstance(body, dict) else None
+
+    async def current_source(self) -> str | None:
+        body = await self.snapshot()
+        if body is None:
             return None
         label = (body.get("label") or "").lower()
         return label or None
@@ -75,19 +113,8 @@ class StateApi:
         external (e.g. AirPlay after the iPhone disconnects) returns None so
         callers can fall back to Mopidy instead of routing dead commands to
         an MPRIS player that won't react."""
-        try:
-            async with self._sess.get(f"{STATE_BASE}/state",
-                                      timeout=aiohttp.ClientTimeout(total=1)) as r:
-                if r.status != 200:
-                    return None
-                body = await r.json()
-        except Exception:
-            return None
-        label = (body.get("label") or "").lower()
-        status = (body.get("status") or "").lower()
-        if not label or status not in ("playing", "paused"):
-            return None
-        return label
+        body = await self.snapshot()
+        return external_label(body) if body is not None else None
 
     async def control(self, action: str) -> None:
         try:

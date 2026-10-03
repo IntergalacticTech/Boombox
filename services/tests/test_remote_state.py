@@ -85,8 +85,8 @@ async def test_consolidated_state_includes_theme():
             return {"result": None}
 
     class FakeState:
-        async def current_source(self):
-            return "mopidy"
+        async def snapshot(self):
+            return None
 
         async def volume_get(self):
             return (0.65, False)
@@ -122,7 +122,7 @@ def _agg_with_power(power):
             return {"result": None}
 
     class FakeState:
-        async def current_source(self):
+        async def snapshot(self):
             return None
 
         async def volume_get(self):

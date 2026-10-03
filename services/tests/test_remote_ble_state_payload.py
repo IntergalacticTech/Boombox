@@ -182,3 +182,13 @@ def test_power_survives_compaction_and_trimming():
         out = ble_peripheral.ble_state_payload(long)
         assert len(out) <= ble_peripheral.BLE_STATE_MAX
         assert json.loads(out)["data"]["power"] == power
+
+
+def test_view_and_source_survive_trimming():
+    for view in ("home", "player"):
+        long = _state(title="T" * 300, artist="A" * 300, album="B" * 300)
+        long.update(view=view, source="movies")
+        out = ble_peripheral.ble_state_payload(long)
+        assert len(out) <= ble_peripheral.BLE_STATE_MAX
+        d = json.loads(out)["data"]
+        assert d["view"] == view and d["source"] == "movies"
