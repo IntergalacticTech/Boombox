@@ -50,7 +50,11 @@ public:
     void note(uint32_t now) { _last = now; _seen = true; }
     void reset() { _seen = false; }
     bool active(uint32_t now) const {
-        return _seen && (uint32_t)(now - _last) < _window;
+        if (!_seen) return false;
+        // A caller may hold a `now` read just before the note() that stamped
+        // _last (same loop pass): that is "just arrived", not 49 days ago.
+        if ((int32_t)(now - _last) < 0) return true;
+        return (uint32_t)(now - _last) < _window;
     }
 
 private:

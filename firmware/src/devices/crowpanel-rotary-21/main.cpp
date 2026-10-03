@@ -394,7 +394,8 @@ void setup() {
 void loop() {
     const uint32_t now = millis();
     service(now);
-    const bool usb = gLink != Link::Paused && gUsb.active(now);
+    // Re-read the clock: service() may have just stamped a fresh host state.
+    const bool usb = gLink != Link::Paused && gUsb.active(millis());
     if (usb && !gUsbMode) enterUsbMode();
     else if (!usb && gUsbMode) leaveUsbMode();
     if (!gUsbMode) {

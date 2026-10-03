@@ -337,6 +337,14 @@ void test_screen_names() {
     TEST_ASSERT_EQUAL_STRING("off", screenName(Screen::Off));
 }
 
+void test_link_window_note_after_now_is_active() {
+    LinkWindow w(12000);
+    w.note(1005);                                   // state stamped at 1005…
+    TEST_ASSERT_TRUE(w.active(1000));               // …checked with now=1000
+    TEST_ASSERT_TRUE(w.active(1005 + 11999));
+    TEST_ASSERT_FALSE(w.active(1005 + 12000));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_hex_forms);
@@ -368,5 +376,6 @@ int main(int, char**) {
     RUN_TEST(test_screen_idle_boombox_dims_but_never_goes_off);
     RUN_TEST(test_screen_off_while_boombox_asleep);
     RUN_TEST(test_screen_names);
+    RUN_TEST(test_link_window_note_after_now_is_active);
     return UNITY_END();
 }
