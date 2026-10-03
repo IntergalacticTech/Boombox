@@ -66,7 +66,7 @@ DEFAULT_PATHS: tuple[str, ...] = (
 # Knob log lines worth surfacing: panics, resets and the firmware's boot banner.
 _KNOB_ALERT = re.compile(
     rb"Guru Meditation|abort\(\)|Backtrace:|rst:0x|task_wdt|Brownout|"
-    rb"=== boombox|ESP-ROM:")
+    rb"=== boombox|ESP-ROM:|host link quiet")
 
 # Profiles that identify a knob in the hello reply.
 KNOB_PROFILES: frozenset[str] = frozenset({"crowpanel-rotary-21"})
@@ -76,6 +76,7 @@ NEVER_VENDORS: frozenset[str] = frozenset({"1a86"})
 RETRY_S = 5.0          # between discovery attempts
 POLL_S = 0.5           # state poll / pause-file check
 RESEND_S = 5.0         # unchanged state is re-sent this often (knob window: 12 s)
+GAP_WARN_S = 8.0       # warn when the knob has gone this long without a state
 HELLO_TIMEOUT_S = 2.0
 PAUSE_MAX_S = 300.0    # an older pause file is treated as stale
 MAX_LINE = 8192        # knob → host; longer lines (none expected) are dropped
@@ -412,12 +413,14 @@ class KnobUsbBridge:
                          f"(profile {self.profile}, fw {self.fw})")
         last: Optional[bytes] = None
         last_sent = float("-inf")
+        gap_warned = False
         try:
             while not port.closed.is_set():
                 if self.paused():
                     self._set_status("paused", "paused: releasing the knob port "
                                      f"while {self._pause_file} exists")
                     return
+                t0 = self._clock()
                 try:
                     data = await self._aggregator.consolidated_state()
                     line = usb_state_line(data)
@@ -425,6 +428,14 @@ class KnobUsbBridge:
                     log.debug("[knob-usb] state poll: %s", e)
                     line = None
                 now = self._clock()
+                # The knob calls the link lost after KNOB_WINDOW_S without a
+                # state, so say when we get close and why (slow state fetch?).
+                if (last_sent != float("-inf") and now - last_sent > GAP_WARN_S
+                        and not gap_warned):
+                    gap_warned = True
+                    log.warning("[knob-usb] %.1f s since the last state sent "
+                                "(state fetch took %.1f s%s)", now - last_sent,
+                                now - t0, "" if line is not None else ", failed")
                 if self._force_push:
                     self._force_push = False
                     last = None
@@ -432,6 +443,7 @@ class KnobUsbBridge:
                                          or now - last_sent >= self._resend_s):
                     if port.write(line):
                         last, last_sent = line, now
+                        gap_warned = False
                 try:
                     await asyncio.wait_for(port.closed.wait(), self._poll_s)
                 except asyncio.TimeoutError:
