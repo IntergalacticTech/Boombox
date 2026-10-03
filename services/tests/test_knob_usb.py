@@ -282,6 +282,24 @@ async def test_commands_dispatch_with_usb_source_and_logs_are_ignored(rig):
     ]
 
 
+async def test_knob_crash_and_boot_lines_are_logged(rig, caplog):
+    """A panic/WDT reset restarts the knob's CPU without dropping USB, so its
+    console text is the only trace — surface it, but keep ordinary logs quiet."""
+    k = rig.knob()
+    rig.start()
+    await until(lambda: k.states)
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        await k.write(b"[enc] detents=+1 raw=4\r\n")
+        await k.write(b"Guru Meditation Error: Core  1 panic'ed (LoadProhibited)\r\n")
+        await k.write(b"=== boombox-remote firmware ===\r\n")
+        await until(lambda: sum("knob:" in r.getMessage() for r in caplog.records) >= 2)
+    msgs = [r.getMessage() for r in caplog.records if "knob:" in r.getMessage()]
+    assert any("Guru Meditation" in m for m in msgs)
+    assert any("=== boombox" in m for m in msgs)
+    assert not any("[enc]" in m for m in msgs)
+
+
 async def test_commands_after_a_partial_line_still_parse(rig):
     k = rig.knob()
     rig.start()

@@ -49,6 +49,7 @@ import glob
 import json
 import logging
 import os
+import re
 import termios
 import time
 from pathlib import Path
@@ -62,6 +63,11 @@ DEFAULT_PATHS: tuple[str, ...] = (
     "/dev/boombox-knob",
     "/dev/serial/by-id/*Espressif*",
 )
+# Knob log lines worth surfacing: panics, resets and the firmware's boot banner.
+_KNOB_ALERT = re.compile(
+    rb"Guru Meditation|abort\(\)|Backtrace:|rst:0x|task_wdt|Brownout|"
+    rb"=== boombox|ESP-ROM:")
+
 # Profiles that identify a knob in the hello reply.
 KNOB_PROFILES: frozenset[str] = frozenset({"crowpanel-rotary-21"})
 # USB vendor IDs the bridge must never open (CH340 → CYD remotes).
@@ -307,7 +313,13 @@ class KnobUsbBridge:
 
     def _on_line(self, line: bytes) -> None:
         if not line.startswith(b"{"):
-            return                         # knob log / console output
+            # Knob log / console output is ignored, except crash and boot
+            # markers: an ESP32-S3 panic or watchdog reset restarts the CPU
+            # without dropping USB, so this is the only trace of it here.
+            if _KNOB_ALERT.search(line):
+                log.warning("[knob-usb] knob: %s",
+                            line[:200].decode("utf-8", "replace").strip())
+            return
         try:
             msg = json.loads(line)
         except ValueError:

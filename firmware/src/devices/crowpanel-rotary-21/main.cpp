@@ -26,6 +26,7 @@
 // `state`/`demo`/`ble off` pause both links (demo mode) until `ble on`.
 
 #include <Arduino.h>
+#include <esp_system.h>
 #include <ArduinoJson.h>
 #include <lvgl.h>
 #include <time.h>
@@ -357,6 +358,9 @@ void setup() {
     delay(300);
     Serial.println();
     Serial.println("=== boombox-remote firmware ===");
+    // Why we (re)started: a panic/WDT reset keeps USB up, so the host bridge
+    // only learns about it from this line.
+    Serial.printf("=== boombox reset reason %d ===\n", (int)esp_reset_reason());
     Serial.printf("profile: %s\n", PROFILE_ID);
     Serial.printf("version: %s\n", BOOMBOX_FW_VERSION);
 
