@@ -24,8 +24,16 @@ export interface ThemeVars {
 
 export interface RemoteState {
   boombox: { id: string; name: string; version: number };
+  // The live player: "mopidy" | "airplay" | "spotify" | "bluetooth" |
+  // "movies" (a Jellyfin video in the kiosk) — the ids in
+  // sources_available — or null when nothing is playing. track/playing
+  // follow it, so they describe a movie while one is on.
   source: string | null;
   playing: boolean;
+  // boombox-state's power state.
+  power?: "awake" | "asleep";
+  // What the kiosk screen shows: "home" (the input picker) or "player".
+  view?: "home" | "player";
   track: Track | null;
   art_hash: string | null;
   art_url: string | null;
