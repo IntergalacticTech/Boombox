@@ -193,6 +193,10 @@ void KnobUI::build() {
     _f_artist = label(_f_col, &lv_font_montserrat_20, "");
     lv_obj_set_width(_f_artist, 300);
     lv_label_set_long_mode(_f_artist, LV_LABEL_LONG_DOT);
+    _f_note = label(_f_col, &lv_font_montserrat_16, "");
+    lv_obj_set_width(_f_note, 280);
+    lv_label_set_long_mode(_f_note, LV_LABEL_LONG_DOT);
+    show(_f_note, false);
 
     _f_glyph_ring = lv_obj_create(_f_center);
     lv_obj_remove_style_all(_f_glyph_ring);
@@ -297,6 +301,7 @@ void KnobUI::_restyle() {
     lv_obj_set_style_text_color(_f_source, _t.accent, 0);
     lv_obj_set_style_text_color(_f_title, _t.ink, 0);
     lv_obj_set_style_text_color(_f_artist, _t.ink2, 0);
+    lv_obj_set_style_text_color(_f_note, _t.ink2, 0);
     lv_obj_set_style_border_color(_f_glyph_ring, _t.accent, 0);
     lv_obj_set_style_text_color(_f_glyph, _t.accent, 0);
 
@@ -365,23 +370,28 @@ void KnobUI::_layoutTitle(const char* text) {
 void KnobUI::setNowPlaying(const NowPlaying& np) {
     const bool first = !_np_valid;
     _np_valid = true;
-    if (first || np.source_label != _np.source_label)
+    if (first || np.source_label != _np.source_label) {
         setText(_f_source, np.source_label.c_str());
-    if (first || np.has_track != _np.has_track || np.title != _np.title) {
-        const char* t = np.has_track ? np.title.c_str() : "Nothing playing";
-        _layoutTitle(t);
-        lv_label_set_text(_f_title, t);
+        show(_f_source, np.source_label.length());
     }
-    if (first || np.has_track != _np.has_track || np.artist != _np.artist) {
-        setText(_f_artist, np.has_track ? np.artist.c_str() : "");
-        show(_f_artist, np.has_track && np.artist.length());
+    if (first || np.title != _np.title) {
+        _layoutTitle(np.title.c_str());
+        lv_label_set_text(_f_title, np.title.c_str());
     }
-    show(_f_glyph_ring, np.has_track);
+    if (first || np.artist != _np.artist) {
+        setText(_f_artist, np.artist.c_str());
+        show(_f_artist, np.artist.length());
+    }
+    if (first || np.note != _np.note) {
+        setText(_f_note, np.note.c_str());
+        show(_f_note, np.note.length());
+    }
+    show(_f_glyph_ring, np.transport);
     if (first || np.playing != _np.playing)
         setText(_f_glyph, np.playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
 
     int prog = -1;
-    if (np.has_track && np.duration_s > 0) {
+    if (np.progress && np.duration_s > 0) {
         uint32_t p = np.position_s > np.duration_s ? np.duration_s : np.position_s;
         prog = (int)(p * 1000ULL / np.duration_s);
     }

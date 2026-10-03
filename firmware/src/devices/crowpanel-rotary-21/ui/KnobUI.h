@@ -18,12 +18,15 @@
 
 namespace knob {
 
+// The face's text comes from knob::faceText (lib/knob-logic/FaceText.h).
 struct NowPlaying {
-    String source_label;     // e.g. "LIBRARY"
-    String title;
-    String artist;
-    bool has_track = false;
+    String source_label;     // e.g. "VIDEO"; "" hides it
+    String title;            // headline
+    String artist;           // second line; "" hides it
+    String note;             // small extra line ("Playing: ..."); "" hides it
+    bool transport = false;  // show the play/pause glyph
     bool playing = false;
+    bool progress = false;   // show the progress ring (needs a duration)
     uint32_t duration_s = 0;
     uint32_t position_s = 0;
 };
@@ -109,6 +112,7 @@ private:
     lv_obj_t* _f_source = nullptr;
     lv_obj_t* _f_title = nullptr;
     lv_obj_t* _f_artist = nullptr;
+    lv_obj_t* _f_note = nullptr;
     lv_obj_t* _f_glyph_ring = nullptr;
     lv_obj_t* _f_glyph = nullptr;
     lv_obj_t* _f_vol_label = nullptr;

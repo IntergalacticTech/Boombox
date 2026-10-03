@@ -35,6 +35,9 @@ struct BoomboxState {
     // boombox-state's power state ("power": "awake" | "asleep"). Absent or
     // anything else reads as awake.
     bool asleep = false;
+    // What the kiosk screen shows ("view": "home" | "player"). Absent or
+    // anything else reads as the player.
+    bool home_view = false;
     TrackInfo track;
     String art_hash;
     String art_url;

@@ -2,6 +2,7 @@
 #include <unity.h>
 
 #include "CssColor.h"
+#include "FaceText.h"
 #include "HostLink.h"
 #include "KnobGesture.h"
 #include "ScreenPolicy.h"
@@ -345,6 +346,109 @@ void test_link_window_note_after_now_is_active() {
     TEST_ASSERT_FALSE(w.active(1005 + 12000));
 }
 
+// ------------------------------------------------------------- face text
+static FaceText face(const char* source, bool home, bool playing,
+                     const char* title, const char* artist = "") {
+    FaceInput in;
+    in.source = source;
+    in.home = home;
+    in.playing = playing;
+    in.title = title;
+    in.artist = artist;
+    return faceText(in);
+}
+
+void test_face_movie() {
+    FaceText f = face("movies", false, true, "(500) Days of Summer");
+    TEST_ASSERT_EQUAL_STRING("VIDEO", f.label.c_str());
+    TEST_ASSERT_EQUAL_STRING("(500) Days of Summer", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("", f.sub.c_str());
+    TEST_ASSERT_TRUE(f.transport);
+    TEST_ASSERT_TRUE(f.progress);
+    TEST_ASSERT_EQUAL_STRING("", f.note.c_str());
+    // Paused: same text, glyph still shown (it follows `playing`).
+    f = face("movies", false, false, "(500) Days of Summer");
+    TEST_ASSERT_EQUAL_STRING("(500) Days of Summer", f.headline.c_str());
+    TEST_ASSERT_TRUE(f.transport);
+}
+
+void test_face_movie_episode_text_is_split() {
+    FaceText f = face("movies", false, true, "Severance - S01E03 - In Perpetuity");
+    TEST_ASSERT_EQUAL_STRING("Severance", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("S01E03 - In Perpetuity", f.sub.c_str());
+    // A dash without an episode marker is just part of the title.
+    f = face("movies", false, true, "Mission: Impossible - Fallout");
+    TEST_ASSERT_EQUAL_STRING("Mission: Impossible - Fallout", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("", f.sub.c_str());
+    // A series name sent as the artist wins over splitting.
+    f = face("movies", false, true, "S1:E2 - Pilot", "The Show");
+    TEST_ASSERT_EQUAL_STRING("S1:E2 - Pilot", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("The Show", f.sub.c_str());
+}
+
+void test_face_music_sources() {
+    FaceText f = face("mopidy", false, true, "Hey Jude", "The Beatles");
+    TEST_ASSERT_EQUAL_STRING("LIBRARY", f.label.c_str());
+    TEST_ASSERT_EQUAL_STRING("Hey Jude", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("The Beatles", f.sub.c_str());
+    TEST_ASSERT_EQUAL_STRING("AIRPLAY", face("airplay", false, true, "T").label.c_str());
+    TEST_ASSERT_EQUAL_STRING("SPOTIFY", face("spotify", false, true, "T").label.c_str());
+    TEST_ASSERT_EQUAL_STRING("BLUETOOTH", face("bluetooth", false, true, "T").label.c_str());
+    TEST_ASSERT_EQUAL_STRING("VLC", face("vlc", false, true, "T").label.c_str());
+    // Artist only.
+    f = face("airplay", false, true, "", "Some Artist");
+    TEST_ASSERT_EQUAL_STRING("Some Artist", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("", f.sub.c_str());
+}
+
+void test_face_source_without_metadata() {
+    FaceText f = face("bluetooth", false, true, "");
+    TEST_ASSERT_EQUAL_STRING("BLUETOOTH", f.label.c_str());
+    TEST_ASSERT_EQUAL_STRING("Bluetooth", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("Playing", f.sub.c_str());
+    TEST_ASSERT_TRUE(f.transport);
+    TEST_ASSERT_FALSE(f.progress);
+    TEST_ASSERT_EQUAL_STRING("Paused", face("bluetooth", false, false, "").sub.c_str());
+}
+
+void test_face_nothing_playing() {
+    FaceText f = face("", false, false, "");
+    TEST_ASSERT_EQUAL_STRING("BOOMBOX", f.label.c_str());
+    TEST_ASSERT_EQUAL_STRING("Nothing playing", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("", f.sub.c_str());
+    TEST_ASSERT_FALSE(f.transport);
+    TEST_ASSERT_FALSE(f.progress);
+    FaceInput in;
+    in.have_state = false;
+    TEST_ASSERT_EQUAL_STRING("", faceText(in).label.c_str());
+    TEST_ASSERT_EQUAL_STRING("", sourceCaption(nullptr, false).c_str());
+}
+
+void test_face_home_never_shows_a_stale_track() {
+    // A paused/stopped track behind Home is not mentioned at all.
+    FaceText f = face("mopidy", true, false, "Hey Jude", "The Beatles");
+    TEST_ASSERT_EQUAL_STRING("Home", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("Choose a source", f.sub.c_str());
+    TEST_ASSERT_EQUAL_STRING("", f.note.c_str());
+    TEST_ASSERT_EQUAL_STRING("", f.label.c_str());
+    TEST_ASSERT_FALSE(f.transport);
+    TEST_ASSERT_FALSE(f.progress);
+}
+
+void test_face_home_mentions_what_is_playing() {
+    FaceText f = face("movies", true, true, "(500) Days of Summer");
+    TEST_ASSERT_EQUAL_STRING("Home", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("Choose a source", f.sub.c_str());
+    TEST_ASSERT_EQUAL_STRING("Playing: (500) Days of Summer", f.note.c_str());
+    TEST_ASSERT_TRUE(f.transport);
+    TEST_ASSERT_FALSE(f.progress);
+    f = face("bluetooth", true, true, "");
+    TEST_ASSERT_EQUAL_STRING("Playing: Bluetooth", f.note.c_str());
+    f = face("", true, false, "");
+    TEST_ASSERT_EQUAL_STRING("Home", f.headline.c_str());
+    TEST_ASSERT_EQUAL_STRING("", f.note.c_str());
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_hex_forms);
@@ -377,5 +481,12 @@ int main(int, char**) {
     RUN_TEST(test_screen_off_while_boombox_asleep);
     RUN_TEST(test_screen_names);
     RUN_TEST(test_link_window_note_after_now_is_active);
+    RUN_TEST(test_face_movie);
+    RUN_TEST(test_face_movie_episode_text_is_split);
+    RUN_TEST(test_face_music_sources);
+    RUN_TEST(test_face_source_without_metadata);
+    RUN_TEST(test_face_nothing_playing);
+    RUN_TEST(test_face_home_never_shows_a_stale_track);
+    RUN_TEST(test_face_home_mentions_what_is_playing);
     return UNITY_END();
 }

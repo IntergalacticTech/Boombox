@@ -1,5 +1,6 @@
 #include "KnobApp.h"
 #include "board/Board.h"
+#include "FaceText.h"
 #include "TextFold.h"
 #include "VolumeAccel.h"
 
@@ -12,19 +13,19 @@ constexpr uint32_t OPTIMISTIC_HOLD_MS = 1500;
 constexpr uint8_t BL_AWAKE = 204;
 constexpr uint8_t BL_DIM = 28;
 
+// The face's source captions live in FaceText (sourceCaption).
 struct SourceDef {
     const char* id;       // as reported in state.source
     const char* command;  // value for the `source` action
-    const char* label;    // face label
     const char* name;     // menu chip
     const char* symbol;
 };
 const SourceDef SOURCES[] = {
-    {"mopidy", "library", "LIBRARY", "Library", LV_SYMBOL_LIST},
-    {"airplay", "airplay", "AIRPLAY", "AirPlay", LV_SYMBOL_WIFI},
-    {"spotify", "spotify", "SPOTIFY", "Spotify", LV_SYMBOL_AUDIO},
-    {"bluetooth", "bluetooth", "BLUETOOTH", "Bluetooth", LV_SYMBOL_BLUETOOTH},
-    {"movies", "movies", "MOVIES", "Movies", LV_SYMBOL_VIDEO},
+    {"mopidy", "library", "Library", LV_SYMBOL_LIST},
+    {"airplay", "airplay", "AirPlay", LV_SYMBOL_WIFI},
+    {"spotify", "spotify", "Spotify", LV_SYMBOL_AUDIO},
+    {"bluetooth", "bluetooth", "Bluetooth", LV_SYMBOL_BLUETOOTH},
+    {"movies", "movies", "Movies", LV_SYMBOL_VIDEO},
 };
 constexpr int N_SOURCES = sizeof(SOURCES) / sizeof(SOURCES[0]);
 
@@ -300,16 +301,25 @@ void KnobApp::onState(const boombox::BoomboxState& s, uint32_t now) {
 
 void KnobApp::_refreshFace(uint32_t now) {
     const bool hold = now < _hold_until;
-    NowPlaying np;
-    const int si = sourceIndex(_state.source);
-    if (si >= 0) np.source_label = SOURCES[si].label;
-    else if (_state.source.length()) { np.source_label = _state.source; np.source_label.toUpperCase(); }
-    else np.source_label = _have_state ? "BOOMBOX" : "";
-    np.has_track = _state.track.valid();
     // Built-in Montserrat is ASCII-only: fold accents/typographic punctuation.
-    np.title = foldToAscii(_state.track.title.c_str()).c_str();
-    np.artist = foldToAscii(_state.track.artist.c_str()).c_str();
-    np.playing = hold ? _opt_playing : _state.playing;
+    const std::string title = foldToAscii(_state.track.title.c_str());
+    const std::string artist = foldToAscii(_state.track.artist.c_str());
+    FaceInput in;
+    in.source = _state.source.c_str();
+    in.home = _state.home_view;
+    in.playing = hold ? _opt_playing : _state.playing;
+    in.title = title.c_str();
+    in.artist = artist.c_str();
+    in.have_state = _have_state;
+    const FaceText f = faceText(in);
+    NowPlaying np;
+    np.source_label = f.label.c_str();
+    np.title = f.headline.c_str();
+    np.artist = f.sub.c_str();
+    np.note = f.note.c_str();
+    np.transport = f.transport;
+    np.playing = in.playing;
+    np.progress = f.progress;
     np.duration_s = _state.track.duration_s;
     np.position_s = _state.track.position_s;
     _ui.setNowPlaying(np);
