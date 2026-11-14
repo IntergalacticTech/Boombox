@@ -1,0 +1,165 @@
+{
+  "name": "Boombox Mk I (Rev F reference)",
+  "parts": {
+    "driver": {
+      "name": "Pioneer TS-A1671F",
+      "cutout_d": 143,
+      "frame_d": 166,
+      "mount_depth": 59,
+      "target_volume_l": 12.18,
+      "vent_d": 50
+    },
+    "screen": {
+      "name": "Raspberry Pi 7in Touch Display v1",
+      "module": [
+        194.7,
+        110.8,
+        20.7
+      ],
+      "window": [
+        185,
+        101
+      ],
+      "window_offset": [
+        0,
+        0
+      ],
+      "pocket_clearance": [1.15, 1.1],
+      "pocket_depth": 14
+    },
+    "transport": {
+      "count": 5,
+      "d": 16,
+      "pitch": 34,
+      "keys": [
+        "prev",
+        "play/pause",
+        "stop",
+        "next",
+        "spare"
+      ]
+    },
+    "source_row": {
+      "enabled": true,
+      "count": 6,
+      "d": 16,
+      "pitch": 30,
+      "x0": 60,
+      "keys": [
+        "local",
+        "bluetooth",
+        "cast",
+        "airplay",
+        "spotify",
+        "radio"
+      ]
+    },
+    "encoder": {
+      "enabled": true,
+      "shaft_d": 10,
+      "knob_d": 45,
+      "x_from_right": 72
+    },
+    "led_bar": {
+      "enabled": true,
+      "w": 592,
+      "h": 22,
+      "depth": 10,
+      "gap_above_driver": 22,
+      "slot": [
+        20,
+        8
+      ]
+    },
+    "rfid": {
+      "enabled": true,
+      "reader": [
+        102,
+        76
+      ],
+      "pocket_clearance": 4,
+      "web": 5,
+      "cy": 85
+    },
+    "handle": {
+      "enabled": true,
+      "bolt_d": 6.5,
+      "cy": 108,
+      "tube_d": 25,
+      "length": 300
+    },
+    "battery": {
+      "name": "Anker Prime 26K (A110A)",
+      "size": [
+        127,
+        54,
+        50
+      ]
+    },
+    "door": {
+      "opening": [
+        160,
+        270
+      ],
+      "opening_cy": 165,
+      "leaf": [
+        200,
+        310
+      ],
+      "usb_c": {
+        "d": 24,
+        "cx": 55,
+        "cy": 55
+      },
+      "exhaust": {
+        "d": 19,
+        "cy": 275,
+        "cx_list": [
+          46,
+          82,
+          118,
+          154
+        ]
+      }
+    },
+    "intake": {
+      "d": 19,
+      "count": 4,
+      "pitch": 46
+    },
+    "wire_pass": {
+      "driver": {
+        "d": 9,
+        "from_baffle": 130,
+        "cy": 60
+      },
+      "channel": {
+        "d": 13,
+        "from_baffle": 90,
+        "cy": 315
+      }
+    }
+  },
+  "cabinet": {
+    "t_shell": 12,
+    "t_baffle": 18,
+    "chamber_h": 282,
+    "chamber_d": 180,
+    "bay_w": 210,
+    "bay_clearance": 5,
+    "centreline_y": 140,
+    "control_strip_h": 42,
+    "sheet": "4x4",
+    "kerf": 3.2,
+    "sheet_margin": 10,
+    "cnc": {
+      "bit_d": 6.35,
+      "bed": "4x4"
+    },
+    "finishes": [
+      "classic",
+      "wood"
+    ]
+  },
+  "overrides": {}
+}
