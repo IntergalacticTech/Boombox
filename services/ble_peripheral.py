@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 import remote_access
+import remote_wire
 from bless import (
     BlessGATTCharacteristic,
     BlessServer,
@@ -48,6 +49,58 @@ PAIR_REQUEST_UUID  = "0000bbb1-0000-1000-8000-00805f9b34fb"
 PAIR_RESPONSE_UUID = "0000bbb2-0000-1000-8000-00805f9b34fb"
 STATE_UUID         = "0000bbb3-0000-1000-8000-00805f9b34fb"
 COMMAND_UUID       = "0000bbb4-0000-1000-8000-00805f9b34fb"
+
+
+# A GATT attribute value tops out at 512 bytes, and a notify carries at most
+# MTU-3 (514 at the 517 MTU remotes negotiate) — BlueZ silently truncates
+# anything longer, which the remote then fails to parse. The full consolidated
+# state (track URI, art URL, the theme's font stacks…) runs ~900 bytes, so the
+# BLE copy is trimmed to what remotes use and capped below the limit.
+BLE_STATE_MAX = 510
+_ELLIPSIS = "…"
+# bless drops the ReadValue offset, so a state value longer than one ATT read
+# response comes back corrupted on a long read (seen live: the CrowPanel knob's
+# initial read parsed as IncompleteInput after ~275 bytes). Notifies are not
+# affected, so the push loop re-sends unchanged state this often and freshly
+# subscribed remotes get a clean copy within a few seconds.
+STATE_RESEND_S = 5.0
+
+
+def ble_state_payload(data: dict, limit: int = BLE_STATE_MAX) -> bytes:
+    """Serialise consolidated state as {"ok":true,"data":…} for the BLE
+    state characteristic, guaranteed to fit in `limit` bytes.
+
+    Drops fields no remote reads (remote_wire.compact_state), uses compact
+    UTF-8 JSON, then shortens the longest of album/artist/title (with an
+    ellipsis) until it fits.
+    """
+    d = remote_wire.compact_state(data)
+    track = d.get("track")
+
+    def encode() -> bytes:
+        return remote_wire.dumps_compact({"ok": True, "data": d})
+
+    out = encode()
+    while len(out) > limit and isinstance(track, dict):
+        fields = [k for k in ("album", "artist", "title")
+                  if isinstance(track.get(k), str) and track[k]]
+        if not fields:
+            break
+        # Longest first; on a tie album gives way before artist before title.
+        key = max(fields, key=lambda k: (len(track[k].encode()),
+                                         k == "album", k == "artist"))
+        raw = track[key].encode()
+        keep = len(raw) - (len(out) - limit) - len(_ELLIPSIS.encode())
+        # Never wipe a long field in one go — halve it and let the next
+        # longest share the cut.
+        keep = max(keep, len(raw) // 2 if len(raw) > 32 else 0)
+        track[key] = (raw[:keep].decode("utf-8", "ignore") + _ELLIPSIS
+                      if keep > 0 else "")
+        out = encode()
+    if len(out) > limit:
+        d.pop("theme", None)
+        out = encode()
+    return out
 
 
 class BoomboxBlePeripheral:
@@ -167,13 +220,20 @@ class BoomboxBlePeripheral:
             )
 
     # --- state push loop -------------------------------------------------
-    async def _push_state_loop(self, interval_s: float = 0.5):
+    async def _push_state_loop(self, interval_s: float = 0.5,
+                               resend_s: float = STATE_RESEND_S,
+                               clock: Callable[[], float] = time.monotonic):
+        last_sent = float("-inf")
         while True:
             try:
                 data = await self._aggregator.consolidated_state()
-                payload = json.dumps({"ok": True, "data": data}, default=str,
-                                      sort_keys=True).encode()
-                if payload != self._last_state_json:
+                payload = ble_state_payload(data)
+                now = clock()
+                # Re-notify unchanged state every resend_s: a remote that just
+                # subscribed can't rely on its initial read (see
+                # STATE_RESEND_S), so it waits at most this long for state.
+                if payload != self._last_state_json or now - last_sent >= resend_s:
+                    last_sent = now
                     self._last_state_json = payload
                     try:
                         c = self._server.get_characteristic(STATE_UUID)

@@ -16,6 +16,7 @@ import { SKIN_BY_ID, SKINS, type ChromeApi } from "./lib/skinRegistry";
 import { getQueue } from "./lib/library";
 import { getCacheCandidates } from "./lib/libraryApi";
 import { useSyncStatus } from "./lib/homeLibrary";
+import { useReportKioskView } from "./lib/kioskView";
 import type { SkinId, Track, PlayState } from "./lib/types";
 
 function getActiveSkin(): SkinId {
@@ -185,7 +186,11 @@ function App() {
   const sourceId = activeIdFor(ext.source, ext.status, m.state === "playing");
   const goHome = () => { setNpbDismissed(false); setView("home"); };
   const anyDrawerOpen = queueOpen || libraryOpen || skinPickerOpen || settingsOpen;
+  // Remotes (the rotary knob) show "Home" while the input picker is what's
+  // on screen; a drawer over Home counts as "player".
+  useReportKioskView(view === "home" && !anyDrawerOpen ? "home" : "player");
 
+  const openLibrary = () => { setNpbDismissed(false); setLibraryOpen(true); };
   const chrome: ChromeApi = {
     sourceLabel: chromeLabelFor(sourceId),
     sourceColor: accentFor(sourceId),
@@ -194,6 +199,7 @@ function App() {
     skinName: skin.name,
     onGoHome: goHome,
     onOpenQueue: () => { setNpbDismissed(false); setQueueOpen(true); },
+    onOpenLibrary: openLibrary,
     onOpenSkinPicker: () => { setNpbDismissed(false); setSkinPickerOpen(true); },
     onOpenSettings: () => { setNpbDismissed(false); setSettingsOpen(true); },
   };
@@ -210,7 +216,7 @@ function App() {
             theme={skin.theme}
             queueCount={queueCount}
             onGoPlayer={() => setView("player")}
-            onOpenLibrary={() => { setNpbDismissed(false); setLibraryOpen(true); }}
+            onOpenLibrary={openLibrary}
             onOpenSettings={() => { setNpbDismissed(false); setSettingsOpen(true); }}
             showNowPlaying={!anyDrawerOpen}
           />

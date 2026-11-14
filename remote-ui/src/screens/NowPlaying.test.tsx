@@ -143,6 +143,27 @@ describe("NowPlaying", () => {
     ).toBe("false");
   });
 
+  it("a movie in the kiosk shows its title and toggles the Movies chip", () => {
+    const movie: RemoteState = {
+      ...playing, source: "movies", playing: false, view: "player",
+      track: { uri: null, title: "(500) Days of Summer", artist: null,
+               album: null, duration_s: 5704, position_s: 1255 },
+      sources_available: ["mopidy", "airplay", "movies"],
+    };
+    render(
+      <ApiProvider api={stubApi}>
+        <RemoteContextHarness state={movie} command={vi.fn()}>
+          <NowPlaying />
+        </RemoteContextHarness>
+      </ApiProvider>,
+    );
+    expect(screen.getByText("(500) Days of Summer")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Movies/ })
+      .getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: /Library/ })
+      .getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("seek slider commits commit on mouseup with seconds value", () => {
     const command = vi.fn().mockResolvedValue({ ok: true });
     render(

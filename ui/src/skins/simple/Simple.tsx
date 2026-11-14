@@ -1,7 +1,7 @@
 // SIMPLE — adapted from skins/simple/source.jsx
 // Clean dark streaming-app vibe with terminal accents.
 import React from "react";
-import { Icon, useTicker, vu, mmss, TRACKS } from "../../lib/shared";
+import { Icon, mmss } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
 import { SeekableBar } from "../../lib/SeekableBar";
 import { AlbumThumb } from "../../lib/AlbumThumb";
@@ -44,37 +44,115 @@ function AsciiSeg({ value, width = 16, color = SMP.cyan }: { value: number; widt
   );
 }
 
+/** Local wall-clock time as 24h HH:MM, refreshed every few seconds. */
+function useClock(): string {
+  const fmt = () => new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});
+  const [now, setNow] = React.useState(fmt);
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(fmt()), 5000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
+}
+
+/** Slide-in nav timing. Transform/opacity only, so the Pi's compositor does
+ *  the work, and nothing animates once the menu has settled. */
+const MENU_SLIDE_MS = 220;
+/** Auto-close the menu after this long with no touches inside it. */
+const MENU_IDLE_MS = 8000;
+const MENU_W = 260;
+/** Menu button: fixed upper-left, same spot open or closed. 72 design px
+ *  ≈ 44 px on the 800×480 panel. */
+const MENU_BTN = { left: 16, top: 8, size: 72 };
+/** Left inset for the player's top row so its chips clear the menu button. */
+const MENU_BTN_CLEARANCE = MENU_BTN.left + MENU_BTN.size + 24;
+
 function SmpFrame({ children, active = "home", chrome }: { children: React.ReactNode; active?: string; chrome?: ChromeApi }) {
-  const t = useTicker(500);
-  // Sidebar nav: items that have a chrome action are clickable; others are
-  // decorative for now (Video / etc.).
-  const navItems: { id: string; label: string; icon: string; k: string; onClick?: () => void; badge?: string }[] = [
-    {id: "home",     label: "Now Playing", icon: "play",    k: "01"},
-    {id: "gohome",   label: chrome ? `Home · ${chrome.sourceLabel}` : "Home", icon: "home", k: "02", onClick: chrome?.onGoHome},
-    {id: "queue",    label: chrome ? `Queue · ${chrome.queueCount}` : "Queue", icon: "queue", k: "03", onClick: chrome?.onOpenQueue},
-    {id: "skin",     label: chrome ? `Skin · ${chrome.skinName}` : "Skin", icon: "search", k: "04", onClick: chrome?.onOpenSkinPicker},
-    {id: "settings", label: "Settings",    icon: "search",  k: "05", onClick: chrome?.onOpenSettings},
+  // Always starts closed; the open state is deliberately not persisted.
+  const [open, setOpen] = React.useState(false);
+  const idleRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearIdle = React.useCallback(() => {
+    if (idleRef.current !== null) { clearTimeout(idleRef.current); idleRef.current = null; }
+  }, []);
+  const armIdle = React.useCallback(() => {
+    clearIdle();
+    idleRef.current = setTimeout(() => { idleRef.current = null; setOpen(false); }, MENU_IDLE_MS);
+  }, [clearIdle]);
+
+  // The idle timer only exists while the menu is open.
+  React.useEffect(() => {
+    if (!open) { clearIdle(); return; }
+    armIdle();
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => { clearIdle(); window.removeEventListener("keydown", onKey); };
+  }, [open, armIdle, clearIdle]);
+
+  // Nav items: those with a chrome action run it; "Now Playing" is the
+  // current view, so choosing it just closes the menu. Every choice closes.
+  const navItems: { id: string; label: string; icon: string; k: string; onClick?: () => void; aria?: string }[] = [
+    {id: "home",     label: "Now Playing", icon: "play",    k: "01", onClick: () => {}},
+    {id: "gohome",   label: chrome ? `Home · ${chrome.sourceLabel}` : "Home", aria: "Home", icon: "home", k: "02", onClick: chrome?.onGoHome},
+    {id: "library",  label: "Library",     icon: "search",  k: "03", onClick: chrome?.onOpenLibrary},
+    {id: "queue",    label: chrome ? `Queue · ${chrome.queueCount}` : "Queue", icon: "queue", k: "04", onClick: chrome?.onOpenQueue},
+    {id: "skin",     label: chrome ? `Skin · ${chrome.skinName}` : "Skin", icon: "eq", k: "05", onClick: chrome?.onOpenSkinPicker},
+    {id: "settings", label: "Settings",    icon: "settings", k: "06", onClick: chrome?.onOpenSettings},
   ];
+  const ease = "cubic-bezier(0.2, 0.8, 0.2, 1)";
   return (
     <div style={{
       width: 1280, height: 800, background: SMP.bg, color: SMP.ink, fontFamily: SMP.font,
-      position: "relative", overflow: "hidden", display: "flex",
+      position: "relative", overflow: "hidden",
     }}>
       <div style={{position: "absolute", inset: 0, pointerEvents: "none", zIndex: 50,
         backgroundImage: "repeating-linear-gradient(0deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 3px)"}}/>
 
-      <div style={{width: 240, background: SMP.panel, borderRight: `1px solid ${SMP.rule}`,
-        display: "flex", flexDirection: "column", padding: "22px 16px", position: "relative"}}>
-        <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 8}}>
-          <div style={{width: 32, height: 32, borderRadius: 8,
+      {/* Player content always spans the full width; the menu overlays it. */}
+      <div style={{position: "absolute", inset: 0, overflow: "hidden"}}>{children}</div>
+
+      {/* Scrim: fades in behind the open menu; tapping it closes the menu. */}
+      <div
+        data-testid="simple-menu-scrim"
+        aria-hidden="true"
+        onClick={() => setOpen(false)}
+        style={{
+          position: "absolute", inset: 0, zIndex: 60,
+          background: "rgba(4,3,10,0.6)",
+          opacity: open ? 1 : 0,
+          pointerEvents: open ? "auto" : "none",
+          transition: `opacity ${MENU_SLIDE_MS}ms ${ease}`,
+        }}
+      />
+
+      <nav
+        id="simple-nav"
+        aria-label="Main menu"
+        aria-hidden={!open}
+        inert={!open}
+        onPointerDown={armIdle}
+        onTouchStart={armIdle}
+        onKeyDown={armIdle}
+        style={{
+          position: "absolute", top: 0, bottom: 0, left: 0, width: MENU_W, zIndex: 70,
+          background: SMP.panel, borderRight: `1px solid ${SMP.rule}`,
+          boxShadow: open ? "12px 0 40px rgba(0,0,0,0.5)" : "none",
+          display: "flex", flexDirection: "column", padding: "8px 16px 22px",
+          transform: open ? "translateX(0)" : "translateX(-100%)",
+          // Hidden after the slide-out finishes, so the closed menu isn't painted.
+          visibility: open ? "visible" : "hidden",
+          transition: open
+            ? `transform ${MENU_SLIDE_MS}ms ${ease}, visibility 0s linear 0s`
+            : `transform ${MENU_SLIDE_MS}ms ${ease}, visibility 0s linear ${MENU_SLIDE_MS}ms`,
+        }}
+      >
+        {/* Logo sits beside the (separately rendered) menu button. */}
+        <div style={{display: "flex", alignItems: "center", gap: 10, height: MENU_BTN.size,
+          paddingLeft: MENU_BTN.left + MENU_BTN.size - 4, flexShrink: 0}}>
+          <div style={{width: 28, height: 28, borderRadius: 8, flexShrink: 0,
             background: `linear-gradient(135deg, ${SMP.violet}, ${SMP.blue})`,
             boxShadow: `0 0 18px ${SMP.violet}40`}}/>
-          <div>
-            <div style={{fontSize: 17, fontWeight: 700, letterSpacing: "-0.01em"}}>Boombox</div>
-            <div style={{fontFamily: SMP.mono, fontSize: 9, color: SMP.cyan, letterSpacing: "0.18em"}}>
-              v0.4.1 · {t % 2 ? "ONLINE" : "ONLINE_"}
-            </div>
-          </div>
+          <div style={{fontSize: 17, fontWeight: 700, letterSpacing: "-0.01em"}}>Boombox</div>
         </div>
 
         <div style={{fontFamily: SMP.mono, fontSize: 10, color: SMP.ink3, letterSpacing: "0.22em",
@@ -83,12 +161,15 @@ function SmpFrame({ children, active = "home", chrome }: { children: React.React
         <div style={{display: "flex", flexDirection: "column", gap: 2}}>
           {navItems.map(item => {
             const on = item.id === active;
-            const clickable = !!item.onClick;
+            const action = item.onClick;
+            const clickable = !!action;
             return (
               <button
                 key={item.id}
-                onClick={item.onClick}
+                onClick={action ? () => { action(); setOpen(false); } : undefined}
                 disabled={!clickable}
+                aria-label={item.aria ?? item.label}
+                aria-current={on ? "page" : undefined}
                 style={{
                   display: "flex", alignItems: "center", gap: 12, padding: "13px 12px",
                   borderRadius: 10,
@@ -96,12 +177,12 @@ function SmpFrame({ children, active = "home", chrome }: { children: React.React
                   color: on ? SMP.ink : (clickable ? SMP.ink2 : SMP.ink3),
                   cursor: clickable ? "pointer" : "default",
                   fontSize: 13, fontWeight: on ? 600 : 500, position: "relative",
-                  borderLeft: on ? `2px solid ${SMP.cyan}` : "2px solid transparent",
                   border: "none",
+                  borderLeft: on ? `2px solid ${SMP.cyan}` : "2px solid transparent",
                   textAlign: "left",
                   fontFamily: "inherit",
                   width: "100%",
-                  minHeight: 48,
+                  minHeight: 64,
                 }}
               >
                 <Icon name={item.icon} size={18} stroke={on ? SMP.glow : SMP.ink2} sw={1.8}/>
@@ -115,22 +196,26 @@ function SmpFrame({ children, active = "home", chrome }: { children: React.React
             );
           })}
         </div>
+      </nav>
 
-        <div style={{marginTop: "auto", padding: "14px 10px", borderTop: `1px solid ${SMP.rule}`,
-          fontFamily: SMP.mono, fontSize: 10, color: SMP.ink3, letterSpacing: "0.08em"}}>
-          <div style={{display: "flex", justifyContent: "space-between", color: SMP.ink2, marginBottom: 6}}>
-            <span>[ DAC ]</span>
-            <span style={{color: SMP.cyan}}>● 48k/24b</span>
-          </div>
-          <div style={{display: "flex", justifyContent: "space-between", marginBottom: 4}}>
-            <span>[ CPU ]</span><span>{12 + (t % 4)}%</span>
-          </div>
-          <div style={{display: "flex", justifyContent: "space-between"}}>
-            <span>[ NET ]</span><span style={{color: SMP.cyan}}>−52dBm</span>
-          </div>
-        </div>
-      </div>
-      <div style={{flex: 1, position: "relative", overflow: "hidden"}}>{children}</div>
+      {/* Menu toggle: same place and look whether the menu is open or closed. */}
+      <button
+        aria-label="Menu"
+        aria-expanded={open}
+        aria-controls="simple-nav"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          position: "absolute", left: MENU_BTN.left, top: MENU_BTN.top, zIndex: 80,
+          width: MENU_BTN.size, height: MENU_BTN.size, borderRadius: 16,
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          background: open ? "rgba(139,92,246,0.22)" : "rgba(255,255,255,0.06)",
+          border: `1px solid ${open ? "rgba(167,139,250,0.5)" : SMP.ruleHi}`,
+          color: SMP.ink, cursor: "pointer", padding: 0,
+          transition: `background-color ${MENU_SLIDE_MS}ms, border-color ${MENU_SLIDE_MS}ms`,
+        }}
+      >
+        <Icon name="menu" size={28} stroke={open ? SMP.glow : SMP.ink} sw={2}/>
+      </button>
     </div>
   );
 }
@@ -149,14 +234,29 @@ function SmpCircleBtn({ children, size = 56, primary, active, onClick }: { child
   );
 }
 
-function SmpStat({ label, value, color = SMP.ink2 }: { label: string; value: string; color?: string }) {
+function SmpStat({ label, value, color = SMP.ink2, minWidth }: { label: string; value: string; color?: string; minWidth?: number }) {
   return (
     <div style={{display: "flex", alignItems: "center", gap: 8, padding: "6px 12px",
       background: "rgba(0,0,0,0.4)", border: `1px solid ${SMP.rule}`, borderRadius: 999,
       fontFamily: SMP.mono, fontSize: 11, letterSpacing: "0.14em"}}>
       <span style={{color: SMP.ink3}}>[{label}]</span>
-      <span style={{color}}>{value}</span>
+      <span style={{color, fontVariantNumeric: "tabular-nums", minWidth, textAlign: "right"}}>{value}</span>
     </div>
+  );
+}
+
+function SmpPanelBtn({ children, icon, primary, onClick }: { children: React.ReactNode; icon: string; primary?: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick} style={{
+      height: 72, padding: "0 24px", borderRadius: 999, flexShrink: 0,
+      display: "inline-flex", alignItems: "center", gap: 10,
+      background: primary ? `linear-gradient(135deg, ${SMP.violet}, ${SMP.blue})` : "rgba(255,255,255,0.08)",
+      color: SMP.ink, border: `1px solid ${primary ? "transparent" : SMP.ruleHi}`,
+      fontFamily: SMP.font, fontSize: 16, fontWeight: 600, cursor: "pointer",
+    }}>
+      <Icon name={icon} size={20} stroke={SMP.ink} sw={1.8}/>
+      {children}
+    </button>
   );
 }
 
@@ -179,11 +279,11 @@ export function SimpleAudio({ track, state, elapsed, volume, shuffle, repeat, ch
   const tr = track ?? { uri: "", title: "—", artist: "—", album: "—", len: 0, time: "0:00", hue: 200 };
   const len = tr.len > 0 ? tr.len : 1;
   const pct = Math.min(1, elapsed / len);
-  const t = useTicker(80);
   const spec = useSpectrum();
   const lvl = spec.rmsL;
   const rvl = spec.rmsR;
-  void t; void vu;
+  const clock = useClock();
+  const queueCount = chrome?.queueCount ?? 0;
   const volPct = (volume ?? 62) / 100;
 
   return (
@@ -192,18 +292,12 @@ export function SimpleAudio({ track, state, elapsed, volume, shuffle, repeat, ch
         background: `linear-gradient(180deg, rgba(139,92,246,0.28) 0%, rgba(59,130,246,0.10) 40%, transparent 100%)`,
         pointerEvents: "none"}}/>
       <div style={{position: "relative", height: "100%", display: "flex", flexDirection: "column"}}>
-        <div style={{padding: "18px 36px 14px", display: "flex", alignItems: "center", gap: 10,
+        <div style={{padding: `0 36px 0 ${MENU_BTN_CLEARANCE}px`, minHeight: 88, display: "flex", alignItems: "center", gap: 10,
           borderBottom: `1px solid ${SMP.rule}`, fontFamily: SMP.mono}}>
-          <div style={{display: "flex", gap: 6}}>
-            <button style={{width: 34, height: 34, borderRadius: "50%", background: "rgba(0,0,0,0.5)", border: `1px solid ${SMP.rule}`, color: SMP.ink, cursor: "pointer", fontSize: 15}}>‹</button>
-            <button style={{width: 34, height: 34, borderRadius: "50%", background: "rgba(0,0,0,0.5)", border: `1px solid ${SMP.rule}`, color: SMP.ink, cursor: "pointer", fontSize: 15}}>›</button>
-          </div>
-          <SmpStat label="SRC"  value="LOCAL"            color={SMP.glow}/>
-          <SmpStat label="OUT"  value="DAC pcm5122"      color={SMP.cyan}/>
-          <SmpStat label="FMT"  value="MP3 320 · 48k"    color={SMP.ink2}/>
+          {chrome && <SmpStat label="SRC" value={chrome.sourceLabel} color={SMP.glow}/>}
           <span style={{flex: 1}}></span>
-          <SmpStat label="WIFI" value="−52dBm"           color={SMP.cyan}/>
-          <SmpStat label="UTC"  value={t % 2 ? "23:41:08" : "23:41:08_"} color={SMP.amber}/>
+          {/* Fixed-width, tabular digits: the row must not shift as time ticks. */}
+          <SmpStat label="TIME" value={clock} color={SMP.amber} minWidth={44}/>
         </div>
 
         <div style={{padding: "22px 36px 22px", display: "flex", gap: 28, alignItems: "flex-end"}}>
@@ -234,9 +328,11 @@ export function SimpleAudio({ track, state, elapsed, volume, shuffle, repeat, ch
               <span style={{fontFamily: SMP.mono, fontSize: 11, color: SMP.cyan, letterSpacing: "0.22em"}}>
                 {playing ? "▶ NOW PLAYING" : "❚❚ PAUSED"}
               </span>
-              <span style={{fontFamily: SMP.mono, fontSize: 11, color: SMP.ink3, letterSpacing: "0.18em"}}>
-                · LOCAL · DAC ·
-              </span>
+              {chrome && (
+                <span style={{fontFamily: SMP.mono, fontSize: 11, color: SMP.ink3, letterSpacing: "0.18em"}}>
+                  · {chrome.sourceLabel}
+                </span>
+              )}
             </div>
             <div style={{fontSize: 60, fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 0.95, marginBottom: 14,
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"}}>
@@ -265,36 +361,31 @@ export function SimpleAudio({ track, state, elapsed, volume, shuffle, repeat, ch
               <span style={{fontSize: 18, fontWeight: 700, letterSpacing: "-0.01em"}}>Up Next</span>
             </div>
             <div style={{fontFamily: SMP.mono, fontSize: 11, color: SMP.ink2, letterSpacing: "0.14em"}}>
-              [ DEMO QUEUE ]
+              [ {queueCount} IN QUEUE ]
             </div>
           </div>
-          <div style={{flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", gap: 2}}>
-            {TRACKS.slice(0, 6).map((d, i) => {
-              const active = i === 0;
-              return (
-                <div key={i} style={{
-                  display: "grid", gridTemplateColumns: "32px 36px 1fr 1fr 80px 60px", gap: 14,
-                  padding: "9px 14px", borderRadius: 8, alignItems: "center",
-                  background: active ? "rgba(139,92,246,0.10)" : "transparent",
-                  fontSize: 14,
-                }}>
-                  <span style={{color: active ? SMP.cyan : SMP.ink3, fontFamily: SMP.mono, fontSize: 12, letterSpacing: "0.08em"}}>
-                    {active ? "▶" : String(i + 1).padStart(2, "0")}
-                  </span>
-                  <div style={{width: 36, height: 36, borderRadius: 6,
-                    background: `linear-gradient(135deg, hsl(${d.hue}, 70%, 55%), hsl(${(d.hue + 40) % 360}, 60%, 35%))`}}/>
-                  <div style={{minWidth: 0}}>
-                    <div style={{fontWeight: 600, color: active ? SMP.glow : SMP.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"}}>{d.title}</div>
-                    <div style={{fontSize: 12, color: SMP.ink2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"}}>{d.artist}</div>
-                  </div>
-                  <div style={{color: SMP.ink2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontFamily: SMP.mono, fontSize: 13}}>{d.album}</div>
-                  <div style={{fontFamily: SMP.mono, fontSize: 11, color: SMP.ink3, letterSpacing: "0.12em"}}>
-                    {["MP3·320", "FLAC", "FLAC", "WAV", "MP3·320", "FLAC"][i]}
-                  </div>
-                  <div style={{color: active ? SMP.cyan : SMP.ink2, fontFamily: SMP.mono, fontSize: 13, textAlign: "right", fontVariantNumeric: "tabular-nums"}}>{d.time}</div>
-                </div>
-              );
-            })}
+          {/* The skin only gets the queue's length, not its tracks, so this
+            * panel is a summary that hands off to the Queue / Library drawers
+            * rather than a track list. */}
+          <div style={{flex: 1, minHeight: 0, display: "flex", alignItems: "center", gap: 20,
+            padding: "0 20px", marginBottom: 20, borderRadius: 12, background: "rgba(139,92,246,0.06)",
+            border: `1px solid ${SMP.rule}`}}>
+            <div style={{flex: 1, minWidth: 0}}>
+              <div style={{fontSize: 22, fontWeight: 700, letterSpacing: "-0.01em"}}>
+                {queueCount > 0
+                  ? `${queueCount} ${queueCount === 1 ? "track" : "tracks"} in the queue`
+                  : "Nothing queued"}
+              </div>
+              <div style={{fontFamily: SMP.mono, fontSize: 12, color: SMP.ink2, letterSpacing: "0.08em", marginTop: 6}}>
+                {queueCount > 0 ? "Open the queue to see what's next" : "Browse the library to pick some music"}
+              </div>
+            </div>
+            {chrome && queueCount > 0 && (
+              <SmpPanelBtn onClick={chrome.onOpenQueue} icon="queue">Open queue</SmpPanelBtn>
+            )}
+            {chrome && (
+              <SmpPanelBtn onClick={chrome.onOpenLibrary} icon="search" primary={queueCount === 0}>Browse library</SmpPanelBtn>
+            )}
           </div>
         </div>
 

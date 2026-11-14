@@ -29,9 +29,15 @@ static size_t   _state_buf_len = 0;
 static volatile bool _state_dirty = false;
 static portMUX_TYPE  _state_mux = portMUX_INITIALIZER_UNLOCKED;
 
+// GAP name the remote advertises/introduces itself with. Profiles override
+// it from platformio.ini (-D BOOMBOX_BLE_NAME=...).
+#ifndef BOOMBOX_BLE_NAME
+#define BOOMBOX_BLE_NAME "boombox-cyd"
+#endif
+
 BleClient::BleClient() {
     g_inst = this;
-    NimBLEDevice::init("boombox-cyd");
+    NimBLEDevice::init(BOOMBOX_BLE_NAME);
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
     // Consolidated state JSON is ~500 bytes — well over the 20-byte
     // payload of the default 23-byte ATT MTU. Request the BLE max so
@@ -75,6 +81,7 @@ String BleClient::findFirstBoomboxNonBlocking(uint32_t duration_ms) {
     // which records a hit. The main loop polls + ticks LVGL.
     static String found_address;
     found_address = "";
+    _scan_cancel = false;
     NimBLEScan* scanner = NimBLEDevice::getScan();
     scanner->setActiveScan(true);
     scanner->setInterval(100);
@@ -102,11 +109,16 @@ String BleClient::findFirstBoomboxNonBlocking(uint32_t duration_ms) {
     }
 
     uint32_t deadline = millis() + duration_ms + 500;
-    while (found_address.length() == 0 && millis() < deadline) {
-        lv_timer_handler();
+    while (found_address.length() == 0 && millis() < deadline && !_scan_cancel) {
+        if (_idle_hook) _idle_hook();
+        else lv_timer_handler();
         delay(15);
     }
     scanner->stop();
+    if (_scan_cancel) {
+        _scan_cancel = false;
+        return "";
+    }
     return found_address;
 }
 
@@ -264,6 +276,15 @@ void BleClient::pumpEvents() {
                    (unsigned)n, ok ? "ok" : "fail",
                    ok ? (int)s.playing : -1,
                    ok ? s.track.title.c_str() : "");
+    if (!ok) {
+        // Show what arrived so a server/firmware mismatch is diagnosable.
+        JsonDocument probe;
+        DeserializationError err = deserializeJson(probe, local, n);
+        Serial.printf("[ble] unparsed state (%s):\n", err.c_str());
+        for (size_t i = 0; i < n; i += 120) {
+            Serial.printf("[ble]   %.*s\n", (int)(n - i < 120 ? n - i : 120), local + i);
+        }
+    }
     if (!ok || !_on_state) return;
     _on_state(s);
 }

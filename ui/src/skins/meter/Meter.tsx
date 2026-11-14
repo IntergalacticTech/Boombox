@@ -3,7 +3,7 @@
 import React from "react";
 import { Icon, useTicker, vu, mmss } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
-import { ChromeHomeBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
+import { ChromeHomeBtn, ChromeLibraryBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
 import { SyncIndicator } from "../../lib/SyncIndicator";
 import { SeekableBar } from "../../lib/SeekableBar";
 import type { ChromeApi } from "../../lib/skinRegistry";
@@ -54,6 +54,7 @@ function MtrChrome({ children, label = "01 · NOW PLAYING", chrome }: { children
           <>
             <ChromeHomeBtn chrome={chrome} theme={chromeTheme}/>
             <SyncIndicator />
+            <ChromeLibraryBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeQueueBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSkinBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSettingsBtn chrome={chrome} theme={chromeTheme}/>
@@ -189,7 +190,7 @@ export function MeterAudio({ track, state, elapsed, volume, shuffle, repeat, chr
         <div style={{display: "flex", flexDirection: "column", gap: 18}}>
           <div style={{background: MTR.paper, border: `1px solid ${MTR.ruleHi}`, padding: "22px 24px"}}>
             <div style={{fontFamily: MTR.mono, fontSize: 11, letterSpacing: "0.22em", color: MTR.ink2, marginBottom: 8}}>
-              NOW PLAYING · LOCAL
+              NOW PLAYING{chrome ? ` · ${chrome.sourceLabel}` : ""}
             </div>
             <div style={{
               fontSize: 34, fontWeight: 700, lineHeight: 1.05, letterSpacing: "-0.02em",

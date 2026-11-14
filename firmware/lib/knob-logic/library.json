@@ -1,0 +1,9 @@
+{
+  "name": "knob-logic",
+  "version": "0.1.0",
+  "description": "Hardware-free logic for the Boombox rotary knob: CSS theme colour parsing, the click/double/long gesture recogniser and the volume coalescer. No Arduino dependency, so it is unit-tested on the host with `pio test -e native`.",
+  "license": "MIT",
+  "build": {
+    "srcFilter": ["+<*>"]
+  }
+}

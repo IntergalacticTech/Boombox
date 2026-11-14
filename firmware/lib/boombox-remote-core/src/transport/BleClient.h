@@ -42,6 +42,9 @@ public:
     // address of the first boombox seen, or empty string on timeout.
     // Designed to be called from the main loop without freezing the UI.
     String findFirstBoomboxNonBlocking(uint32_t duration_ms = 6000);
+    // Ends a findFirstBoomboxNonBlocking() wait early (it returns ""). Safe
+    // to call from its idle hook, e.g. when another link takes over.
+    void cancelScan() { _scan_cancel = true; }
     void disconnect();
     bool isConnected() const;
 
@@ -52,6 +55,11 @@ public:
     // Reads the peer's device_info characteristic. Returns true on success
     // and populates `id` + `name` from the JSON payload.
     bool readDeviceInfo(String& out_id, String& out_name);
+
+    // Called repeatedly while findFirstBoomboxNonBlocking() waits. Default
+    // ticks LVGL; a profile can widen it (e.g. to keep a serial console and
+    // input polling alive during the scan).
+    void setIdleHook(std::function<void()> hook) { _idle_hook = hook; }
 
     // Register callbacks before subscribing.
     void onState(StateCallback cb)   { _on_state = cb; }
@@ -80,8 +88,10 @@ private:
     void* _device_info_char = nullptr;
     StateCallback _on_state;
     StatusCallback _on_status;
+    std::function<void()> _idle_hook;
     PairResult _pair_cb;
     bool _pair_pending = false;
+    volatile bool _scan_cancel = false;
     uint32_t _pair_deadline = 0;
 
     static void _stateNotifyTrampoline(void* /*characteristic*/, uint8_t* data,

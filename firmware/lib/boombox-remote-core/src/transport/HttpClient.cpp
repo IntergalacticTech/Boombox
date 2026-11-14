@@ -1,5 +1,6 @@
 #include "HttpClient.h"
 #include <HTTPClient.h>
+#include <WiFiClient.h>   // core 3.x no longer pulls this in via HTTPClient.h
 #include <ArduinoJson.h>
 
 namespace boombox {

@@ -54,6 +54,8 @@ files = [
     "services/boombox_updater",
     "services/boombox_library",
     "services/boombox_rfid",
+    "services/knob_usb.py",
+    "services/remote_wire.py",
 ]
 check_untyped_defs = true
 warn_unused_ignores = true

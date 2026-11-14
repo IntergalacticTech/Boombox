@@ -1,9 +1,11 @@
 // ChromeButtons — shared building block each skin renders inside its own
-// chrome (top bar, sidebar, etc.) to expose home / queue / skin pickers.
+// chrome (top bar, sidebar, etc.) to expose home / library / queue / skin
+// pickers.
 //
 // We provide:
 //   - <ChromeButtons />   ready-made strip with sensible defaults
-//   - <ChromeHomeBtn /> / <ChromeQueueBtn /> / <ChromeSkinBtn />
+//   - <ChromeHomeBtn /> / <ChromeLibraryBtn /> / <ChromeQueueBtn /> /
+//     <ChromeSkinBtn /> / <ChromeSettingsBtn />
 //                         individual buttons skins can lay out themselves
 //
 // The buttons live INSIDE the skin's design coordinate space (1280×800), so
@@ -110,6 +112,29 @@ export function DrawerHomeBtn({ onHome }: { onHome?: () => void }) {
   );
 }
 
+/** Library button: opens the library drawer to browse / search the catalog.
+ * Every skin's player view must show one — it is the only way into the
+ * library while something is queued. */
+export function ChromeLibraryBtn({
+  chrome, theme: t = {}, label = "LIBRARY",
+}: {
+  chrome: ChromeApi;
+  theme?: ChromeTheme;
+  label?: string;
+}) {
+  const theme = { ...DEFAULT_THEME, ...t } as Required<ChromeTheme>;
+  return (
+    <button onClick={chrome.onOpenLibrary} aria-label="Library" style={btnStyle(theme)}>
+      <span style={{fontSize: 18, lineHeight: 1, flexShrink: 0}} aria-hidden="true">{"\u266B\uFE0E"}</span>
+      <span style={{
+        fontFamily: theme.mono,
+        fontSize: 12,
+        letterSpacing: "0.16em",
+      }}>{label}</span>
+    </button>
+  );
+}
+
 export function ChromeQueueBtn({
   chrome, theme: t = {}, label = "QUEUE",
 }: {
@@ -167,7 +192,7 @@ export function ChromeSettingsBtn({
   );
 }
 
-/** Default 3-button strip with home/queue/skin buttons in a flex row.
+/** Default strip with home / library / queue / skin buttons in a flex row.
  * Skins are free to compose them individually for tighter integration. */
 export function ChromeButtons({
   chrome, theme: t = {}, children, align = "spread",
@@ -189,6 +214,7 @@ export function ChromeButtons({
       <SyncIndicator />
       {children}
       <div style={{display: "flex", gap: 10}}>
+        <ChromeLibraryBtn chrome={chrome} theme={t}/>
         <ChromeQueueBtn chrome={chrome} theme={t}/>
         <ChromeSkinBtn chrome={chrome} theme={t}/>
       </div>

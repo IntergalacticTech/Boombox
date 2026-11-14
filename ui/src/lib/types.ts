@@ -18,4 +18,6 @@ export type Source = {
   icon: string;
 };
 
-export type SkinId = "deckos" | "block95" | "simple" | "meter" | "spectrum" | "tapeshift";
+export type SkinId =
+  | "deckos" | "block95" | "simple" | "meter" | "spectrum" | "tapeshift"
+  | "departures" | "placard" | "poster" | "nightstand" | "pocketlcd" | "selector";

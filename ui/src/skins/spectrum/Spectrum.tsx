@@ -3,7 +3,7 @@
 import React from "react";
 import { Icon, useTicker, vu, mmss } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
-import { ChromeHomeBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
+import { ChromeHomeBtn, ChromeLibraryBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
 import { SyncIndicator } from "../../lib/SyncIndicator";
 import { SeekableBar } from "../../lib/SeekableBar";
 import type { ChromeApi } from "../../lib/skinRegistry";
@@ -150,7 +150,7 @@ export function SpectrumAudio({ track, state, elapsed, volume, shuffle, repeat, 
                     linear-gradient(180deg, #07091a 0%, #050714 100%)`}}/>
       <div style={{position: "absolute", top: 20, left: 28, right: 28, display: "flex", alignItems: "center", gap: 12, zIndex: 5}}>
         <div style={{padding: "12px 18px", background: SPC.glass, border: `1px solid ${SPC.rule}`, borderRadius: 999, backdropFilter: "blur(12px)", fontFamily: SPC.mono, fontSize: 12, letterSpacing: "0.22em", textTransform: "uppercase"}}>
-          <span style={{color: SPC.amber}}>●</span> {playing ? "Now Playing" : "Paused"} · Local
+          <span style={{color: SPC.amber}}>●</span> {playing ? "Now Playing" : "Paused"}{chrome ? ` · ${chrome.sourceLabel}` : ""}
         </div>
         <div style={{flex: 1}}></div>
         {chrome && (
@@ -160,6 +160,10 @@ export function SpectrumAudio({ track, state, elapsed, volume, shuffle, repeat, 
               font: SPC.font, mono: SPC.mono, height: 56, radius: 999, padding: "0 16px",
             }}/>
             <SyncIndicator />
+            <ChromeLibraryBtn chrome={chrome} theme={{
+              bg: SPC.glass, fg: SPC.ink, border: SPC.rule,
+              font: SPC.font, mono: SPC.mono, height: 56, radius: 999, padding: "0 16px",
+            }}/>
             <ChromeQueueBtn chrome={chrome} theme={{
               bg: SPC.glass, fg: SPC.ink, border: SPC.rule,
               font: SPC.font, mono: SPC.mono, height: 56, radius: 999, padding: "0 16px",

@@ -140,9 +140,11 @@ async def require_auth(request: web.Request, handler):
     /api/remote/pair/start and /api/remote/pair bypass auth too — they
     predate any token (PIN-based pairing is how tokens are minted in the
     first place). /pair/start is gated to localhost in the handler; /pair
-    is open to the LAN so the CYD can redeem the PIN.
+    is open to the LAN so the CYD can redeem the PIN. /kiosk/view is the
+    on-Pi kiosk reporting its screen, localhost-gated in the handler.
     """
     if request.path in ("/api/remote/ws", "/api/remote/pair/start",
+                          "/api/remote/kiosk/view",
                           "/api/remote/pair", "/api/remote/admin/status",
                           "/api/remote/admin/enable",
                           "/api/remote/admin/disable",
@@ -172,7 +174,10 @@ async def require_remote_enabled(request: web.Request, handler):
     with code 4403).
     """
     path = request.path
-    if path == "/api/remote/ws" or path.startswith("/api/remote/admin/"):
+    # /kiosk/view too: the USB knob isn't gated by the flag either, and it
+    # reads the kiosk view.
+    if (path in ("/api/remote/ws", "/api/remote/kiosk/view")
+            or path.startswith("/api/remote/admin/")):
         return await handler(request)
     if not remote_access.is_enabled():
         return web.json_response(
@@ -180,13 +185,68 @@ async def require_remote_enabled(request: web.Request, handler):
     return await handler(request)
 
 
+def _external_track(body: dict) -> dict | None:
+    """The consolidated `track` for boombox-state's MPRIS player, or None
+    when it reports no metadata (e.g. a Bluetooth phone without AVRCP)."""
+    t = body.get("track")
+    if not isinstance(t, dict) or not (t.get("title") or t.get("artist")):
+        return None
+
+    def _ms(key: str) -> int:
+        v = body.get(key)
+        return int(v) if isinstance(v, (int, float)) and v > 0 else 0
+
+    return {
+        "uri":        None,
+        "title":      t.get("title"),
+        "artist":     t.get("artist"),
+        "album":      t.get("album"),
+        "duration_s": _ms("length_ms") // 1000,
+        "position_s": _ms("position_ms") // 1000,
+    }
+
+
+class KioskView:
+    """What the kiosk screen shows, as last reported by the kiosk SPA:
+    "home" (the input picker) or "player" (a skin, a drawer, or anything
+    that isn't the picker). In memory only.
+
+    The SPA reports on every change and re-reports every few seconds while
+    it is loaded. A "home" report expires after HOME_TTL_S without a
+    refresh, so when the kiosk navigates away from the SPA (Jellyfin, for a
+    movie) and its leaving beacon is lost, remotes still fall back to the
+    default "player" instead of showing Home over a playing movie."""
+
+    HOME_TTL_S = 30.0
+    VALUES = ("home", "player")
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._view = "player"
+        self._at = 0.0
+
+    def set(self, view: str) -> None:
+        if view not in self.VALUES:
+            raise ValueError(view)
+        self._view = view
+        self._at = self._clock()
+
+    def get(self) -> str:
+        if self._view == "home" and self._clock() - self._at <= self.HOME_TTL_S:
+            return "home"
+        return "player"
+
+
 class StateAggregator:
     """Reads upstream services and produces the consolidated payload.
 
-    Phase 1: pulls from Mopidy (track + state + position) and boombox-state
-    (source, volume, mute, karaoke, theme). In-memory bits (sleep_timer,
-    recording) return None for now; they get wired in Phase 2 when there's
-    a real consumer.
+    Now playing follows what the boombox is actually doing: when
+    boombox-state reports an active external MPRIS player (playing or
+    paused — the same test the dispatcher routes play/pause by), `source`,
+    `track` and `playing` come from it (a Jellyfin movie in the kiosk is
+    source "movies"); otherwise from Mopidy (source "mopidy" while Mopidy
+    has a current track). Volume, mute, karaoke and theme come from
+    boombox-state; `view` is what the kiosk screen shows (KioskView).
     """
 
     def __init__(self, session: aiohttp_client_lib.ClientSession,
@@ -196,6 +256,7 @@ class StateAggregator:
         self._boombox_name = boombox_name
         self._mopidy = clients.MopidyRpc(session)
         self._state = clients.StateApi(session)
+        self.kiosk_view = KioskView()
         # Set externally after construction so we don't have a circular
         # dep on the dispatcher's SleepTimer at __init__ time.
         self.sleep_timer: clients.SleepTimer | clients.SleepRemote | None = None
@@ -209,10 +270,10 @@ class StateAggregator:
             if isinstance(self.sleep_timer, clients.SleepRemote)
             else asyncio.sleep(0)
         )
-        (source, track_info, state_info, position_info, vol_info, karaoke,
-         theme_payload, random_info, repeat_info, single_info, _) = (
+        (ext_state, track_info, state_info, position_info, vol_info, karaoke,
+         theme_payload, random_info, repeat_info, single_info, power, _) = (
             await asyncio.gather(
-                self._state.current_source(),
+                self._state.snapshot(),
                 self._mopidy.call("core.playback.get_current_track"),
                 self._mopidy.call("core.playback.get_state"),
                 self._mopidy.call("core.playback.get_time_position"),
@@ -222,32 +283,56 @@ class StateAggregator:
                 self._mopidy.call("core.tracklist.get_random"),
                 self._mopidy.call("core.tracklist.get_repeat"),
                 self._mopidy.call("core.tracklist.get_single"),
+                self._state.power(),
                 sleep_refresh,
             )
         )
 
-        track = (track_info or {}).get("result") or {}
-        playing_state = (state_info or {}).get("result")
-        position_ms = (position_info or {}).get("result") or 0
         shuffle = bool((random_info or {}).get("result"))
         repeat_flag = bool((repeat_info or {}).get("result"))
         single_flag = bool((single_info or {}).get("result"))
-        # Cover art: prefer Mopidy's embedded artwork when available
-        # (matches the actual file the kiosk is playing, no network
-        # lookup required) and fall back to boombox-state's iTunes lookup
-        # when Mopidy doesn't know about the track (streams) or has no
-        # embedded image.
+
         art_url: str | None = None
-        track_uri = track.get("uri") if track else None
-        if track_uri:
-            art_url = await self._mopidy_art_url(track_uri)
-        if not art_url and track:
-            art_url = await self._state.album_art_url(
-                artist=", ".join(a.get("name", "")
-                                  for a in track.get("artists") or []) or None,
-                album=(track.get("album") or {}).get("name"),
-                track=track.get("name"),
-            )
+        now_track: dict | None
+        ext_label = (clients.external_label(ext_state)
+                     if ext_state is not None else None)
+        if ext_state is not None and ext_label is not None:
+            # An external player (AirPlay, Spotify, Bluetooth, a Jellyfin
+            # movie in the kiosk) is the live one: whatever Mopidy still
+            # holds — usually a stopped/paused stale track — isn't playing.
+            source: str | None = clients.external_kind(ext_label)
+            playing = (ext_state.get("status") or "").lower() == "playing"
+            now_track = _external_track(ext_state)
+            if now_track and source != "movies":
+                art_url = await self._state.album_art_url(
+                    artist=now_track["artist"], album=now_track["album"],
+                    track=now_track["title"])
+        else:
+            track = (track_info or {}).get("result") or {}
+            playing = (state_info or {}).get("result") == "playing"
+            position_ms = (position_info or {}).get("result") or 0
+            source = "mopidy" if track else None
+            now_track = {
+                "uri":        track.get("uri"),
+                "title":      track.get("name"),
+                "artist":     ", ".join(a.get("name", "") for a in
+                                         track.get("artists") or []) or None,
+                "album":      (track.get("album") or {}).get("name"),
+                "duration_s": (track.get("length") or 0) // 1000,
+                "position_s": position_ms // 1000,
+            } if track else None
+            # Cover art: prefer Mopidy's embedded artwork when available
+            # (matches the actual file the kiosk is playing, no network
+            # lookup required) and fall back to boombox-state's iTunes
+            # lookup when Mopidy doesn't know about the track (streams) or
+            # has no embedded image.
+            track_uri = track.get("uri") if track else None
+            if track_uri:
+                art_url = await self._mopidy_art_url(track_uri)
+            if not art_url and now_track:
+                art_url = await self._state.album_art_url(
+                    artist=now_track["artist"], album=now_track["album"],
+                    track=now_track["title"])
         # Mopidy splits "repeat all" and "repeat one" across two flags;
         # actions.py cycles off → all → one → off.
         if single_flag:
@@ -263,17 +348,17 @@ class StateAggregator:
                 "name": self._boombox_name,
                 "version": 1,
             },
+            # "mopidy" | "airplay" | "spotify" | "bluetooth" | "movies" |
+            # None (nothing playing) — the ids in sources_available.
             "source": source,
-            "playing": playing_state == "playing",
-            "track": {
-                "uri":        track.get("uri"),
-                "title":      track.get("name"),
-                "artist":     ", ".join(a.get("name", "") for a in
-                                         track.get("artists") or []) or None,
-                "album":      (track.get("album") or {}).get("name"),
-                "duration_s": (track.get("length") or 0) // 1000,
-                "position_s": position_ms // 1000,
-            } if track else None,
+            "playing": playing,
+            # What the kiosk screen shows: "home" (the input picker) or
+            # "player". Remotes show "Home" rather than a track on "home".
+            "view": self.kiosk_view.get(),
+            # boombox-state's PowerManager ("awake"/"asleep"); remotes
+            # follow it (the knob turns its screen off while asleep).
+            "power": power,
+            "track": now_track,
             "art_hash": None,
             "art_url":  art_url,
             "volume":   vol_info[0] if vol_info else None,
@@ -355,6 +440,7 @@ def create_app(aggregator: "StateAggregator | None" = None,
     app.router.add_post("/api/remote/admin/enable", _post_admin_enable)
     app.router.add_post("/api/remote/admin/disable", _post_admin_disable)
     app.router.add_post("/api/remote/admin/unpair", _post_admin_unpair)
+    app.router.add_post("/api/remote/kiosk/view", _post_kiosk_view)
     remote_files.add_routes(app)
     return app
 
@@ -585,6 +671,31 @@ async def _post_admin_unpair(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def _post_kiosk_view(request: web.Request) -> web.Response:
+    """The kiosk SPA reports what its screen shows: {"view": "home"} on the
+    input picker, {"view": "player"} otherwise. Localhost-only (the kiosk
+    runs on the Pi), no token — like the other kiosk → service calls."""
+    if not _is_localhost(request):
+        return web.json_response({"ok": False, "error": "forbidden"},
+                                 status=403)
+    agg = request.app.get("aggregator")
+    if agg is None:
+        return web.json_response(
+            {"ok": False, "error": "aggregator_unavailable"}, status=503)
+    try:
+        # sendBeacon posts the body as text/plain; parse it regardless.
+        body = json.loads(await request.text())
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid_json"},
+                                 status=400)
+    view = body.get("view") if isinstance(body, dict) else None
+    if view not in KioskView.VALUES:
+        return web.json_response({"ok": False, "error": "bad_view"},
+                                 status=400)
+    agg.kiosk_view.set(view)
+    return web.json_response({"ok": True, "view": agg.kiosk_view.get()})
+
+
 async def _post_pair(request: web.Request) -> web.Response:
     """Redeem a PIN for a 32-byte hex auth token. Single-use, LAN-open."""
     try:
@@ -730,11 +841,33 @@ async def main() -> None:
                 log.warning("BLE peripheral failed to start: %s "
                              "(continuing without BLE)", e)
 
+        # USB knob bridge — the rotary knob plugged into the boombox's USB.
+        # Same aggregator + dispatcher as BLE. Like BLE (and unlike the
+        # phone-facing HTTP routes) it is not gated by the remote_access
+        # flag: that flag guards against phones on the WiFi, and a knob
+        # cabled to the box is part of the box. Hardware-optional: with no
+        # knob it idles, retrying every few seconds.
+        knob_task = None
+        if os.environ.get("BOOMBOX_REMOTE_KNOB_USB", "1") == "1":
+            try:
+                from knob_usb import run_knob_usb
+                knob_task = asyncio.create_task(run_knob_usb(
+                    aggregator=agg,
+                    dispatcher=dispatcher,
+                    fire_cb=actions.fire,
+                ))
+                log.info("USB knob bridge starting")
+            except Exception as e:
+                log.warning("USB knob bridge failed to start: %s "
+                             "(continuing without it)", e)
+
         try:
             await asyncio.Event().wait()
         finally:
             if ble_task is not None:
                 ble_task.cancel()
+            if knob_task is not None:
+                knob_task.cancel()
             # Registration is best-effort above, so unregistration is too.
             with contextlib.suppress(Exception):
                 await azc.async_unregister_service(info)

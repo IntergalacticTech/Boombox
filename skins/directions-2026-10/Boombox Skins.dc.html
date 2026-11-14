@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=IBM+Plex+Mono:wght@400;500&family=Archivo:wdth,wght@62..125,400..900&family=DM+Mono:wght@400;500&family=Red+Hat+Display:wght@400;500;700&family=Red+Hat+Mono:wght@400;500&family=Share+Tech+Mono&family=Chakra+Petch:wght@500;600&family=Zilla+Slab:wght@500;700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap">
+<style>body{margin:0;background:#E4E2DC}a{color:#1d1b18}a:hover{color:#9C2F22}</style>
+</helmet>
+<section style="padding:80px;display:flex;flex-direction:column;gap:48px;font-family:'IBM Plex Mono',monospace;color:#1d1b18">
+<div style="display:flex;flex-direction:column;gap:20px;max-width:1400px">
+<div style="font:500 40px/1.1 'Newsreader',serif">Boombox skins — six new directions</div>
+<div style="font-size:16px;line-height:1.5;color:#4a4740;max-width:900px;text-wrap:pretty">Each artboard is 1280 × 800. Pick a state below to see all six skins in it; play/pause, shuffle, repeat and the seek bar are live. Top-centre and top-right are kept clear for system overlays. Navigation is always visible in every skin, so the "open navigation" state is the same as Playing.</div>
+<div style="display:flex;flex-wrap:wrap;gap:8px">
+<sc-for list="{{ states }}" as="s" hint-placeholder-count="10">
+<button onClick="{{ s.onClick }}" style="font:500 15px/1 'IBM Plex Mono',monospace;padding:12px 16px;border:1px solid #1d1b18;border-radius:999px;cursor:pointer;background:{{ s.bg }};color:{{ s.fg }}">{{ s.label }}</button>
+</sc-for>
+</div>
+</div>
+<div style="display:flex;flex-wrap:wrap;gap:96px 80px">
+
+<div id="1a" style="display:flex;flex-direction:column;gap:20px;width:1280px">
+<div style="display:flex;align-items:baseline;gap:16px"><span style="font:700 18px/1 'JetBrains Mono',monospace;background:#1d1b18;color:#fff;padding:8px 12px;border-radius:6px">1a</span><span style="font:700 36px/1 'Barlow Condensed',sans-serif">Departures</span><span style="font-size:17px;color:#4a4740">Split-flap departure board; black, bone and signal yellow</span></div>
+<div data-screen-label="1a Departures" style="width:1280px;height:800px;zoom:{{ zoom }};position:relative;overflow:hidden;background:#111214;color:#F2F0E8;font-family:'Barlow Condensed',sans-serif;box-shadow:0 30px 60px -30px rgba(0,0,0,.45)">
+<div style="position:absolute;left:60px;top:56px;width:840px;display:flex;flex-direction:column;gap:10px">
+<div style="display:grid;grid-template-columns:110px 1fr;gap:16px;align-items:start"><div style="font:700 22px/1 'JetBrains Mono',monospace;color:#FFC629;padding-top:24px;letter-spacing:.08em">TITLE</div><div style="height:164px;box-sizing:border-box;padding:12px 20px;background:linear-gradient(#1C1D20 0 49.6%,#050506 49.6% 50.4%,#1C1D20 50.4%);border-radius:6px;font-size:64px;font-weight:700;line-height:70px;text-transform:uppercase;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden">{{ d.title }}</div></div>
+<div style="display:grid;grid-template-columns:110px 1fr;gap:16px;align-items:center"><div style="font:700 22px/1 'JetBrains Mono',monospace;color:#FFC629;letter-spacing:.08em">ARTIST</div><div style="height:72px;padding:0 20px;background:linear-gradient(#1C1D20 0 49.3%,#050506 49.3% 50.7%,#1C1D20 50.7%);border-radius:6px;font-size:40px;font-weight:600;line-height:72px;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.artist }}</div></div>
+<div style="display:grid;grid-template-columns:110px 1fr;gap:16px;align-items:center"><div style="font:700 22px/1 'JetBrains Mono',monospace;color:#FFC629;letter-spacing:.08em">ALBUM</div><div style="height:64px;padding:0 20px;background:linear-gradient(#1C1D20 0 49.2%,#050506 49.2% 50.8%,#1C1D20 50.8%);border-radius:6px;font-size:34px;font-weight:500;line-height:64px;color:#A9A79E;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.album }}</div></div>
+<div style="display:grid;grid-template-columns:110px 1fr;gap:16px;align-items:center"><div style="font:700 22px/1 'JetBrains Mono',monospace;color:#FFC629;letter-spacing:.08em">VIA</div><div style="height:64px;padding:0 20px;background:linear-gradient(#1C1D20 0 49.2%,#050506 49.2% 50.8%,#1C1D20 50.8%);border-radius:6px;display:flex;align-items:center;gap:14px;font-size:34px;font-weight:700;letter-spacing:.04em"><span style="width:18px;height:18px;border-radius:50%;background:{{ d.srcColor }}"></span><span style="color:{{ d.srcColor }}">{{ d.source }}</span><span style="font:700 22px/1 'JetBrains Mono',monospace;color:#A9A79E">{{ d.liveTag }}</span></div></div>
+</div>
+<div style="position:absolute;left:940px;top:120px;width:280px;height:280px;border-radius:6px;overflow:hidden;background:#1C1D20">
+<sc-if value="{{ d.isArt }}" hint-placeholder-val="{{ true }}"><div style="width:100%;height:100%;background:repeating-linear-gradient(135deg,#2a2b2f 0 10px,#232428 10px 20px);display:flex;align-items:center;justify-content:center;font:400 22px/1 'JetBrains Mono',monospace;color:#8b8a84">cover art</div></sc-if>
+<sc-if value="{{ d.isFallback }}"><div style="width:100%;height:100%;background:linear-gradient({{ d.fb }} 0 49.6%,#050506 49.6% 50.4%,{{ d.fb }} 50.4%);display:flex;align-items:center;justify-content:center;font-size:200px;font-weight:700;color:{{ d.fbDark }}">{{ d.initial }}</div></sc-if>
+<sc-if value="{{ d.isEmpty }}"><div onClick="{{ noop }}" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;text-align:center;font-size:40px;font-weight:700;color:#FFC629;text-transform:uppercase;line-height:1.1">{{ d.emptyLabel }}</div></sc-if>
+</div>
+<div style="position:absolute;left:940px;top:416px;width:280px;height:64px;border-radius:6px;background:{{ s1.statusBg }};color:{{ s1.statusFg }};display:flex;align-items:center;justify-content:center;font-size:40px;font-weight:700;letter-spacing:.06em">{{ d.stateWord }}</div>
+<div style="position:absolute;left:60px;top:492px;width:1160px;height:72px;display:grid;grid-template-columns:100px 1fr 100px;gap:20px;align-items:center;font:700 26px/1 'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;opacity:{{ d.seekOp }}">
+<span>{{ d.timeL }}</span>
+<div onClick="{{ seek }}" style="height:72px;display:flex;align-items:center;cursor:pointer"><div style="width:100%;height:14px;background:#2E2F33;border-radius:2px;overflow:hidden"><div style="height:100%;width:{{ d.pct }}%;background:#FFC629"></div></div></div>
+<span style="text-align:right;color:#A9A79E">{{ d.timeR }}</span>
+</div>
+<div style="position:absolute;left:60px;top:582px;width:1160px;height:112px;display:flex;align-items:center;gap:12px">
+<div onClick="{{ toggleShuffle }}" style="width:150px;height:96px;border-radius:6px;background:{{ s1.shufBg }};color:{{ s1.shufFg }};display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:700;letter-spacing:.06em;cursor:pointer">SHUFFLE</div>
+<div onClick="{{ toggleRepeat }}" style="width:150px;height:96px;border-radius:6px;background:{{ s1.rptBg }};color:{{ s1.rptFg }};display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:700;letter-spacing:.06em;cursor:pointer">REPEAT</div>
+<sc-if value="{{ d.hasVolume }}" hint-placeholder-val="{{ true }}"><div style="width:150px;height:96px;border-radius:6px;background:#1C1D20;display:flex;align-items:center;justify-content:center;font:700 26px/1 'JetBrains Mono',monospace;color:#A9A79E">{{ d.volStr }}</div></sc-if>
+<div style="flex:1"></div>
+<div style="display:flex;gap:12px;opacity:{{ d.ctlOp }}">
+<div onClick="{{ noop }}" style="width:112px;height:112px;border-radius:6px;background:#1C1D20;display:flex;align-items:center;justify-content:center"><svg width="48" height="48" viewBox="0 0 24 24"><path d="M6 5h2.5v14H6zM20 5v14L9 12z" fill="#F2F0E8"></path></svg></div>
+<div onClick="{{ togglePlay }}" style="width:180px;height:112px;border-radius:6px;background:#FFC629;display:flex;align-items:center;justify-content:center;cursor:pointer">
+<sc-if value="{{ d.showPause }}" hint-placeholder-val="{{ true }}"><svg width="64" height="64" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" fill="#111214"></path></svg></sc-if>
+<sc-if value="{{ d.showPlay }}"><svg width="64" height="64" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" fill="#111214"></path></svg></sc-if>
+</div>
+<div onClick="{{ noop }}" style="width:112px;height:112px;border-radius:6px;background:#1C1D20;display:flex;align-items:center;justify-content:center"><svg width="48" height="48" viewBox="0 0 24 24"><path d="M15.5 5H18v14h-2.5zM4 5v14l11-7z" fill="#F2F0E8"></path></svg></div>
+</div>
+</div>
+<div style="position:absolute;left:60px;top:712px;width:1160px;height:72px;display:flex;gap:10px;font-size:28px;font-weight:700;letter-spacing:.05em">
+<div style="flex:1.3;border-radius:6px;background:#1C1D20;display:flex;align-items:center;justify-content:center;gap:12px"><span style="width:16px;height:16px;border-radius:50%;background:{{ d.srcColor }}"></span>HOME · {{ d.source }}</div>
+<div style="flex:1;border-radius:6px;background:{{ s1.libBg }};color:{{ s1.libFg }};display:flex;align-items:center;justify-content:center">LIBRARY</div>
+<div style="flex:1;border-radius:6px;background:#1C1D20;display:flex;align-items:center;justify-content:center;gap:12px">QUEUE <span style="font:700 24px/1 'JetBrains Mono',monospace;color:#FFC629">{{ d.queue }}</span></div>
+<div style="flex:1.3;border-radius:6px;background:#1C1D20;display:flex;align-items:center;justify-content:center;gap:10px">SKIN <span style="color:#A9A79E">DEPARTURES</span></div>
+<div style="flex:1;border-radius:6px;background:#1C1D20;display:flex;align-items:center;justify-content:center">SETTINGS</div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:auto 1fr;gap:12px 28px;font-size:15px;line-height:1.5;color:#2b2a27">
+<div style="display:flex;gap:8px">
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#111214"></div>#111214<br>bg</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#1C1D20"></div>#1C1D20<br>panel</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#F2F0E8;border:1px solid #0002"></div>#F2F0E8<br>text</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#A9A79E"></div>#A9A79E<br>text 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#FFC629"></div>#FFC629<br>accent</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#E8463A"></div>#E8463A<br>accent 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#2E2F33"></div>#2E2F33<br>rule</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px"><div><b>Type</b> — <a href="https://fonts.google.com/specimen/Barlow+Condensed">Barlow Condensed</a> 500–700 (body, OFL) · <a href="https://fonts.google.com/specimen/JetBrains+Mono">JetBrains Mono</a> 700 (mono, OFL). Title 64, artist 40, album 34, labels 22.</div><div><b>Motion</b> — Flaps flip top-to-bottom only when a value changes: 70 ms per tile, staggered 20 ms, ease-in. Progress fill steps once a second. Nothing moves when paused or idle.</div><div><b>Paused</b> — status flap turns red and reads PAUSED. <b>Missing art</b> — colour tile split like a flap, with the album's first letter.</div></div>
+</div>
+</div>
+
+<div id="1b" style="display:flex;flex-direction:column;gap:20px;width:1280px">
+<div style="display:flex;align-items:baseline;gap:16px"><span style="font:700 18px/1 'JetBrains Mono',monospace;background:#1d1b18;color:#fff;padding:8px 12px;border-radius:6px">1b</span><span style="font:500 36px/1 'Newsreader',serif">Placard</span><span style="font-size:17px;color:#4a4740">Gallery wall; the cover hung as a work, the track as its label</span></div>
+<div data-screen-label="1b Placard" style="width:1280px;height:800px;zoom:{{ zoom }};position:relative;overflow:hidden;background:#ECE7DD;color:#1D1B18;font-family:'Newsreader',serif;box-shadow:0 30px 60px -30px rgba(0,0,0,.45)">
+<div style="position:absolute;left:100px;top:90px;width:460px;height:460px;box-sizing:border-box;padding:28px;background:#FFFFFF;box-shadow:0 1px 0 #CFC8BC,0 18px 30px -18px rgba(60,40,20,.35)">
+<div style="width:100%;height:100%;opacity:{{ s2.artOp }};filter:{{ s2.artFilter }}">
+<sc-if value="{{ d.isArt }}" hint-placeholder-val="{{ true }}"><div style="width:100%;height:100%;background:repeating-linear-gradient(135deg,#ddd7cc 0 10px,#d3cdc1 10px 20px);display:flex;align-items:center;justify-content:center;font:400 22px/1 'IBM Plex Mono',monospace;color:#5E5850">cover art</div></sc-if>
+<sc-if value="{{ d.isFallback }}"><div style="width:100%;height:100%;background:{{ d.fbLight }};display:flex;align-items:center;justify-content:center"><div style="width:62%;height:62%;border-radius:50%;background:{{ d.fb }};display:flex;align-items:center;justify-content:center;font:italic 400 150px/1 'Newsreader',serif;color:#FFFFFF">{{ d.initial }}</div></div></sc-if>
+<sc-if value="{{ d.isEmpty }}"><div onClick="{{ noop }}" style="width:100%;height:100%;border:2px dashed #CFC8BC;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center"><span style="font:italic 400 40px/1.1 'Newsreader',serif">{{ d.emptyLabel }}</span><span style="font:400 22px/1 'IBM Plex Mono',monospace;color:#5E5850">{{ d.emptySub }}</span></div></sc-if>
+</div>
+</div>
+<div style="position:absolute;left:640px;top:90px;width:540px;height:460px;box-sizing:border-box;padding:40px 44px 24px;background:#FFFFFF;box-shadow:0 1px 0 #CFC8BC;display:flex;flex-direction:column;gap:12px">
+<div style="display:flex;align-items:center;gap:12px;font:500 22px/1 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#5E5850"><span style="width:14px;height:14px;border-radius:50%;background:{{ d.srcColor }}"></span><span>{{ d.source }}</span><span style="color:#9C2F22">{{ d.liveTag }}</span></div>
+<div style="font-size:50px;font-weight:500;line-height:1.08;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;text-wrap:pretty">{{ d.title }}</div>
+<div style="font-size:30px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.artist }}</div>
+<div style="font-size:26px;font-style:italic;color:#5E5850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.album }}</div>
+<div style="flex:1"></div>
+<sc-if value="{{ d.paused }}"><div style="font:italic 400 34px/1 'Newsreader',serif;color:#9C2F22;display:flex;align-items:center;gap:14px"><span style="width:40px;height:2px;background:#9C2F22"></span>Paused</div></sc-if>
+<div style="display:grid;grid-template-columns:auto 1fr auto;gap:16px;align-items:center;font:400 22px/1 'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;color:#5E5850;opacity:{{ d.seekOp }}">
+<span style="min-width:64px">{{ d.timeL }}</span>
+<div onClick="{{ seek }}" style="height:72px;display:flex;align-items:center;cursor:pointer;position:relative"><div style="width:100%;height:2px;background:#CFC8BC"></div><div style="position:absolute;left:0;top:35px;height:2px;width:{{ d.pct }}%;background:#1D1B18"></div><div style="position:absolute;top:28px;left:{{ d.pct }}%;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:#1D1B18"></div></div>
+<span style="min-width:64px;text-align:right">{{ d.timeR }}</span>
+</div>
+</div>
+<div style="position:absolute;left:100px;top:580px;width:1080px;height:112px;display:flex;align-items:center;gap:16px">
+<div onClick="{{ toggleShuffle }}" style="height:72px;padding:0 28px;border-radius:36px;border:2px solid #1D1B18;background:{{ s2.shufBg }};color:{{ s2.shufFg }};display:flex;align-items:center;font:500 22px/1 'IBM Plex Mono',monospace;letter-spacing:.08em;cursor:pointer">SHUFFLE</div>
+<div onClick="{{ toggleRepeat }}" style="height:72px;padding:0 28px;border-radius:36px;border:2px solid #1D1B18;background:{{ s2.rptBg }};color:{{ s2.rptFg }};display:flex;align-items:center;font:500 22px/1 'IBM Plex Mono',monospace;letter-spacing:.08em;cursor:pointer">REPEAT</div>
+<sc-if value="{{ d.hasVolume }}" hint-placeholder-val="{{ true }}"><div style="font:400 22px/1 'IBM Plex Mono',monospace;color:#5E5850;padding-left:12px">{{ d.volStr }}</div></sc-if>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:20px;opacity:{{ d.ctlOp }}">
+<div onClick="{{ noop }}" style="width:88px;height:88px;border-radius:50%;border:2px solid #1D1B18;display:flex;align-items:center;justify-content:center"><svg width="36" height="36" viewBox="0 0 24 24"><path d="M6 5h2.5v14H6zM20 5v14L9 12z" fill="#1D1B18"></path></svg></div>
+<div onClick="{{ togglePlay }}" style="width:112px;height:112px;border-radius:50%;background:#1D1B18;display:flex;align-items:center;justify-content:center;cursor:pointer">
+<sc-if value="{{ d.showPause }}" hint-placeholder-val="{{ true }}"><svg width="48" height="48" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" fill="#FFFFFF"></path></svg></sc-if>
+<sc-if value="{{ d.showPlay }}"><svg width="48" height="48" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" fill="#FFFFFF"></path></svg></sc-if>
+</div>
+<div onClick="{{ noop }}" style="width:88px;height:88px;border-radius:50%;border:2px solid #1D1B18;display:flex;align-items:center;justify-content:center"><svg width="36" height="36" viewBox="0 0 24 24"><path d="M15.5 5H18v14h-2.5zM4 5v14l11-7z" fill="#1D1B18"></path></svg></div>
+</div>
+</div>
+<div style="position:absolute;left:100px;top:712px;width:1080px;height:72px;border-top:1px solid #CFC8BC;display:flex;font:500 22px/1 'IBM Plex Mono',monospace;letter-spacing:.08em">
+<div style="flex:1.4;display:flex;align-items:center;gap:12px"><span style="width:14px;height:14px;border-radius:50%;background:{{ d.srcColor }}"></span>HOME · {{ d.source }}</div>
+<div style="flex:1;display:flex;align-items:center;justify-content:center"><span style="padding:10px 16px;background:{{ s2.libBg }};color:{{ s2.libFg }}">LIBRARY</span></div>
+<div style="flex:1;display:flex;align-items:center;justify-content:center;gap:10px">QUEUE <span style="color:#9C2F22">{{ d.queue }}</span></div>
+<div style="flex:1.3;display:flex;align-items:center;justify-content:center;gap:10px">SKIN <span style="font:italic 400 26px/1 'Newsreader',serif;letter-spacing:0">Placard</span></div>
+<div style="flex:1;display:flex;align-items:center;justify-content:flex-end">SETTINGS</div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:auto 1fr;gap:12px 28px;font-size:15px;line-height:1.5;color:#2b2a27">
+<div style="display:flex;gap:8px">
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#ECE7DD;border:1px solid #0002"></div>#ECE7DD<br>bg</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#FFFFFF;border:1px solid #0002"></div>#FFFFFF<br>panel</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#1D1B18"></div>#1D1B18<br>text</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#5E5850"></div>#5E5850<br>text 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#9C2F22"></div>#9C2F22<br>accent</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#2F5D50"></div>#2F5D50<br>accent 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#CFC8BC"></div>#CFC8BC<br>rule</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px"><div><b>Type</b> — <a href="https://fonts.google.com/specimen/Newsreader">Newsreader</a> 400/500 + italic (body, OFL) · <a href="https://fonts.google.com/specimen/IBM+Plex+Mono">IBM Plex Mono</a> 400/500 (mono, OFL). Title 50, artist 30, album 26 italic, labels 22.</div><div><b>Motion</b> — On track change the label cross-fades (240 ms, ease-out) and the artwork fades in (400 ms). Seek knob steps once a second. Nothing else moves.</div><div><b>Paused</b> — the artwork drops to 40 % and desaturates; an oxblood "Paused" line appears on the label. <b>Missing art</b> — tinted mat with a coloured disc and an italic initial.</div></div>
+</div>
+</div>
+
+<div id="1c" style="display:flex;flex-direction:column;gap:20px;width:1280px">
+<div style="display:flex;align-items:baseline;gap:16px"><span style="font:700 18px/1 'JetBrains Mono',monospace;background:#1d1b18;color:#fff;padding:8px 12px;border-radius:6px">1c</span><span style="font:800 34px/1 'Archivo',sans-serif">Poster</span><span style="font-size:17px;color:#4a4740">Swiss concert poster; giant type on a red column</span></div>
+<div data-screen-label="1c Poster" style="width:1280px;height:800px;zoom:{{ zoom }};position:relative;overflow:hidden;background:#F1EEE6;color:#121212;font-family:'Archivo',sans-serif;box-shadow:0 30px 60px -30px rgba(0,0,0,.45)">
+<div style="position:absolute;left:0;top:0;width:400px;height:800px;background:{{ s3.colBg }};color:#FFFFFF">
+<div style="position:absolute;left:24px;top:28px;width:352px;display:flex;flex-direction:column">
+<div style="height:76px;display:flex;align-items:center;gap:14px;font-size:30px;font-weight:700;border-bottom:2px solid rgba(255,255,255,.5)"><span style="width:18px;height:18px;border-radius:50%;background:{{ d.srcColor }};box-shadow:0 0 0 3px #FFFFFF"></span>Home</div>
+<div style="height:76px;display:flex;align-items:center;justify-content:space-between;font-size:30px;font-weight:700;border-bottom:2px solid rgba(255,255,255,.5)"><span style="background:{{ s3.libBg }};color:{{ s3.libFg }};padding:4px 8px;margin-left:-8px">Library</span></div>
+<div style="height:76px;display:flex;align-items:center;justify-content:space-between;font-size:30px;font-weight:700;border-bottom:2px solid rgba(255,255,255,.5)">Queue<span style="font:500 26px/1 'DM Mono',monospace">{{ d.queue }}</span></div>
+<div style="height:76px;display:flex;align-items:center;justify-content:space-between;font-size:30px;font-weight:700;border-bottom:2px solid rgba(255,255,255,.5)">Skin<span style="font-size:24px;font-weight:500">Poster</span></div>
+<div style="height:76px;display:flex;align-items:center;font-size:30px;font-weight:700">Settings</div>
+</div>
+<div style="position:absolute;left:24px;top:448px;width:352px;display:flex;gap:16px">
+<div onClick="{{ toggleShuffle }}" style="flex:1;height:72px;border:3px solid #FFFFFF;background:{{ s3.shufBg }};color:{{ s3.shufFg }};display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;cursor:pointer">Shuffle</div>
+<div onClick="{{ toggleRepeat }}" style="flex:1;height:72px;border:3px solid #FFFFFF;background:{{ s3.rptBg }};color:{{ s3.rptFg }};display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;cursor:pointer">Repeat</div>
+</div>
+<div style="position:absolute;left:24px;top:576px;width:352px;height:180px;display:flex;align-items:center;gap:8px;opacity:{{ d.ctlOp }}">
+<div onClick="{{ noop }}" style="width:88px;height:160px;display:flex;align-items:center;justify-content:center"><svg width="44" height="44" viewBox="0 0 24 24"><path d="M6 5h2.5v14H6zM20 5v14L9 12z" fill="#FFFFFF"></path></svg></div>
+<div onClick="{{ togglePlay }}" style="width:160px;height:160px;background:#FFFFFF;display:flex;align-items:center;justify-content:center;cursor:pointer">
+<sc-if value="{{ d.showPause }}" hint-placeholder-val="{{ true }}"><svg width="72" height="72" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" fill="#121212"></path></svg></sc-if>
+<sc-if value="{{ d.showPlay }}"><svg width="72" height="72" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" fill="#121212"></path></svg></sc-if>
+</div>
+<div onClick="{{ noop }}" style="width:88px;height:160px;display:flex;align-items:center;justify-content:center"><svg width="44" height="44" viewBox="0 0 24 24"><path d="M15.5 5H18v14h-2.5zM4 5v14l11-7z" fill="#FFFFFF"></path></svg></div>
+</div>
+</div>
+<div style="position:absolute;left:460px;top:140px;width:760px;display:flex;align-items:center;gap:14px;font-size:24px;font-weight:700;letter-spacing:.06em;text-transform:uppercase"><span style="width:16px;height:16px;border-radius:50%;background:{{ d.srcColor }}"></span>{{ d.source }}<span style="color:#E33B24">{{ d.liveTag }}</span><sc-if value="{{ d.paused }}"><span style="background:#121212;color:#F1EEE6;padding:6px 12px;letter-spacing:.1em">Paused</span></sc-if><span style="flex:1"></span><sc-if value="{{ d.hasVolume }}" hint-placeholder-val="{{ true }}"><span style="font:500 24px/1 'DM Mono',monospace;color:#4A4741">{{ d.volStr }}</span></sc-if></div>
+<div style="position:absolute;left:460px;top:190px;width:760px;font-size:86px;font-weight:800;font-stretch:88%;line-height:.96;letter-spacing:-.02em;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;text-wrap:balance">{{ d.title }}</div>
+<div style="position:absolute;left:460px;top:500px;width:460px;display:flex;flex-direction:column;gap:8px">
+<div style="font-size:36px;font-weight:700;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.artist }}</div>
+<div style="font-size:26px;color:#4A4741;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.album }}</div>
+</div>
+<div style="position:absolute;left:460px;top:660px;width:460px;opacity:{{ d.seekOp }}">
+<div onClick="{{ seek }}" style="height:56px;display:flex;align-items:flex-end;cursor:pointer"><div style="width:100%;height:10px;background:#D9D4C8"><div style="height:100%;width:{{ d.pct }}%;background:#121212"></div></div></div>
+<div style="display:flex;justify-content:space-between;padding-top:12px;font:500 24px/1 'DM Mono',monospace;font-variant-numeric:tabular-nums"><span>{{ d.timeL }}</span><span style="color:#4A4741">{{ d.timeR }}</span></div>
+</div>
+<div style="position:absolute;left:960px;top:500px;width:260px;height:260px;overflow:hidden">
+<sc-if value="{{ d.isArt }}" hint-placeholder-val="{{ true }}"><div style="width:100%;height:100%;background:repeating-linear-gradient(135deg,#dcd7cb 0 10px,#d2cdc1 10px 20px);display:flex;align-items:center;justify-content:center;font:400 22px/1 'DM Mono',monospace;color:#4A4741">cover art</div></sc-if>
+<sc-if value="{{ d.isFallback }}"><div style="width:100%;height:100%;background:{{ d.fb }};position:relative"><div style="position:absolute;right:0;bottom:0;width:50%;height:50%;background:{{ d.fbDark }}"></div><div style="position:absolute;left:20px;top:10px;font-size:150px;font-weight:900;color:#F1EEE6;line-height:1">{{ d.initial }}</div></div></sc-if>
+<sc-if value="{{ d.isEmpty }}"><div onClick="{{ noop }}" style="width:100%;height:100%;box-sizing:border-box;border:3px solid #121212;padding:20px;display:flex;align-items:flex-end;font-size:36px;font-weight:800;line-height:1">{{ d.emptyLabel }}</div></sc-if>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:auto 1fr;gap:12px 28px;font-size:15px;line-height:1.5;color:#2b2a27">
+<div style="display:flex;gap:8px">
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#F1EEE6;border:1px solid #0002"></div>#F1EEE6<br>bg</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#E33B24"></div>#E33B24<br>panel</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#121212"></div>#121212<br>text</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#4A4741"></div>#4A4741<br>text 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#E33B24"></div>#E33B24<br>accent</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#1F4FD1"></div>#1F4FD1<br>accent 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#D9D4C8"></div>#D9D4C8<br>rule</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px"><div><b>Type</b> — <a href="https://fonts.google.com/specimen/Archivo">Archivo</a> 500–900, width 88 % (body, OFL) · <a href="https://fonts.google.com/specimen/DM+Mono">DM Mono</a> 500 (mono, OFL). Title 86/0.96, nav 30, artist 36, labels 24.</div><div><b>Motion</b> — New title slides up 24 px and fades in (320 ms, cubic-out). Column colour change on pause is a 200 ms cross-fade. Nothing loops.</div><div><b>Paused</b> — the whole red column turns black and a PAUSED tag sits beside the source. <b>Missing art</b> — two-tone colour block with a heavy initial.</div></div>
+</div>
+</div>
+
+<div id="1d" style="display:flex;flex-direction:column;gap:20px;width:1280px">
+<div style="display:flex;align-items:baseline;gap:16px"><span style="font:700 18px/1 'JetBrains Mono',monospace;background:#1d1b18;color:#fff;padding:8px 12px;border-radius:6px">1d</span><span style="font:700 34px/1 'Red Hat Display',sans-serif">Nightstand</span><span style="font-size:17px;color:#4a4740">Bedside face for dark rooms; ember on near-black, one big button</span></div>
+<div data-screen-label="1d Nightstand" style="width:1280px;height:800px;zoom:{{ zoom }};position:relative;overflow:hidden;background:#0B0807;color:#F2A48C;font-family:'Red Hat Display',sans-serif;box-shadow:0 30px 60px -30px rgba(0,0,0,.45)">
+<div onClick="{{ togglePlay }}" style="position:absolute;left:110px;top:150px;width:300px;height:300px;box-sizing:border-box;border-radius:50%;border:4px solid #FF5A36;background:{{ s4.btnBg }};display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:{{ d.ctlOp }}">
+<sc-if value="{{ d.showPause }}" hint-placeholder-val="{{ true }}"><svg width="120" height="120" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" fill="#FF5A36"></path></svg></sc-if>
+<sc-if value="{{ d.showPlay }}"><svg width="120" height="120" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" fill="{{ s4.iconFill }}"></path></svg></sc-if>
+</div>
+<div style="position:absolute;left:110px;top:470px;width:300px;height:48px;text-align:center;font-size:36px;font-weight:700;letter-spacing:.12em;color:#FF5A36">{{ s4.word }}</div>
+<div style="position:absolute;left:110px;top:540px;width:300px;display:flex;justify-content:space-between;opacity:{{ d.ctlOp }}">
+<div onClick="{{ noop }}" style="width:120px;height:96px;border-radius:48px;border:2px solid #3A2824;display:flex;align-items:center;justify-content:center"><svg width="40" height="40" viewBox="0 0 24 24"><path d="M6 5h2.5v14H6zM20 5v14L9 12z" fill="#F2A48C"></path></svg></div>
+<div onClick="{{ noop }}" style="width:120px;height:96px;border-radius:48px;border:2px solid #3A2824;display:flex;align-items:center;justify-content:center"><svg width="40" height="40" viewBox="0 0 24 24"><path d="M15.5 5H18v14h-2.5zM4 5v14l11-7z" fill="#F2A48C"></path></svg></div>
+</div>
+<div style="position:absolute;left:500px;top:150px;width:700px;display:flex;flex-direction:column;gap:14px;opacity:{{ s4.infoOp }}">
+<div style="display:flex;align-items:center;gap:24px;height:120px">
+<div style="width:120px;height:120px;border-radius:14px;overflow:hidden;flex-shrink:0;opacity:.8">
+<sc-if value="{{ d.isArt }}" hint-placeholder-val="{{ true }}"><div style="width:100%;height:100%;background:repeating-linear-gradient(135deg,#221715 0 8px,#1a1210 8px 16px);display:flex;align-items:center;justify-content:center;font:400 22px/1 'Red Hat Mono',monospace;color:#B87563">art</div></sc-if>
+<sc-if value="{{ d.isFallback }}"><div style="width:100%;height:100%;background:radial-gradient(circle at 30% 30%,{{ d.fb }},{{ d.fbDark }});display:flex;align-items:center;justify-content:center;font-size:56px;font-weight:700;color:#0B0807">{{ d.initial }}</div></sc-if>
+<sc-if value="{{ d.isEmpty }}"><div style="width:100%;height:100%;box-sizing:border-box;border:2px solid #3A2824;border-radius:14px"></div></sc-if>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+<div style="display:flex;align-items:center;gap:12px;font:500 24px/1 'Red Hat Mono',monospace;letter-spacing:.08em"><span style="width:14px;height:14px;border-radius:50%;background:{{ d.srcColor }}"></span><span style="color:{{ d.srcColor }}">{{ d.source }}</span><span style="color:#FFB347">{{ d.liveTag }}</span></div>
+<div style="font-size:26px;color:#B87563;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.album }}</div>
+</div>
+</div>
+<div style="font-size:60px;font-weight:700;line-height:1.08;height:130px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;color:#F7B7A2;text-wrap:pretty">{{ d.title }}</div>
+<div style="font-size:34px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.artist }}</div>
+<div style="display:grid;grid-template-columns:90px 1fr 90px;gap:18px;align-items:center;font:400 24px/1 'Red Hat Mono',monospace;font-variant-numeric:tabular-nums;color:#B87563;opacity:{{ d.seekOp }}">
+<span>{{ d.timeL }}</span>
+<div onClick="{{ seek }}" style="height:72px;display:flex;align-items:center;cursor:pointer"><div style="width:100%;height:4px;border-radius:2px;background:#2A1D1A"><div style="height:100%;width:{{ d.pct }}%;border-radius:2px;background:#FF5A36"></div></div></div>
+<span style="text-align:right">{{ d.timeR }}</span>
+</div>
+<div style="display:flex;gap:14px;align-items:center">
+<div onClick="{{ toggleShuffle }}" style="height:72px;padding:0 28px;border-radius:36px;border:2px solid {{ s4.shufBd }};color:{{ s4.shufFg }};display:flex;align-items:center;font-size:24px;font-weight:700;cursor:pointer">Shuffle</div>
+<div onClick="{{ toggleRepeat }}" style="height:72px;padding:0 28px;border-radius:36px;border:2px solid {{ s4.rptBd }};color:{{ s4.rptFg }};display:flex;align-items:center;font-size:24px;font-weight:700;cursor:pointer">Repeat</div>
+<sc-if value="{{ d.hasVolume }}" hint-placeholder-val="{{ true }}"><div style="padding-left:12px;font:400 24px/1 'Red Hat Mono',monospace;color:#B87563">{{ d.volStr }}</div></sc-if>
+</div>
+</div>
+<div style="position:absolute;left:110px;top:712px;width:1090px;height:72px;display:flex;gap:8px;font-size:26px;font-weight:500;color:#B87563">
+<div style="flex:1.3;display:flex;align-items:center;gap:12px"><span style="width:14px;height:14px;border-radius:50%;background:{{ d.srcColor }}"></span>Home · {{ d.source }}</div>
+<div style="flex:1;display:flex;align-items:center;justify-content:center"><span style="padding:12px 22px;border-radius:30px;background:{{ s4.libBg }};color:{{ s4.libFg }}">Library</span></div>
+<div style="flex:1;display:flex;align-items:center;justify-content:center;gap:10px">Queue <span style="color:#F2A48C">{{ d.queue }}</span></div>
+<div style="flex:1.2;display:flex;align-items:center;justify-content:center;gap:10px">Skin <span style="color:#F2A48C">Nightstand</span></div>
+<div style="flex:1;display:flex;align-items:center;justify-content:flex-end">Settings</div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:auto 1fr;gap:12px 28px;font-size:15px;line-height:1.5;color:#2b2a27">
+<div style="display:flex;gap:8px">
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#0B0807"></div>#0B0807<br>bg</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#171110"></div>#171110<br>panel</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#F2A48C"></div>#F2A48C<br>text</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#B87563"></div>#B87563<br>text 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#FF5A36"></div>#FF5A36<br>accent</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#FFB347"></div>#FFB347<br>accent 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#2A1D1A"></div>#2A1D1A<br>rule</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px"><div><b>Type</b> — <a href="https://fonts.google.com/specimen/Red+Hat+Display">Red Hat Display</a> 500/700 (body, OFL) · <a href="https://fonts.google.com/specimen/Red+Hat+Mono">Red Hat Mono</a> 400/500 (mono, OFL). Title 60, artist 34, state word 36, labels 24.</div><div><b>Motion</b> — Pause/play is a 300 ms fill of the big ring. Track details fade 400 ms. No glow, no breathing. Low overall luminance keeps panel power and heat down.</div><div><b>Paused</b> — the ring fills solid ember, the word reads PAUSED and the track details drop to 45 %. <b>Missing art</b> — soft radial disc from the provided hue.</div></div>
+</div>
+</div>
+
+<div id="1e" style="display:flex;flex-direction:column;gap:20px;width:1280px">
+<div style="display:flex;align-items:baseline;gap:16px"><span style="font:700 18px/1 'JetBrains Mono',monospace;background:#1d1b18;color:#fff;padding:8px 12px;border-radius:6px">1e</span><span style="font:400 34px/1 'Share Tech Mono',monospace">Pocket LCD</span><span style="font-size:17px;color:#4a4740">Reflective calculator LCD with ghost segments and rubber keys</span></div>
+<div data-screen-label="1e Pocket LCD" style="width:1280px;height:800px;zoom:{{ zoom }};position:relative;overflow:hidden;background:#2B2D29;color:#1A2015;font-family:'Share Tech Mono',monospace;box-shadow:0 30px 60px -30px rgba(0,0,0,.45)">
+<div style="position:absolute;left:32px;top:24px;width:1216px;height:572px;border-radius:14px;background:#B9C3A5;box-shadow:inset 0 3px 10px rgba(0,0,0,.35)">
+<div style="position:absolute;left:40px;top:28px;display:flex;gap:28px;font-size:26px;letter-spacing:.06em">
+<span style="opacity:{{ s5.opPlay }}">PLAY</span><span style="opacity:{{ s5.opPause }}">PAUSE</span><span style="opacity:{{ s5.opStop }}">STOP</span>
+</div>
+<div style="position:absolute;left:40px;top:76px;height:210px;display:flex;align-items:flex-end;gap:24px">
+<div style="display:grid;font-size:196px;line-height:1;font-family:'Share Tech Mono',monospace;letter-spacing:0;white-space:pre"><span style="grid-area:1/1;opacity:.1">88:88</span><span style="grid-area:1/1">{{ s5.time }}</span></div>
+<div style="font-size:44px;padding-bottom:22px;color:#3E4836">{{ s5.len }}</div>
+</div>
+<div style="position:absolute;left:868px;top:96px;width:300px;height:300px;border:3px solid #1A2015;box-sizing:border-box;overflow:hidden">
+<sc-if value="{{ d.isArt }}" hint-placeholder-val="{{ true }}"><div style="width:100%;height:100%;background:repeating-linear-gradient(135deg,#a6b192 0 8px,#9ca787 8px 16px);display:flex;align-items:center;justify-content:center;font-size:24px;color:#3E4836">COVER ART</div></sc-if>
+<sc-if value="{{ d.isFallback }}"><div style="width:100%;height:100%;background:{{ d.fb }};background-image:radial-gradient(#1A201540 1.5px,transparent 1.6px);background-size:8px 8px;display:flex;align-items:center;justify-content:center;font-size:180px;color:#1A2015">{{ d.initial }}</div></sc-if>
+<sc-if value="{{ d.isEmpty }}"><div onClick="{{ noop }}" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;text-align:center;font-size:34px;line-height:1.2;padding:20px;box-sizing:border-box">{{ d.emptyLabel }}</div></sc-if>
+</div>
+<div style="position:absolute;left:40px;top:306px;width:790px;font-size:44px;line-height:1.1;text-transform:uppercase;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden">{{ d.title }}</div>
+<div style="position:absolute;left:40px;top:410px;width:790px;font-size:30px;color:#3E4836;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.artist }}</div>
+<div onClick="{{ seek }}" style="position:absolute;left:40px;top:440px;width:1128px;height:72px;display:flex;align-items:center;gap:4px;cursor:pointer;opacity:{{ d.seekOp }}">
+<sc-for list="{{ s5.cells }}" as="c" hint-placeholder-count="48"><div style="flex:1;height:26px;background:#1A2015;opacity:{{ c.op }}"></div></sc-for>
+</div>
+<div style="position:absolute;left:40px;top:520px;width:1128px;display:flex;gap:22px;font-size:24px;letter-spacing:.04em">
+<sc-for list="{{ s5.srcs }}" as="x" hint-placeholder-count="5"><span style="opacity:{{ x.op }}">{{ x.name }}</span></sc-for>
+<span style="color:#8C2F1F;opacity:{{ s5.opLive }}">LIVE</span>
+<span style="flex:1"></span>
+<span style="opacity:{{ s5.opShuf }}">SHUF</span><span style="opacity:{{ s5.opRpt }}">RPT</span>
+<span style="opacity:{{ s5.opVol }}">{{ s5.vol }}</span>
+</div>
+</div>
+<div style="position:absolute;left:44px;top:624px;width:1192px;height:144px;display:flex;align-items:center;gap:10px;font-family:'Chakra Petch',sans-serif;font-weight:600;color:#E6E8E0">
+<div style="width:104px;height:120px;border-radius:16px;background:#41443E;box-shadow:inset 0 2px 0 #5a5e56,0 4px 0 #1b1c19;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;font-size:22px"><span>HOME</span><span style="display:flex;align-items:center;gap:6px;color:#C7CBBE"><span style="width:12px;height:12px;border-radius:50%;background:{{ d.srcColor }}"></span>{{ s5.srcShort }}</span></div>
+<div style="width:104px;height:120px;border-radius:16px;background:{{ s5.libBg }};box-shadow:inset 0 2px 0 #5a5e56,0 4px 0 #1b1c19;display:flex;align-items:center;justify-content:center;font-size:22px">LIBRARY</div>
+<div style="width:104px;height:120px;border-radius:16px;background:#41443E;box-shadow:inset 0 2px 0 #5a5e56,0 4px 0 #1b1c19;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;font-size:22px"><span>QUEUE</span><span style="color:#C7CBBE">{{ d.queue }}</span></div>
+<div style="width:104px;height:120px;border-radius:16px;background:#41443E;box-shadow:inset 0 2px 0 #5a5e56,0 4px 0 #1b1c19;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;font-size:22px"><span>SKIN</span><span style="color:#C7CBBE">LCD</span></div>
+<div style="width:104px;height:120px;border-radius:16px;background:#41443E;box-shadow:inset 0 2px 0 #5a5e56,0 4px 0 #1b1c19;display:flex;align-items:center;justify-content:center;font-size:22px">SET</div>
+<div style="flex:1"></div>
+<div onClick="{{ toggleShuffle }}" style="width:96px;height:120px;border-radius:16px;background:{{ s5.shufBg }};box-shadow:inset 0 2px 0 #5a5e56,0 4px 0 #1b1c19;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer">SHUF</div>
+<div onClick="{{ noop }}" style="width:104px;height:120px;border-radius:16px;background:#41443E;box-shadow:inset 0 2px 0 #5a5e56,0 4px 0 #1b1c19;display:flex;align-items:center;justify-content:center;opacity:{{ d.ctlOp }}"><svg width="40" height="40" viewBox="0 0 24 24"><path d="M6 5h2.5v14H6zM20 5v14L9 12z" fill="#E6E8E0"></path></svg></div>
+<div onClick="{{ togglePlay }}" style="width:176px;height:136px;border-radius:18px;background:#C9502F;box-shadow:inset 0 2px 0 #e07a5c,0 4px 0 #1b1c19;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:{{ d.ctlOp }}">
+<sc-if value="{{ d.showPause }}" hint-placeholder-val="{{ true }}"><svg width="64" height="64" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" fill="#FFFFFF"></path></svg></sc-if>
+<sc-if value="{{ d.showPlay }}"><svg width="64" height="64" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" fill="#FFFFFF"></path></svg></sc-if>
+</div>
+<div onClick="{{ noop }}" style="width:104px;height:120px;border-radius:16px;background:#41443E;box-shadow:inset 0 2px 0 #5a5e56,0 4px 0 #1b1c19;display:flex;align-items:center;justify-content:center;opacity:{{ d.ctlOp }}"><svg width="40" height="40" viewBox="0 0 24 24"><path d="M15.5 5H18v14h-2.5zM4 5v14l11-7z" fill="#E6E8E0"></path></svg></div>
+<div onClick="{{ toggleRepeat }}" style="width:96px;height:120px;border-radius:16px;background:{{ s5.rptBg }};box-shadow:inset 0 2px 0 #5a5e56,0 4px 0 #1b1c19;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer">RPT</div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:auto 1fr;gap:12px 28px;font-size:15px;line-height:1.5;color:#2b2a27">
+<div style="display:flex;gap:8px">
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#B9C3A5"></div>#B9C3A5<br>bg</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#2B2D29"></div>#2B2D29<br>panel</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#1A2015"></div>#1A2015<br>text</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#3E4836"></div>#3E4836<br>text 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#C9502F"></div>#C9502F<br>accent</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#8C2F1F"></div>#8C2F1F<br>accent 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#93A07F"></div>#93A07F<br>rule</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px"><div><b>Type</b> — <a href="https://fonts.google.com/specimen/Chakra+Petch">Chakra Petch</a> 600 (body / keys, OFL) · <a href="https://fonts.google.com/specimen/Share+Tech+Mono">Share Tech Mono</a> (mono / LCD, OFL). Time 196, title 44, artist 30, indicators 24.</div><div><b>Motion</b> — None beyond value changes: segments switch instantly, as a real LCD does. Keys depress 4 px on tap (80 ms). Every label is always printed; state is shown by which ones are dark.</div><div><b>Paused</b> — PAUSE lights, PLAY ghosts, the time freezes. <b>Missing art</b> — the hue printed through a dot screen with a big initial.</div></div>
+</div>
+</div>
+
+<div id="1f" style="display:flex;flex-direction:column;gap:20px;width:1280px">
+<div style="display:flex;align-items:baseline;gap:16px"><span style="font:700 18px/1 'JetBrains Mono',monospace;background:#1d1b18;color:#fff;padding:8px 12px;border-radius:6px">1f</span><span style="font:700 34px/1 'Zilla Slab',serif">Selector</span><span style="font-size:17px;color:#4a4740">Jukebox title strip, 45 rpm label and push buttons</span></div>
+<div data-screen-label="1f Selector" style="width:1280px;height:800px;zoom:{{ zoom }};position:relative;overflow:hidden;background:#F3E9D2;color:#2A1A14;font-family:'Zilla Slab',serif;box-shadow:0 30px 60px -30px rgba(0,0,0,.45)">
+<div style="position:absolute;left:70px;top:110px;width:300px;height:300px;border-radius:50%;background:repeating-radial-gradient(circle,#1C1412 0 3px,#271c19 3px 5px);display:flex;align-items:center;justify-content:center">
+<div style="width:170px;height:170px;border-radius:50%;overflow:hidden;position:relative">
+<sc-if value="{{ d.isArt }}" hint-placeholder-val="{{ true }}"><div style="width:100%;height:100%;background:repeating-linear-gradient(135deg,#e6dcc4 0 8px,#dbd0b6 8px 16px);display:flex;align-items:center;justify-content:center;font:400 22px/1 'Courier Prime',monospace;color:#6B4E3D">art</div></sc-if>
+<sc-if value="{{ d.isFallback }}"><div style="width:100%;height:100%;background:{{ d.fb }};display:flex;flex-direction:column;align-items:center;justify-content:center;font:700 64px/1 'Zilla Slab',serif;color:#FFF8E8"><span style="width:100%;height:3px;background:#FFF8E8;opacity:.6;margin-bottom:6px"></span>{{ d.initial }}</div></sc-if>
+<sc-if value="{{ d.isEmpty }}"><div style="width:100%;height:100%;background:#C8352B"></div></sc-if>
+<div style="position:absolute;left:79px;top:79px;width:12px;height:12px;border-radius:50%;background:#F3E9D2"></div>
+</div>
+</div>
+<div style="position:absolute;left:70px;top:436px;width:300px;display:flex;flex-direction:column;align-items:center;gap:8px;font:700 26px/1 'Courier Prime',monospace">
+<div style="display:flex;align-items:center;gap:10px"><span style="width:16px;height:16px;border-radius:50%;background:{{ d.srcColor }};border:2px solid #2A1A14"></span>{{ d.source }} <span style="color:#C8352B">{{ d.liveTag }}</span></div>
+<sc-if value="{{ d.hasVolume }}" hint-placeholder-val="{{ true }}"><div style="font-weight:400;font-size:24px;color:#6B4E3D">{{ d.volStr }}</div></sc-if>
+</div>
+<div style="position:absolute;left:420px;top:110px;width:790px;height:300px;box-sizing:border-box;border:3px solid #2A1A14;background:#FFF8E8;display:flex;flex-direction:column">
+<div style="flex:1;display:flex;align-items:center;justify-content:center;padding:0 32px;text-align:center"><div style="font-size:48px;font-weight:700;line-height:1.08;text-transform:uppercase;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;text-wrap:balance">{{ d.title }}</div></div>
+<div style="height:72px;background:{{ s6.band }};color:#FFF8E8;display:flex;align-items:center;justify-content:center;padding:0 32px;font-size:34px;font-weight:700;letter-spacing:.06em;text-transform:uppercase"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.artist }}</span></div>
+<div style="height:64px;display:flex;align-items:center;justify-content:center;padding:0 32px;font:italic 400 26px/1 'Courier Prime',monospace;color:#6B4E3D"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.album }}</span></div>
+<sc-if value="{{ d.paused }}"><div style="position:absolute;right:28px;top:-26px;transform:rotate(-6deg);border:4px solid #C8352B;color:#C8352B;background:#FFF8E8;padding:6px 18px;font-size:44px;font-weight:700;letter-spacing:.12em">PAUSED</div></sc-if>
+</div>
+<div style="position:absolute;left:420px;top:432px;width:790px;height:72px;display:grid;grid-template-columns:84px 1fr 84px;gap:16px;align-items:center;font:700 24px/1 'Courier Prime',monospace;font-variant-numeric:tabular-nums;opacity:{{ d.seekOp }}">
+<span>{{ d.timeL }}</span>
+<div onClick="{{ seek }}" style="height:72px;display:flex;align-items:center;cursor:pointer"><div style="width:100%;height:16px;border:3px solid #2A1A14;border-radius:11px;overflow:hidden;background:#FFF8E8"><div style="height:100%;width:{{ d.pct }}%;background:#C8352B"></div></div></div>
+<span style="text-align:right;color:#6B4E3D">{{ d.timeR }}</span>
+</div>
+<div style="position:absolute;left:70px;top:540px;width:1140px;height:144px;display:flex;align-items:flex-start;justify-content:center;gap:16px;font-size:26px;font-weight:700;letter-spacing:.06em">
+<div onClick="{{ toggleShuffle }}" style="width:150px;height:120px;border:3px solid #2A1A14;border-radius:12px;background:{{ s6.shufBg }};color:{{ s6.shufFg }};box-shadow:0 8px 0 #2A1A14;display:flex;align-items:center;justify-content:center;cursor:pointer">SHUFFLE</div>
+<div onClick="{{ noop }}" style="width:150px;height:120px;border:3px solid #2A1A14;border-radius:12px;background:#FFF8E8;box-shadow:0 8px 0 #2A1A14;display:flex;align-items:center;justify-content:center;opacity:{{ d.ctlOp }}"><svg width="48" height="48" viewBox="0 0 24 24"><path d="M6 5h2.5v14H6zM20 5v14L9 12z" fill="#2A1A14"></path></svg></div>
+<div onClick="{{ togglePlay }}" style="width:260px;height:128px;border:3px solid #2A1A14;border-radius:12px;background:#C8352B;box-shadow:0 8px 0 #2A1A14;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:{{ d.ctlOp }}">
+<sc-if value="{{ d.showPause }}" hint-placeholder-val="{{ true }}"><svg width="72" height="72" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" fill="#FFF8E8"></path></svg></sc-if>
+<sc-if value="{{ d.showPlay }}"><svg width="72" height="72" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" fill="#FFF8E8"></path></svg></sc-if>
+</div>
+<div onClick="{{ noop }}" style="width:150px;height:120px;border:3px solid #2A1A14;border-radius:12px;background:#FFF8E8;box-shadow:0 8px 0 #2A1A14;display:flex;align-items:center;justify-content:center;opacity:{{ d.ctlOp }}"><svg width="48" height="48" viewBox="0 0 24 24"><path d="M15.5 5H18v14h-2.5zM4 5v14l11-7z" fill="#2A1A14"></path></svg></div>
+<div onClick="{{ toggleRepeat }}" style="width:150px;height:120px;border:3px solid #2A1A14;border-radius:12px;background:{{ s6.rptBg }};color:{{ s6.rptFg }};box-shadow:0 8px 0 #2A1A14;display:flex;align-items:center;justify-content:center;cursor:pointer">REPEAT</div>
+</div>
+<div style="position:absolute;left:70px;top:708px;width:1140px;height:72px;display:flex;gap:12px;font:700 24px/1 'Courier Prime',monospace">
+<div style="flex:1.3;border:3px solid #2A1A14;border-radius:10px;background:#FFF8E8;display:flex;align-items:center;justify-content:center;gap:10px"><span style="width:14px;height:14px;border-radius:50%;background:{{ d.srcColor }};border:2px solid #2A1A14"></span>HOME · {{ d.source }}</div>
+<div style="flex:1;border:3px solid #2A1A14;border-radius:10px;background:{{ s6.libBg }};color:{{ s6.libFg }};display:flex;align-items:center;justify-content:center">LIBRARY</div>
+<div style="flex:1;border:3px solid #2A1A14;border-radius:10px;background:#FFF8E8;display:flex;align-items:center;justify-content:center;gap:10px">QUEUE <span style="color:#C8352B">{{ d.queue }}</span></div>
+<div style="flex:1.2;border:3px solid #2A1A14;border-radius:10px;background:#FFF8E8;display:flex;align-items:center;justify-content:center;gap:10px">SKIN <span style="color:#6B4E3D">SELECTOR</span></div>
+<div style="flex:1;border:3px solid #2A1A14;border-radius:10px;background:#FFF8E8;display:flex;align-items:center;justify-content:center">SETTINGS</div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:auto 1fr;gap:12px 28px;font-size:15px;line-height:1.5;color:#2b2a27">
+<div style="display:flex;gap:8px">
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#F3E9D2;border:1px solid #0002"></div>#F3E9D2<br>bg</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#FFF8E8;border:1px solid #0002"></div>#FFF8E8<br>panel</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#2A1A14"></div>#2A1A14<br>text</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#6B4E3D"></div>#6B4E3D<br>text 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#C8352B"></div>#C8352B<br>accent</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#1F6B7A"></div>#1F6B7A<br>accent 2</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="width:72px;height:44px;background:#2A1A14"></div>#2A1A14<br>rule</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px"><div><b>Type</b> — <a href="https://fonts.google.com/specimen/Zilla+Slab">Zilla Slab</a> 500/700 (body, OFL) · <a href="https://fonts.google.com/specimen/Courier+Prime">Courier Prime</a> 400/700 (mono, OFL). Title 48 caps, artist band 34, album 26 italic, keys 24–26.</div><div><b>Motion</b> — The record does not spin. Buttons sink 8 px on tap (90 ms, ease-out). On track change the strip slides out left and the new one slides in (360 ms).</div><div><b>Paused</b> — the red artist band turns brown and a tilted PAUSED stamp lands on the strip. <b>Missing art</b> — a plain coloured 45 label with a centre line and initial.</div></div>
+</div>
+</div>
+
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;state&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;playing&quot;,&quot;paused&quot;,&quot;idle&quot;,&quot;external&quot;,&quot;aux&quot;,&quot;radio&quot;,&quot;long&quot;,&quot;noart&quot;,&quot;toggles&quot;,&quot;queue0&quot;],&quot;default&quot;:&quot;playing&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;screen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;1280 × 800&quot;,&quot;800 × 480&quot;],&quot;default&quot;:&quot;1280 × 800&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Small-screen check&quot;}}">
+const SRC = { LIBRARY: '#3FA7F5', AIRPLAY: '#B07CFF', SPOTIFY: '#1ED760', BLUETOOTH: '#3D7BFF', AUX: '#FF9F1C', IDLE: '#8A8A8A' };
+const BASE = { title: 'Friends In Low Places', artist: 'Garth Brooks', album: 'No Fences', art: true, hue: 28, len: 259, el: 67, playing: true, vol: 62, shuffle: false, repeat: false, source: 'LIBRARY', live: false, queue: 10, track: true };
+const STATES = [
+  ['playing', 'Playing', {}],
+  ['paused', 'Paused', { playing: false }],
+  ['idle', 'Idle, nothing queued', { track: false, title: '', artist: '', album: '', art: false, len: 0, el: 0, playing: false, source: 'IDLE', queue: 0 }],
+  ['external', 'External (AirPlay)', { title: 'Holocene', artist: 'Bon Iver', album: '', len: 0, el: 0, vol: null, source: 'AIRPLAY', queue: 0 }],
+  ['aux', 'Line-in (AUX)', { track: false, title: '', artist: '', album: '', art: false, len: 0, el: 0, playing: false, vol: null, source: 'AUX' }],
+  ['radio', 'Radio stream', { title: 'Morning Edition', artist: 'KEXP 90.3', album: '', art: false, hue: 205, len: 0, el: 754, live: true }],
+  ['long', 'Long text', { title: 'The Ballad of the Long Distance Lorry Driver and His Dog Rex', artist: 'The Extraordinarily Long Named Orchestra', album: 'Songs From Somewhere Very Far Away Indeed', queue: 999 }],
+  ['noart', 'Missing art', { title: 'Harvest Moon', artist: 'Neil Young', album: 'Harvest Moon', art: false, hue: 32, len: 303, el: 92 }],
+  ['toggles', 'Shuffle + repeat on', { shuffle: true, repeat: true, queue: 1 }],
+  ['queue0', 'Queue empty', { queue: 0 }],
+];
+const fmt = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+const pad = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+
+class Component extends DCLogic {
+  state = { sid: null, ov: {} };
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      const t = this.cur();
+      if (!t.playing || !t.track || (!t.len && !t.live)) return;
+      const el = t.len ? Math.min(t.len, t.el + 1) : t.el + 1;
+      this.setState(s => ({ ov: { ...s.ov, el } }));
+    }, 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+  componentDidUpdate(pp) { if (pp.state !== this.props.state) this.setState({ sid: null, ov: {} }); }
+  sid() { return this.state.sid ?? this.props.state ?? 'playing'; }
+  cur() {
+    const st = STATES.find(s => s[0] === this.sid()) || STATES[0];
+    return { ...BASE, ...st[2], ...this.state.ov };
+  }
+  renderVals() {
+    const t = this.cur();
+    const id = this.sid();
+    const idle = id === 'idle', aux = t.source === 'AUX';
+    const paused = t.track && !t.playing;
+    const showTime = t.track && (t.len > 0 || t.live);
+    const d = {
+      title: t.track ? t.title : idle ? 'Nothing queued' : 'Line-in',
+      artist: t.track ? t.artist : idle ? 'Open the Library to choose music' : 'Playing from the AUX jack',
+      album: t.album,
+      isArt: t.track && t.art, isFallback: t.track && !t.art, isEmpty: !t.track,
+      emptyLabel: idle ? 'Open Library' : 'AUX in', emptySub: idle ? 'Nothing queued' : 'No track data',
+      fb: `oklch(0.68 0.13 ${t.hue})`, fbDark: `oklch(0.42 0.1 ${t.hue})`, fbLight: `oklch(0.9 0.04 ${t.hue})`,
+      initial: (t.album || t.title || '?').trim()[0].toUpperCase(),
+      timeL: showTime ? fmt(t.el) : '', timeR: t.len ? fmt(t.len) : t.live ? 'LIVE' : '',
+      pct: t.len ? (t.el / t.len) * 100 : 0, seekOp: t.len ? 1 : 0.35,
+      playing: t.playing, paused, showPause: t.playing, showPlay: !t.playing,
+      ctlOp: t.track ? 1 : 0.35,
+      hasVolume: t.vol != null, volStr: 'VOL ' + t.vol,
+      source: t.source, srcColor: SRC[t.source], liveTag: t.live ? 'LIVE' : '',
+      queue: String(t.queue),
+      stateWord: t.playing ? 'PLAYING' : paused ? 'PAUSED' : idle ? 'IDLE' : 'LINE-IN',
+    };
+    const tg = (on, a, b) => on ? a : b;
+    const s1 = {
+      statusBg: paused ? '#E8463A' : t.playing ? '#FFC629' : '#1C1D20', statusFg: paused ? '#111214' : t.playing ? '#111214' : '#A9A79E',
+      shufBg: tg(t.shuffle, '#FFC629', '#1C1D20'), shufFg: tg(t.shuffle, '#111214', '#A9A79E'),
+      rptBg: tg(t.repeat, '#FFC629', '#1C1D20'), rptFg: tg(t.repeat, '#111214', '#A9A79E'),
+      libBg: tg(idle, '#FFC629', '#1C1D20'), libFg: tg(idle, '#111214', '#F2F0E8'),
+    };
+    const s2 = {
+      artOp: paused ? 0.4 : 1, artFilter: paused ? 'grayscale(1)' : 'none',
+      shufBg: tg(t.shuffle, '#1D1B18', 'transparent'), shufFg: tg(t.shuffle, '#FFFFFF', '#1D1B18'),
+      rptBg: tg(t.repeat, '#1D1B18', 'transparent'), rptFg: tg(t.repeat, '#FFFFFF', '#1D1B18'),
+      libBg: tg(idle, '#9C2F22', 'transparent'), libFg: tg(idle, '#FFFFFF', '#1D1B18'),
+    };
+    const s3 = {
+      colBg: paused ? '#121212' : '#E33B24',
+      shufBg: tg(t.shuffle, '#FFFFFF', 'transparent'), shufFg: tg(t.shuffle, '#121212', '#FFFFFF'),
+      rptBg: tg(t.repeat, '#FFFFFF', 'transparent'), rptFg: tg(t.repeat, '#121212', '#FFFFFF'),
+      libBg: tg(idle, '#FFFFFF', 'transparent'), libFg: tg(idle, '#E33B24', '#FFFFFF'),
+    };
+    const s4 = {
+      btnBg: paused ? '#FF5A36' : 'transparent', iconFill: paused ? '#0B0807' : '#FF5A36',
+      word: t.playing ? 'PLAYING' : paused ? 'PAUSED' : idle ? '' : 'LINE-IN',
+      infoOp: paused ? 0.45 : 1,
+      shufBd: tg(t.shuffle, '#FF5A36', '#3A2824'), shufFg: tg(t.shuffle, '#FF5A36', '#B87563'),
+      rptBd: tg(t.repeat, '#FF5A36', '#3A2824'), rptFg: tg(t.repeat, '#FF5A36', '#B87563'),
+      libBg: tg(idle, '#FF5A36', 'transparent'), libFg: tg(idle, '#0B0807', '#B87563'),
+    };
+    const filled = Math.round((d.pct / 100) * 48);
+    const ghost = 0.14;
+    const short = { LIBRARY: 'LIB', AIRPLAY: 'AIR', SPOTIFY: 'SPOT', BLUETOOTH: 'BT', AUX: 'AUX', IDLE: '—' };
+    const s5 = {
+      opPlay: t.playing ? 1 : ghost, opPause: paused ? 1 : ghost, opStop: !t.track ? 1 : ghost,
+      time: showTime ? pad(t.el) : '', len: t.len ? '/' + pad(t.len) : '',
+      cells: Array.from({ length: 48 }, (_, i) => ({ op: t.len && i < filled ? 1 : ghost })),
+      srcs: ['LIBRARY', 'AIRPLAY', 'SPOTIFY', 'BLUETOOTH', 'AUX'].map(n => ({ name: short[n], op: t.source === n ? 1 : ghost })),
+      opLive: t.live ? 1 : ghost, opShuf: t.shuffle ? 1 : ghost, opRpt: t.repeat ? 1 : ghost,
+      opVol: t.vol != null ? 1 : ghost, vol: t.vol != null ? 'VOL ' + String(t.vol).padStart(3, ' ') : 'VOL',
+      srcShort: short[t.source],
+      shufBg: tg(t.shuffle, '#5E6358', '#41443E'), rptBg: tg(t.repeat, '#5E6358', '#41443E'), libBg: tg(idle, '#C9502F', '#41443E'),
+    };
+    const s6 = {
+      band: paused ? '#6B4E3D' : '#C8352B',
+      shufBg: tg(t.shuffle, '#1F6B7A', '#FFF8E8'), shufFg: tg(t.shuffle, '#FFF8E8', '#2A1A14'),
+      rptBg: tg(t.repeat, '#1F6B7A', '#FFF8E8'), rptFg: tg(t.repeat, '#FFF8E8', '#2A1A14'),
+      libBg: tg(idle, '#C8352B', '#FFF8E8'), libFg: tg(idle, '#FFF8E8', '#2A1A14'),
+    };
+    return {
+      d, s1, s2, s3, s4, s5, s6,
+      zoom: this.props.screen === '800 × 480' ? 0.625 : 1,
+      states: STATES.map(([sid, label]) => ({
+        label, bg: sid === id ? '#1d1b18' : 'transparent', fg: sid === id ? '#fff' : '#1d1b18',
+        onClick: () => this.setState({ sid, ov: {} }),
+      })),
+      noop: () => {},
+      togglePlay: () => { if (t.track) this.setState(s => ({ ov: { ...s.ov, playing: !t.playing } })); },
+      toggleShuffle: () => this.setState(s => ({ ov: { ...s.ov, shuffle: !t.shuffle } })),
+      toggleRepeat: () => this.setState(s => ({ ov: { ...s.ov, repeat: !t.repeat } })),
+      seek: e => {
+        if (!t.len) return;
+        const r = e.currentTarget.getBoundingClientRect();
+        const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+        this.setState(s => ({ ov: { ...s.ov, el: Math.round(x * t.len) } }));
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

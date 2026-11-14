@@ -7,7 +7,7 @@
 import React from "react";
 import { useTicker, vu, mmss, SOURCES } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
-import { ChromeHomeBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
+import { ChromeHomeBtn, ChromeLibraryBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
 import { SyncIndicator } from "../../lib/SyncIndicator";
 import { SeekableBar } from "../../lib/SeekableBar";
 import { AlbumThumb } from "../../lib/AlbumThumb";
@@ -30,7 +30,7 @@ const DECK = {
 };
 
 type ChromeProps = { children: React.ReactNode; title?: string; chrome?: ChromeApi };
-function DeckChrome({ children, title = "DECK//OS v0.4.1", chrome }: ChromeProps) {
+function DeckChrome({ children, title = "DECK//OS", chrome }: ChromeProps) {
   // Chrome theme matches DeckOS palette: phosphor green on near-black.
   const chromeTheme = {
     bg: "rgba(155,242,192,0.06)",
@@ -64,6 +64,7 @@ function DeckChrome({ children, title = "DECK//OS v0.4.1", chrome }: ChromeProps
           <>
             <ChromeHomeBtn chrome={chrome} theme={chromeTheme}/>
             <SyncIndicator />
+            <ChromeLibraryBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeQueueBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSkinBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSettingsBtn chrome={chrome} theme={chromeTheme}/>
@@ -173,7 +174,7 @@ export function DeckosAudio({ track, state, elapsed, volume, shuffle, repeat, ch
             <AlbumThumb artist={tr.artist} album={tr.album} track={tr.title} seed={tr.uri} size={88} radius={4}/>
             <div style={{flex: 1, minWidth: 0}}>
               <div style={{fontSize: 11, color: DECK.ink2, letterSpacing: "0.18em", marginBottom: 10}}>
-                ┌── NOW PLAYING ── DEVICE:LOCAL ── DAC pcm5122
+                ┌── NOW PLAYING{chrome ? ` ── SOURCE:${chrome.sourceLabel}` : ""}
               </div>
               <div style={{
                 fontSize: 38, fontWeight: 700, color: DECK.ink, lineHeight: 1.05, letterSpacing: "-0.01em",

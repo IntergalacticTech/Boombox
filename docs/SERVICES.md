@@ -311,7 +311,8 @@ delete), a library/playlist/queue surface over Mopidy, and a Jellyfin
 video-transport proxy. Commands flow through the shared `actions.fire()`
 dispatcher, so GPIO buttons and remotes share one code path. A BLE
 peripheral runs alongside the HTTP server as the primary transport for the
-CYD hardware remote.
+CYD hardware remote, and a USB bridge feeds the rotary knob cabled to the
+boombox (below).
 
 The PWA itself is a separate static bundle, not part of this service:
 nginx's LAN server block serves it from `current/remote-ui/dist/` at `/`
@@ -363,6 +364,35 @@ the already-paired CYD hardware remote, or the `/api/remote/admin/*`
 routes — those stay reachable so the touchscreen can turn the function
 back on. It's a privacy gate against arbitrary phones on the Wi-Fi, not a
 master kill switch for paired hardware.
+
+**USB knob bridge.** [`services/knob_usb.py`](../services/knob_usb.py)
+runs in the same process as the BLE peripheral and shares its aggregator
+and dispatcher. It speaks newline-delimited JSON over the knob's USB serial
+port (protocol in [firmware/README.md](../firmware/README.md#crowpanel-21-rotary-knob-crowpanel-rotary-21)):
+`{"t":"hello"}` handshake, `{"t":"state","d":…}` pushed on change and
+every 5 s (the knob counts USB live for 12 s after a state, then falls back
+to BLE), and `{"t":"cmd",…}` from the knob → `actions.fire(…,
+source="usb")`. Non-JSON lines from the knob are its log and are ignored.
+No pairing — the cable is the trust boundary.
+
+- *Finding the knob:* tries `BOOMBOX_KNOB_USB_PATHS` in order (default
+  `/dev/boombox-knob`, the udev symlink from
+  `install/udev/99-boombox-knob.rules`, then
+  `/dev/serial/by-id/*Espressif*`), and adopts the first port whose hello
+  reply names a knob profile. CH340 ports (VID 1a86, the CYD) are never
+  opened.
+- *Hardware-optional:* no knob, no permission, or an unplug mid-run is
+  logged once per change and retried every 5 s; nothing blocks the event
+  loop (stdlib `os.open` + `termios` raw + `loop.add_reader`, no pyserial).
+- *Sharing the port:* while the pause file exists
+  (`BOOMBOX_KNOB_PAUSE_FILE`, default `$XDG_RUNTIME_DIR/boombox-knob.pause`)
+  and is under 5 min old, the bridge releases the port. `firmware/tools/
+  knob-snap.py` and `firmware/pi-flash-knob` use it.
+- *Access:* the udev rule makes the boombox user the device's owner
+  (group `dialout`, 0660), so the running user services can open it
+  without a re-login.
+- Like the BLE peripheral it is **not** gated by the `remote_enabled` flag;
+  `BOOMBOX_REMOTE_KNOB_USB=0` turns it off.
 
 **Auth.** Bearer token — `Authorization: Bearer <token>`, or `?token=`
 on the WebSocket (aiohttp WS clients can't set headers on the handshake).
@@ -419,7 +449,8 @@ reference — see [ACCESS.md](./ACCESS.md).
   (the `remote_enabled` flag), [`services/remote_files.py`](../services/remote_files.py)
   (file surface), [`services/remote_library.py`](../services/remote_library.py)
   (library/playlist/queue), [`services/jellyfin_client.py`](../services/jellyfin_client.py)
-  (video proxy).
+  (video proxy), [`services/ble_peripheral.py`](../services/ble_peripheral.py)
+  (BLE), [`services/knob_usb.py`](../services/knob_usb.py) (USB knob).
 - **Logs:** `journalctl --user -u boombox-remote -f`
 - **Env knobs:** `BOOMBOX_REMOTE_PORT` (default `6685`),
   `BOOMBOX_REMOTE_PEERS` (default `~/.config/boombox-remote/peers.json`),
@@ -428,7 +459,10 @@ reference — see [ACCESS.md](./ACCESS.md).
   `BOOMBOX_REMOTE_ART_CACHE` (default `~/.cache/boombox-remote/art/`),
   `BOOMBOX_REMOTE_WS_POLL_MS` (default `250`),
   `BOOMBOX_REMOTE_PAIR_TTL_S` (default `120`),
-  `BOOMBOX_REMOTE_BLE` (default `1`; set `0` to disable the BLE peripheral).
+  `BOOMBOX_REMOTE_BLE` (default `1`; set `0` to disable the BLE peripheral),
+  `BOOMBOX_REMOTE_KNOB_USB` (default `1`; `0` disables the USB knob bridge),
+  `BOOMBOX_KNOB_USB_PATHS` (`:`-separated paths/globs),
+  `BOOMBOX_KNOB_PAUSE_FILE` (default `$XDG_RUNTIME_DIR/boombox-knob.pause`).
 
 ### `boombox-setup` — first-run wizard + LAN Accounts API
 

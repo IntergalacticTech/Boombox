@@ -22,3 +22,40 @@ import "@fontsource/space-grotesk/latin-500.css";
 import "@fontsource/space-grotesk/latin-700.css";
 
 import "@fontsource/archivo-black/latin-400.css";
+
+// New skins (2026-10): Departures, Placard, Poster, Nightstand, Pocket LCD, Selector.
+import "@fontsource/barlow-condensed/latin-500.css";
+import "@fontsource/barlow-condensed/latin-600.css";
+import "@fontsource/barlow-condensed/latin-700.css";
+
+import "@fontsource/newsreader/latin-400.css";
+import "@fontsource/newsreader/latin-500.css";
+import "@fontsource/newsreader/latin-400-italic.css";
+
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-500.css";
+
+// Variable width + weight axes (Poster's condensed display type).
+import "@fontsource-variable/archivo/wdth.css";
+
+import "@fontsource/dm-mono/latin-400.css";
+import "@fontsource/dm-mono/latin-500.css";
+
+import "@fontsource/red-hat-display/latin-400.css";
+import "@fontsource/red-hat-display/latin-500.css";
+import "@fontsource/red-hat-display/latin-700.css";
+
+import "@fontsource/red-hat-mono/latin-400.css";
+import "@fontsource/red-hat-mono/latin-500.css";
+
+import "@fontsource/share-tech-mono/latin-400.css";
+
+import "@fontsource/chakra-petch/latin-500.css";
+import "@fontsource/chakra-petch/latin-600.css";
+
+import "@fontsource/zilla-slab/latin-500.css";
+import "@fontsource/zilla-slab/latin-700.css";
+
+import "@fontsource/courier-prime/latin-400.css";
+import "@fontsource/courier-prime/latin-700.css";
+import "@fontsource/courier-prime/latin-400-italic.css";

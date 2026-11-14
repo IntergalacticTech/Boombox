@@ -3,7 +3,7 @@
 import React from "react";
 import { Icon, useTicker, vu, mmss } from "../../lib/shared";
 import { useSpectrum } from "../../lib/spectrum";
-import { ChromeHomeBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
+import { ChromeHomeBtn, ChromeLibraryBtn, ChromeQueueBtn, ChromeSkinBtn, ChromeSettingsBtn } from "../../lib/ChromeButtons";
 import { SyncIndicator } from "../../lib/SyncIndicator";
 import { SeekableBar } from "../../lib/SeekableBar";
 import type { ChromeApi } from "../../lib/skinRegistry";
@@ -51,6 +51,7 @@ function B95Chrome({ children, header = "NOW PLAYING", chrome }: { children: Rea
           <>
             <ChromeHomeBtn chrome={chrome} theme={chromeTheme}/>
             <SyncIndicator />
+            <ChromeLibraryBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeQueueBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSkinBtn chrome={chrome} theme={chromeTheme}/>
             <ChromeSettingsBtn chrome={chrome} theme={chromeTheme}/>
@@ -126,7 +127,7 @@ export function Block95Audio({ track, state, elapsed, volume, shuffle, repeat, c
             display: "flex", flexDirection: "column", justifyContent: "space-between", border: `6px solid ${B95.black}`, minWidth: 0}}>
             <div>
               <div style={{fontFamily: B95.mono, fontSize: 13, fontWeight: 700, letterSpacing: "0.22em"}}>
-                NOW PLAYING — LOCAL
+                NOW PLAYING{chrome ? ` — ${chrome.sourceLabel}` : ""}
               </div>
               <div style={{
                 fontFamily: B95.font, fontSize: 78, lineHeight: 0.92, letterSpacing: "-0.04em", marginTop: 14,
