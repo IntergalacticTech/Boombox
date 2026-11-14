@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from .design import DesignError
 
 EDGE_MIN = 10  # mm of wood left between any cut feature and its panel edge
+MIN_SKIN = 2  # mm left under any pocket
+POCKET_R = 3.2  # just over a 1/4 in bit; small enough that a square part corner drops in
 NESTED = {frozenset(("C3", "C4")), frozenset(("C13", "C14"))}  # window in pocket, wire slot in LED channel
 
 
@@ -85,14 +87,18 @@ def derive(design: dict) -> Cabinet:
     W, H, D = _n(4 * t + 2 * cw + cab["bay_w"]), _n(3 * t + ch + cab["control_strip_h"]), _n(tb + cd + t)
     inner_h = H - 2 * t
     on = {k: parts[k]["enabled"] for k in ("source_row", "encoder", "led_bar", "rfid", "handle")}
+    for k, v in on.items():
+        if not isinstance(v, bool):
+            raise DesignError(f"parts.{k}.enabled must be true or false, not {v!r}")
 
     mw, mh = scr["module"][:2]
     clr = scr["pocket_clearance"]  # per side; a number, or [x, y]
     clr_x, clr_y = clr if isinstance(clr, list) else (clr, clr)
     ww, wh = scr["window"]
-    if ww >= mw or wh >= mh:
-        raise DesignError(f"screen window {ww} x {wh} must be smaller than the screen module {mw} x {mh}, "
-                          "or the screen falls through")
+    ox, oy = scr["window_offset"]
+    if ww / 2 + abs(ox) >= mw / 2 or wh / 2 + abs(oy) >= mh / 2:
+        raise DesignError(f"screen window {ww} x {wh} (offset {ox}, {oy}) must stay inside the screen module "
+                          f"{mw} x {mh}, or the screen falls through")
     if drv["frame_d"] + EDGE_MIN > cw:
         raise DesignError(f"driver frame {drv['frame_d']} does not fit a {cw} wide chamber "
                           "(raise target_volume_l or lower chamber_h / chamber_d)")
@@ -115,7 +121,7 @@ def derive(design: dict) -> Cabinet:
                 note="driver frame: mark screw holes from the driver's template"),
         _rect("C3", W / 2 + scr["window_offset"][0] - t, cl + scr["window_offset"][1] - t, ww, wh, r=6,
               note="screen window"),
-        _rect("C4", W / 2 - t, cl - t, mw + 2 * clr_x, mh + 2 * clr_y, r=8,
+        _rect("C4", W / 2 - t, cl - t, mw + 2 * clr_x, mh + 2 * clr_y, r=POCKET_R,
               depth=scr["pocket_depth"], face="back", note="screen pocket"),
     ]
     if on["led_bar"]:
@@ -123,7 +129,7 @@ def derive(design: dict) -> Cabinet:
         led_cy = cl + drv["frame_d"] / 2 + led["gap_above_driver"] + led["h"] / 2
         if led_cy + led["h"] / 2 > t + ch:
             raise DesignError(f"LED bar top ({_n(led_cy + led['h'] / 2)}) is above the chamber ceiling ({t + ch})")
-        f += [_rect("C13", W / 2 - t, led_cy - t, led["w"], led["h"], r=4, depth=led["depth"],
+        f += [_rect("C13", W / 2 - t, led_cy - t, led["w"], led["h"], r=POCKET_R, depth=led["depth"],
                     note="LED channel, not through"),
               _rect("C14", W / 2 - t, led_cy - t, *led["slot"], note="LED wire slot")]
     tr = parts["transport"]
@@ -189,8 +195,21 @@ def derive(design: dict) -> Cabinet:
         hits = [c for p in panels for c in p.cutouts if c.id == cid]
         if not hits:
             raise DesignError(f"overrides.{cid}: no such cutout")
+        if set(pos) - {"cx", "cy"} or not all(isinstance(v, (int, float)) for v in pos.values()):
+            raise DesignError(f"overrides.{cid}: only numeric cx and cy can be overridden, got {pos}")
         for c in hits:
             c.cx, c.cy = pos.get("cx", c.cx), pos.get("cy", c.cy)
+
+    # Joints behind each panel that a cut must not open: divider edges, chamber ceilings, sealed chambers.
+    right = W - 2 * t - cw  # panel-local x of the right chamber's inner wall on P5/P6
+    joints = [(cw, 0, cw + t, inner_h), (right - t, 0, right, inner_h),
+              (0, ch, cw, ch + t), (right, ch, W - 2 * t, ch + t)]
+    keep_out = {"P5": joints, "P6": joints, "P7": [(0, ch, cd, ch + t)], "P8": [(0, ch, cd, ch + t)],
+                "P2": [(0, 0, 2 * t + cw, D), (W - 2 * t - cw, 0, W, D)]}
+    ox0, oy0, ox1, oy1 = back[2].box  # door opening, on the back panel
+    lx0, ly0 = (W - lw) / 2 - t, 10 - t
+    if min(ox0 - lx0, oy0 - ly0, lx0 + lw - ox1, ly0 + lh - oy1) < EDGE_MIN:
+        raise DesignError(f"door leaf {lw} x {lh} does not cover the door opening by {EDGE_MIN} mm on every side")
 
     for p in panels:
         cuts = [c for c in p.cutouts if not c.mark_only]
@@ -198,6 +217,15 @@ def derive(design: dict) -> Cabinet:
             x0, y0, x1, y1 = c.box
             if min(x0, y0, p.w - x1, p.h - y1) < EDGE_MIN:
                 raise DesignError(f"{c.id} ({c.note}) is closer than {EDGE_MIN} mm to the edge of {p.id} {p.name}")
+            if c.depth is not None and not 0 < c.depth <= p.t - MIN_SKIN:
+                raise DesignError(f"{c.id} ({c.note}) pocket depth {c.depth} must leave at least {MIN_SKIN} mm "
+                                  f"of the {p.t} mm {p.id} {p.name}")
+            if c.depth is not None and c.face != "back":
+                continue  # a shallow pocket in the show face may cross a joint behind it
+            if any(x0 < kx1 and kx0 < x1 and y0 < ky1 and ky0 < y1
+                   for kx0, ky0, kx1, ky1 in keep_out.get(p.id, ())):
+                raise DesignError(f"{c.id} ({c.note}) on {p.id} {p.name} would cut into a divider, a chamber "
+                                  "ceiling or a sealed chamber")
         for i, a in enumerate(cuts):
             for b in cuts[i + 1:]:
                 if frozenset((a.id, b.id)) in NESTED:

@@ -1,4 +1,5 @@
 """Carpenter cut sheet: one self-contained HTML page (inline CSS + SVG), inches first, prints to letter."""
+import math
 from fractions import Fraction
 from html import escape
 
@@ -8,9 +9,10 @@ NOMINAL = {6: '1/4"', 9: '3/8"', 12: '1/2"', 15: '5/8"', 18: '3/4"'}
 SHEET_FT = {"4x4": "4 × 4 ft", "4x8": "4 × 8 ft"}
 
 
-def fmt_in(mm: float) -> str:
-    """Nearest 1/32 inch as a reduced fraction: 714 -> '28 1/8"'."""
-    whole, frac = divmod(Fraction(round(mm / 25.4 * 32), 32), 1)
+def fmt_in(mm: float, up: bool = False) -> str:
+    """Nearest 1/32 inch as a reduced fraction: 714 -> '28 1/8"'. up=True rounds up, for holes parts must pass."""
+    n = mm / 25.4 * 32
+    whole, frac = divmod(Fraction(math.ceil(round(n, 6)) if up else round(n), 32), 1)
     if not frac:
         return f'{whole}"'
     return f'{whole} {frac}"' if whole else f'{frac}"'
@@ -103,7 +105,7 @@ def _depth(c) -> str:
 
 def _size(c) -> str:
     if c.kind == "circle":
-        return f"Ø {dim(c.d)}"
+        return f"Ø {fmt_in(c.d, up=True)} [{c.d:g}]"
     return f"{dim(c.w)} × {dim(c.h)}" + (f", corners R {fmt_in(c.r)}" if c.r else "")
 
 
@@ -224,6 +226,9 @@ def render_cut_sheet(cab: Cabinet, layouts: list) -> str:
              "the design file and regenerate: the inside sizes stay fixed and the outside sizes move.</li>"
              "<li>Caliper the screen's picture area before cutting the window (C3). The window size here is "
              "provisional; the pocket (C4) is from the maker's published module size.</li>"
+             "<li>Hole sizes in inches are rounded up to the next 1/32\". Use the metric bit if you have it.</li>"
+             "<li>Check the thread length of the buttons and the volume knob's bushing against "
+             f"the {cab.panels[4].t:g} mm front. Where a thread is too short to take its nut, counterbore from the back.</li>"
              "<li>Speaker screw holes are marked from the driver's own template, not from this sheet.</li>"
              f"<li>Rips are spaced for a {fmt_in(c['kerf'])} [{c['kerf']:g}] blade. Rip a hair fat and trim to the "
              "number.</li></ul></div>")

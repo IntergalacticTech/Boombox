@@ -70,6 +70,7 @@ def test_thickness_change_keeps_internal_dims():  # Review Focus 1
 def test_chamber_width_holds_volume():
     d = copy.deepcopy(REVF)
     d["cabinet"]["chamber_h"] = 300
+    d["parts"]["wire_pass"]["channel"]["cy"] += 18  # the control channel moves up with the ceiling
     cab = derive(d)
     assert abs(cab.chamber_volume_l - 12.18) < 0.03 and cab.chamber[0] < 240
 
@@ -117,3 +118,68 @@ def test_mk1_derives():
     cab = derive(load_design("designs/mk1.json"))
     c4 = cut(panel(cab, "P5"), "C4")[0]
     assert (round(c4.w, 2), round(c4.h, 2)) == (168.89, 106.0)  # module + 2 * 2 mm
+
+
+# ── final review findings ───────────────────────────────────────────
+MK1 = load_design("designs/mk1.json")
+
+
+def changed(base=None, **paths):
+    d = copy.deepcopy(base or MK1)
+    for path, v in paths.items():
+        *keys, last = path.split("__")
+        node = d
+        for k in keys:
+            node = node[k]
+        node[last] = v
+    return d
+
+
+def test_screen_pocket_corners_clear_a_square_module_corner():
+    for d in (MK1, REVF):
+        clr = d["parts"]["screen"]["pocket_clearance"]
+        c4 = cut(panel(derive(d), "P5"), "C4")[0]
+        assert c4.r * (2 ** 0.5 - 1) <= min(clr if isinstance(clr, list) else [clr]) * 2 ** 0.5
+
+
+@pytest.mark.parametrize("bad", [{"C9": {"x": 5}}, {"C9": {"cx": "100"}}])
+def test_override_with_unknown_field_or_non_number_is_refused(bad):
+    with pytest.raises(DesignError, match="overrides.C9"):
+        derive(changed(overrides=bad))
+
+
+def test_enabled_must_be_true_or_false():
+    with pytest.raises(DesignError, match="led_bar.enabled"):
+        derive(changed(parts__led_bar__enabled="false"))
+
+
+@pytest.mark.parametrize("offset", [[0, 8], [20, 0]])
+def test_window_offset_past_the_glass_is_refused(offset):
+    with pytest.raises(DesignError, match="falls through"):
+        derive(changed(parts__screen__window_offset=offset))
+
+
+@pytest.mark.parametrize("path,value", [
+    ("parts__screen__pocket_depth", 20), ("parts__led_bar__depth", 20), ("parts__rfid__web", 14)])
+def test_pocket_deeper_than_the_panel_allows_is_refused(path, value):
+    with pytest.raises(DesignError, match="pocket"):
+        derive(changed(**{path: value}))
+
+
+@pytest.mark.parametrize("paths", [
+    {"parts__source_row__pitch": 40},
+    {"parts__transport__count": 7, "parts__transport__keys": ["a"] * 7},
+    {"parts__intake__count": 6},
+    {"parts__led_bar__enabled": False, "cabinet__centreline_y": 225},
+    {"parts__wire_pass__channel__cy": 300},
+    {"cabinet__bay_w": 175, "parts__screen__pocket_clearance": [6, 2]},
+])
+def test_cut_into_a_divider_ceiling_or_chamber_is_refused(paths):
+    with pytest.raises(DesignError, match="divider|ceiling|chamber"):
+        derive(changed(**paths))
+
+
+@pytest.mark.parametrize("paths", [{"parts__door__opening_cy": 200}, {"parts__door__opening": [220, 270]}])
+def test_door_that_does_not_cover_its_opening_is_refused(paths):
+    with pytest.raises(DesignError, match="door"):
+        derive(changed(**paths))

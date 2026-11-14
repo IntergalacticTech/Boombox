@@ -55,3 +55,16 @@ def test_disabled_rfid_drops_its_bom_line():  # Review Focus 3
     d["parts"]["rfid"]["enabled"] = False
     cab = derive(d)
     assert "RFID" not in render_bom(cab, saw_nest(cab)) and "C15" not in render_cut_sheet(cab, saw_nest(cab))
+
+
+def test_hole_sizes_round_up_in_inches():  # a 16 mm button does not fit a 5/8" hole
+    assert fmt_in(16, up=True) == '21/32"' and fmt_in(25.4, up=True) == '1"'
+    cab = derive(load_design("designs/mk1.json"))
+    html = render_cut_sheet(cab, saw_nest(cab))
+    assert 'Ø 5/8" [16]' not in html and 'Ø 21/32" [16]' in html
+
+
+def test_warns_about_button_thread_length_and_cnc_order_is_documented():
+    cab = derive(load_design("designs/mk1.json"))
+    assert "thread" in render_cut_sheet(cab, saw_nest(cab))
+    assert "back file first" in open("README.md").read()

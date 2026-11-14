@@ -15,7 +15,7 @@ python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 |---|---|
 | `cut-sheet.html` | **The carpenter.** Shopping list, a picture of each plywood sheet with the parts outlined on it, numbered rip and crosscut order, then one drawing per panel with every hole measured from that panel's own corner. Inches first, mm in brackets. Prints to letter paper. |
 | `bom.md` | Materials list: sheet goods, parts, and the extra hardware for each finish. |
-| `cnc/sheet-*-front.dxf`, `-back.dxf` | **A CNC shop.** True-scale mm outlines, one file per sheet, layers by operation: `CUT_THROUGH`, `POCKET_<depth>mm`, `DRILL_<dia>mm`. Panels machined from both faces get a `-back` file, mirrored left to right, sharing two `REGISTRATION` holes with the front. No toolpaths: the shop's CAM adds those (and dog-bones any square inside corner). |
+| `cnc/sheet-*-front.dxf`, `-back.dxf` | **A CNC shop.** True-scale mm outlines, one file per sheet, layers by operation: `CUT_THROUGH`, `POCKET_<depth>mm`, `DRILL_<dia>mm`. Panels machined from both faces get a `-back` file, mirrored left to right, sharing two `REGISTRATION` holes with the front. Run the back file first: the front file cuts the parts free. No toolpaths: the shop's CAM adds those (and dog-bones any square inside corner). |
 | `viewer.html` + `model-<finish>.glb` | Rotate the box in a browser and switch finishes. Serve the folder (`python3 -m http.server --directory out/mk1`); needs the internet for the viewer script. |
 | `model.dae`, `model.stl` | SketchUp (import the `.dae`: every panel is a named part) and anything else. |
 | `render-*.png` | Stills of each finish, written with `--render` (needs the `agent-browser` CLI). |
@@ -28,7 +28,8 @@ python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 
 To make a variant, copy a design file, change the parts or cabinet numbers, and run it. The generator
 refuses designs that cannot be built (screen falls through its window, driver does not fit its chamber,
-cutouts collide or run off a panel, a panel bigger than the sheet) and says which number is wrong.
+cutouts collide, run off a panel or cut into a divider or chamber, a pocket too deep, a panel bigger than the
+sheet) and says which number is wrong. It does not check that the electronics fit in the bay.
 
 What moves when you change things: inside dimensions are fixed inputs; outside dimensions follow from them
 plus the sheet thicknesses. Chamber width is worked out from `target_volume_l` so that changing chamber
