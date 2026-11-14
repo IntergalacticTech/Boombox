@@ -173,6 +173,30 @@ def _write_dae(parts: dict, path: Path) -> None:
     doc.write(str(path))
 
 
+def _grain_image(rgb, size=512):
+    """Streaky wood grain, tinted to `rgb`; streaks run along the image's x axis."""
+    from PIL import Image
+
+    rng = np.random.default_rng(7)
+    y = np.arange(size) / size  # whole-number sine periods, so the bands tile without a seam
+    rows = sum(rng.normal(0, 1 / k) * np.sin(2 * np.pi * (k * y + rng.random())) for k in range(1, 9))
+    rows = (rows - rows.min()) / np.ptp(rows)  # slow light/dark bands across the grain
+    fine = np.repeat(rng.normal(0, 1, (size, size // 64)), 64, axis=1)  # short streaks along it
+    shade = 0.80 + 0.26 * rows[:, None] + 0.035 * fine
+    img = np.clip(np.array(rgb)[None, None, :] * shade[:, :, None], 0, 255).astype(np.uint8)
+    return Image.fromarray(img, "RGB")
+
+
+def _grain_uv(mesh):
+    """Box-project UVs so grain runs along the horizontal axis of whichever face it lands on."""
+    mesh.unmerge_vertices()
+    tri = mesh.vertices[mesh.faces]  # (n, 3, 3) in cabinet mm
+    axis = np.abs(mesh.face_normals).argmax(axis=1)
+    u = np.where(axis[:, None] == 0, tri[:, :, 1], tri[:, :, 0])  # sides: depth; otherwise: width
+    v = np.where(axis[:, None] == 2, tri[:, :, 1], tri[:, :, 2])  # top/bottom: depth; otherwise: height
+    return np.stack([u / 900, v / 260], axis=-1).reshape(-1, 2)
+
+
 # glTF is metres, Y up, and viewers face +Z: (x, y, z) mm -> (x, z, -y) m
 _TO_GLTF = np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1000]]) / 1000
 
@@ -180,12 +204,21 @@ _TO_GLTF = np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1000]]
 def export_model(cab: Cabinet, finish: Finish, out_dir: Path) -> None:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    scene = trimesh.Scene()
+    scene, textures = trimesh.Scene(), {}
     for name, (mesh, m) in build_parts(cab, finish).items():
         mesh = mesh.copy()
+        uv = _grain_uv(mesh) if m.grain else None
         mesh.apply_transform(_TO_GLTF)
-        mesh.visual = trimesh.visual.TextureVisuals(material=trimesh.visual.material.PBRMaterial(
-            name=m.name, baseColorFactor=list(m.rgba), metallicFactor=m.metallic, roughnessFactor=m.roughness))
+        if m.grain:
+            pbr = trimesh.visual.material.PBRMaterial(
+                name=m.name, baseColorTexture=textures.setdefault(m.name, _grain_image(m.rgba[:3])),
+                metallicFactor=m.metallic, roughnessFactor=m.roughness)
+        else:
+            # Material colours are sRGB as picked; glTF's baseColorFactor is linear
+            linear = [round(255 * (c / 255) ** 2.2) for c in m.rgba[:3]] + [255]
+            pbr = trimesh.visual.material.PBRMaterial(
+                name=m.name, baseColorFactor=linear, metallicFactor=m.metallic, roughnessFactor=m.roughness)
+        mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=pbr)
         scene.add_geometry(mesh, node_name=name, geom_name=name)
     scene.export(str(out_dir / f"model-{finish.key}.glb"))
 

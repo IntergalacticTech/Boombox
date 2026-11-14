@@ -65,3 +65,13 @@ def test_export_writes_files(tmp_path):
     assert {p.name for p in tmp_path.iterdir()} >= {"model-classic.glb", "model-wood.glb", "model.dae", "model.stl"}
     scene = trimesh.load(tmp_path / "model-classic.glb")
     assert "P5_baffle" in scene.geometry
+
+
+def test_wood_finish_has_grain_texture_and_classic_does_not(tmp_path):
+    cab = derive(load_design("designs/mk1.json"))
+    for f in FINISHES.values():
+        export_model(cab, f, tmp_path)
+    wood = trimesh.load(tmp_path / "model-wood.glb").geometry["P5_baffle"].visual
+    classic = trimesh.load(tmp_path / "model-classic.glb").geometry["P5_baffle"].visual
+    assert wood.material.baseColorTexture is not None and wood.uv is not None
+    assert classic.material.baseColorTexture is None

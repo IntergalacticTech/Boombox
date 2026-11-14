@@ -8,6 +8,7 @@ class Material:
     rgba: tuple
     metallic: float
     roughness: float
+    grain: bool = False  # draw wood grain along each panel's long horizontal axis
 
 
 @dataclass(frozen=True)
@@ -27,8 +28,8 @@ DIFFUSER = Material("diffuser", (240, 238, 228, 255), 0.0, 0.6)
 CHROME = Material("chrome", (225, 228, 232, 255), 1.0, 0.12)
 SILVER = Material("brushed silver", (176, 180, 186, 255), 0.9, 0.42)
 MESH = Material("grille mesh", (14, 14, 16, 255), 0.6, 0.7)
-BIRCH = Material("birch", (222, 195, 138, 255), 0.0, 0.6)
-BIRCH_FACE = Material("birch face", (205, 175, 118, 255), 0.0, 0.6)
+BIRCH = Material("birch", (214, 176, 116, 255), 0.0, 0.5, grain=True)
+BIRCH_FACE = Material("birch face", (201, 160, 100, 255), 0.0, 0.5, grain=True)
 LEATHER = Material("leather", (110, 68, 38, 255), 0.0, 0.8)
 CONE = Material("driver cone", (34, 34, 36, 255), 0.0, 0.75)
 
