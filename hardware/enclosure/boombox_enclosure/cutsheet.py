@@ -228,7 +228,8 @@ def render_cut_sheet(cab: Cabinet, layouts: list) -> str:
              "provisional; the pocket (C4) is from the maker's published module size.</li>"
              "<li>Hole sizes in inches are rounded up to the next 1/32\". Use the metric bit if you have it.</li>"
              "<li>Check the thread length of the buttons and the volume knob's bushing against "
-             f"the {cab.panels[4].t:g} mm front. Where a thread is too short to take its nut, counterbore from the back.</li>"
+             f"the {cab.panels[4].t:g} mm front. Where a thread is too short for its nut, "
+             "counterbore from the back.</li>"
              "<li>Speaker screw holes are marked from the driver's own template, not from this sheet.</li>"
              f"<li>Rips are spaced for a {fmt_in(c['kerf'])} [{c['kerf']:g}] blade. Rip a hair fat and trim to the "
              "number.</li></ul></div>")
